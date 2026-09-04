@@ -1,0 +1,11 @@
+#gostpadi 1
+@labels en
+# Идеальный минимум: одна строка = один блок, отступ = ветка.
+input scanf("%d", &x)
+if scanf != 1
+    yes -> end: printf("bad input"); return 1
+y = x * 2
+if y > 10
+    yes: printf("big")
+    no: printf("small")
+output printf("done")
