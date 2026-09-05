@@ -682,6 +682,7 @@ def draw(shapes, edges, labels, bounds, out_png, page="a4", scale=None,
     scale задаёт масштаб вручную, font — базовый кегль, edge_lw — толщина
     всех линий и рамок (по умолчанию единая EDGE_LW), dpi — плотность."""
     lw = edge_lw if edge_lw else EDGE_LW
+    dpi = dpi or DPI
     minx, miny, W, H = bounds
     if scale is not None:
         s = scale
@@ -1091,7 +1092,7 @@ def _show_in_terminal(png_path):
 
 def main(argv):
     args, output = [], None
-    page, scale, font, lw, dpi = "a4", None, FONT, None, None
+    page, scale, font, lw, dpi = "a4", None, FONT, None, DPI
     show, template, gvn = False, False, False
     c_labels = "ru"
     i = 1
