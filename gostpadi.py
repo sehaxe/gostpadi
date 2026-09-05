@@ -88,9 +88,9 @@ A4_W = 468.0       # рабочая ширина A4 вертикально (165 
 A4_H = 700.0       # рабочая высота A4 вертикально (247 мм в пунктах)
 PAGE_PAD = 14.0    # поля страницы
 ASPECT = 0.36      # отношение высоты ромба к ширине
-SPLIT_SCALE = 0.75  # режем на части, лишь бы не мельче этого масштаба
+SPLIT_SCALE = 0.70  # режем на части, лишь бы не мельче этого масштаба
 DPI = 200
-EDGE_LW = 1.1
+EDGE_LW = 1.4
 FONT_STACK = ["DejaVu Sans Mono", "Noto Sans CJK TC", "DejaVu Sans"]
 LETTERS = "АБВГДЕЖЗИКЛМНОПРСТУФХЦЧШЭЮЯ"  # буквы кружков-соединителей
 IO_RE = re.compile(r"^(printf|scanf|scan|print|println|puts|putchar|echo|"
@@ -426,6 +426,7 @@ def layout(nodes, sizes):
         anchors.append(dict(sh=dmd, ext=0.0))  # дополнится низом колонок
         vl, vr, vb = (-dw / 2, cy), (dw / 2, cy), (0.0, cy + dh / 2)
         top0 = cy + dh / 2 + VGAP  # верх первой плитки любой колонки
+        y_b = cy + dh / 2 + 12.0   # уровень гребёнки раздачи кейсов
 
         svar = getattr(nd, "switch_var", None)
 
@@ -462,6 +463,11 @@ def layout(nodes, sizes):
 
         exits = {}  # id(ветки) -> dict(x, y, to_end, side)
         link_bottom = cy + dh / 2
+        # switch: из нижней вершины ромба выходит одна вертикаль,
+        # и все кейсы висят на ней (крайние — через гребёнку на y_b)
+        comb = bool(svar) and n >= 2
+        if comb and not any(p[1] == "axis" for p in plan):
+            edge([vb, (0.0, y_b)], arrow=False)
         for b, side, _t, tx in plan:
             label, stmts, to_end, link = b
             prev_bottom = None
@@ -473,22 +479,22 @@ def layout(nodes, sizes):
                 sh_k = add(k, tx, top + h_k / 2, s)
                 if si == 0:
                     if side == "axis":
+                        # средний кейс: вертикаль входит прямо в плитку
                         edge([vb, (tx, top)])
                         labels.append(dict(x=9.0, y=cy + dh / 2 + 12.0,
                                            text=fmt(label), ha="left"))
+                    elif comb:
+                        # кейс висит на вертикали: гребёнка и спуск
+                        edge([(0.0, y_b), (tx, y_b), (tx, top)])
+                        labels.append(dict(
+                            x=tx + (-8.0 if side == "L" else 8.0),
+                            y=top - 12.0, text=fmt(label),
+                            ha="right" if side == "L" else "left"))
                     else:
                         v = vl if side == "L" else vr
                         edge([v, (tx, cy), (tx, top)])
-                        if n >= 3:
-                            # switch: подпись сбоку от спуска, над плиткой
-                            labels.append(dict(
-                                x=tx + (-8.0 if side == "L" else 8.0),
-                                y=top - 12.0, text=fmt(label),
-                                ha="right" if side == "L" else "left"))
-                        else:       # если/иначе: подпись у вершины ромба
-                            vxx = vl[0] if side == "L" else vr[0]
-                            labels.append(dict(x=(vxx + tx) / 2, y=cy - 11.0,
-                                               text=fmt(label), ha="center"))
+                        labels.append(dict(x=(v[0] + tx) / 2, y=cy - 11.0,
+                                           text=fmt(label), ha="center"))
                 else:
                     edge([(tx, prev_bottom), (tx, top)])
                 prev_bottom = bottom
@@ -684,7 +690,8 @@ def draw(shapes, edges, labels, bounds, out_png, page="a4", scale=None,
         s = min(1.0, (A4_W - 2 * PAGE_PAD) / W, (A4_H - 2 * PAGE_PAD) / H)
     else:
         s = min(1.0, (A4_W - 2 * PAGE_PAD) / W, (A4_H - 2 * PAGE_PAD) / H)
-    fig = plt.figure(figsize=(W * s / 72.0, H * s / 72.0), dpi=dpi)
+    fig = plt.figure(figsize=(W * s / 72.0, H * s / 72.0),
+                     dpi=dpi / max(s, 1e-6))
     ax = fig.add_axes([0, 0, 1, 1])
     ax.set_xlim(0, W * s)
     ax.set_ylim(H * s, 0)
@@ -698,7 +705,7 @@ def draw(shapes, edges, labels, bounds, out_png, page="a4", scale=None,
         ax.text((l["x"] - minx) * s, (l["y"] - miny) * s, l["text"],
                 fontsize=max(4.5, fs * 0.85), family="DejaVu Sans",
                 weight="bold", ha=l["ha"], va="center", color="black")
-    fig.savefig(out_png, dpi=dpi, facecolor="white")
+    fig.savefig(out_png, dpi=dpi / max(s, 1e-6), facecolor="white")
     plt.close(fig)
 
 
@@ -854,13 +861,18 @@ def _cs_read_simple(s):
     return text
 
 
+def _shorten_calls(cond):
+    """scanf("%d", &x) -> scanf(...) — форматные строки в условиях не нужны."""
+    return re.sub(r'(\w+)\("[^"]*"[^)]*\)', r"\1(...)", cond)
+
+
 def _c_statement(s):
     """Инструкция C -> ("stmt", текст) | ("if", условие, да, нет) |
     ("switch", выражение, [(метка, инструкции)])."""
     s.skip_ws()
     if s.at_word("if"):
         s.i += 2
-        cond = _cs_read_paren(s)
+        cond = _shorten_calls(_cs_read_paren(s))
         s.skip_ws()
         if s.s[s.i] == "{":
             s.i += 1
@@ -935,7 +947,7 @@ def _branch_text(items):
     parts = []
     for it in items:
         if it[0] == "stmt":
-            parts.append(it[1])
+            parts.append(_abbrev_stmt(it[1]))
         elif it[0] != "skip":
             raise ParseError("вложенный if/switch внутри ветки — пока не "
                              "поддерживается, вынеси его на верхний уровень")
@@ -945,6 +957,22 @@ def _branch_text(items):
 def _has_return(items):
     return any(it[0] == "stmt" and it[1].lower().startswith("return")
                for it in items)
+
+
+
+def _abbrev_stmt(s):
+    """Длинные printf("…") сокращаем до printf("Начало фразы...") —
+    как принято в учебных схемах; условия и присваивания не трогаем."""
+    if len(s) <= 26:
+        return s
+    m = re.match(r'^(printf|puts|print|echo|write)\("(.*)"\s*(,.*)?\)$', s)
+    if not m:
+        return s
+    content = m.group(2)
+    cut = content[:15]
+    if " " in cut:
+        cut = cut[:cut.rfind(" ")]
+    return f'{m.group(1)}("{cut}...")'
 
 
 def c_to_gvn(src, labels="ru"):
@@ -966,8 +994,9 @@ def c_to_gvn(src, labels="ru"):
     def emit(items):
         for it in items:
             if it[0] == "stmt":
-                if not it[1].lower().startswith("return"):
-                    lines.append(it[1])  # верхнеуровневый return не рисуем
+                text = _abbrev_stmt(it[1])
+                if not text.lower().startswith("return"):
+                    lines.append(text)  # верхнеуровневый return не рисуем
             elif it[0] == "if":
                 _, cond, yes, no = it
                 lines.append("if " + cond)
@@ -978,7 +1007,7 @@ def c_to_gvn(src, labels="ru"):
                                      + (" -> end: " if _has_return(branch)
                                         else ": ") + text)
                 if not _branch_text(no) and not _has_return(no):
-                    lines.append("    no:")
+                    lines.append("    " + tag_no + ":")
             elif it[0] == "switch":
                 lines.append("switch (" + it[1] + ")")
                 for label, case_items in it[2]:
