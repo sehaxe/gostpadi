@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gostpadi — блок-схемы из кода</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, sans-serif;
+         background: #f4f4ef; color: #16161a; }
+  header { background: #16161a; color: #f4f4ef; padding: 14px 22px; }
+  header h1 { margin: 0; font-size: 20px; letter-spacing: .3px; }
+  header p { margin: 3px 0 0; font-size: 13px; opacity: .75; }
+  header a { color: #9ad; }
+  main { display: grid; grid-template-columns: minmax(300px, 2fr) 3fr;
+         gap: 14px; padding: 14px; max-width: 1500px; margin: 0 auto; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .pane { background: #fff; border: 1px solid #ddd; border-radius: 10px;
+          padding: 12px; }
+  .pane h2 { margin: 0 0 8px; font-size: 14px; text-transform: uppercase;
+             letter-spacing: .6px; color: #666; }
+  textarea { width: 100%; height: 52vh; min-height: 260px; resize: vertical;
+             font: 13px/1.45 ui-monospace, Consolas, monospace;
+             border: 1px solid #ccc; border-radius: 8px; padding: 10px;
+             white-space: pre; overflow-wrap: normal; overflow-x: auto; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+         margin: 10px 0; }
+  button, .btn { background: #16161a; color: #fff; border: 0; border-radius: 8px;
+                 padding: 9px 14px; font-size: 14px; cursor: pointer;
+                 text-decoration: none; display: inline-block; }
+  button:disabled { opacity: .5; cursor: default; }
+  .btn { background: #eee; color: #16161a; border: 1px solid #ccc; }
+  #status { padding: 8px 12px; border-radius: 8px; background: #eee;
+            font-size: 13px; min-height: 20px; white-space: pre-wrap; }
+  #status.err { background: #ffd9d9; color: #7a1020; }
+  #images img { max-width: 100%; border: 1px solid #ddd; border-radius: 8px;
+                margin: 8px 0; background: #fff; }
+  .sheet { margin-bottom: 14px; }
+  .sheet h3 { margin: 6px 0; font-size: 13px; color: #444; }
+  .drop { outline: 2px dashed #7aa; outline-offset: -6px; }
+  .hint { font-size: 12px; color: #777; margin-top: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>gostpadi</h1>
+  <p>блок-схемы из кода на C или файла .gvn — всё считается у тебя в браузере,
+     код никуда не отправляется. Движок тот же, что и в
+     <a href="https://github.com/sehaxe/gostpadi">CLI</a>.</p>
+</header>
+<main>
+  <section class="pane">
+    <h2>Код / схема</h2>
+    <textarea id="code" spellcheck="false"></textarea>
+    <div class="row">
+      <input type="file" id="file" accept=".c,.gvn,.txt">
+      <label><input type="checkbox" id="ru"> надписи по-русски (да/нет)</label>
+    </div>
+    <div class="row">
+      <button id="render" disabled>Схема →</button>
+      <a class="btn" id="dlpng" download="scheme.png" hidden>Скачать PNG</a>
+      <a class="btn" id="dlsvg" download="scheme.svg" hidden>Скачать SVG</a>
+    </div>
+    <div id="status">Загружаю Pyodide и matplotlib — первый раз ~20 секунд,
+потом из кеша.</div>
+    <p class="hint">Перетащи сюда файл .c или .gvn — содержимое откроется
+слева. Расширение файла определяет тип: .c — код, .gvn — готовая схема.</p>
+  </section>
+  <section class="pane" id="drop">
+    <h2>Схема</h2>
+    <div id="images"><p style="color:#888">Здесь появится схема.</p></div>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
+<script>
+"use strict";
+
+const EXAMPLE = `#include <stdio.h>
+
+int main(void) {
+    int month;
+
+    printf("Enter month 1-12: ");
+    if (scanf("%d", &month) != 1 || month < 1 || month > 12) {
+        printf("Wrong input\\n");
+        return 1;
+    }
+
+    switch (month / 3) {
+        case 1: printf("Spring\\n"); break;
+        case 2: printf("Summer\\n"); break;
+        case 3: printf("Autumn\\n"); break;
+        default: printf("Winter\\n");
+    }
+
+    return 0;
+}`;
+
+const SRC_FALLBACK =
+  "https://raw.githubusercontent.com/sehaxe/gostpadi/main/gostpadi.py";
+
+const $ = id => document.getElementById(id);
+let pyodide = null, engineReady = false, initPromise = null;
+
+function status(text, isErr) {
+  const el = $("status");
+  el.textContent = text;
+  el.className = isErr ? "err" : "";
+  el.id = "status";
+}
+
+async function init() {
+  if (initPromise) return initPromise;
+  initPromise = (async () => {
+    pyodide = await loadPyodide();
+    status("Загружаю matplotlib…");
+    await pyodide.loadPackage("matplotlib");
+    // движок gostpadi: сначала локальная копия (для запуска из репо),
+    // потом GitHub
+    let src = null;
+    for (const url of ["../gostpadi.py", SRC_FALLBACK]) {
+      try {
+        const r = await fetch(url);
+        if (r.ok) { src = await r.text(); break; }
+      } catch (e) { /* пробуем следующий адрес */ }
+    }
+    if (src === null) throw new Error("не удалось получить gostpadi.py");
+    pyodide.FS.writeFile("/gostpadi.py", src, { encoding: "utf8" });
+    pyodide.runPython("import sys; sys.path.insert(0, '/')");
+    pyodide.runPython("import gostpadi");
+    engineReady = true;
+    $("render").disabled = false;
+    status("Готово: вставь код слева и нажми «Схема →»");
+  })();
+  return initPromise;
+}
+
+async function renderNow() {
+  if (!engineReady) {
+    status("Движок ещё загружается…");
+    return;
+  }
+  const text = $("code").value;
+  const labels = $("ru").checked ? "ru" : "en";
+  status("Рисую…");
+  $("render").disabled = true;
+  try {
+    pyodide.globals.set("code_text", text);
+    pyodide.globals.set("labels", labels);
+    const sheets = JSON.parse(pyodide.runPython(`
+import json, base64, os
+import gostpadi
+
+stem = "/tmp/scheme"
+pngs = gostpadi.render(code_text, stem + ".png", labels=labels)
+svgs = gostpadi.render(code_text, stem + ".svg", labels=labels)
+out = []
+for png, svg in zip(pngs, svgs):
+    name = os.path.basename(png)[:-4]
+    out.append({
+        "name": name,
+        "png": base64.b64encode(open(png, "rb").read()).decode(),
+        "svg": base64.b64encode(open(svg, "rb").read()).decode(),
+    })
+json.dumps(out)
+`));
+    const box = $("images");
+    box.innerHTML = "";
+    let pngShown = false, svgShown = false;
+    for (const [i, sh] of sheets.entries()) {
+      const h = document.createElement("h3");
+      h.textContent = sheets.length > 1
+        ? `лист ${i + 1}` : "схема";
+      box.appendChild(h);
+      const img = document.createElement("img");
+      img.src = "data:image/png;base64," + sh.png;
+      img.alt = sh.name;
+      box.appendChild(img);
+      if (!pngShown) {
+        $("dlpng").href = "data:image/png;base64," + sh.png;
+        $("dlpng").hidden = false;
+        pngShown = true;
+      }
+      if (sh.svg && !svgShown) {
+        $("dlsvg").href = "data:image/svg+xml;base64," + sh.svg;
+        $("dlsvg").hidden = false;
+        svgShown = true;
+      }
+    }
+    status(`Готово: листов ${sheets.length} · PDF-качество у SVG`);
+  } catch (e) {
+    const msg = (e && e.message) ? e.message : String(e);
+    status("Ошибка: " + msg, true);
+  } finally {
+    $("render").disabled = false;
+  }
+}
+
+$("render").addEventListener("click", () => { if (engineReady) renderNow(); });
+
+$("file").addEventListener("change", e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  f.text().then(t => { $("code").value = t; if (engineReady) renderNow(); });
+});
+
+const drop = $("drop");
+drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("drop"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("drop"));
+drop.addEventListener("drop", e => {
+  e.preventDefault();
+  drop.classList.remove("drop");
+  const f = e.dataTransfer.files[0];
+  if (!f) return;
+  f.text().then(t => {
+    $("code").value = t;
+    $("file").value = "";
+    if (engineReady) renderNow();
+  });
+});
+
+$("code").value = EXAMPLE;
+init();
+</script>
+</body>
+</html>
