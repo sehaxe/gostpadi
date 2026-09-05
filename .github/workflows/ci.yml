@@ -35,9 +35,27 @@ jobs:
           uv run --python ${{ matrix.python }} --with matplotlib python gostpadi.py /tmp/new.gvn -o /tmp/new.png
           test -s /tmp/main.png -a -s /tmp/hello.png -a -s /tmp/new.png
 
+  publish:
+    name: publish to pypi
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # trusted publisher на PyPI (sehaxe/gostpadi, ci.yml)
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Собрать пакет
+        run: uv build
+
+      - name: Опубликовать на PyPI
+        run: uv publish --trusted-publishing always
+
   release:
     name: release
-    needs: test
+    needs: [test, publish]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
