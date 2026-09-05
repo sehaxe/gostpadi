@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "gostpadi"
+dynamic = ["version"]
+description = "Flowchart generator: feed it C code, get a clean diagram"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "sehaxe" }]
+requires-python = ">=3.9"
+dependencies = ["matplotlib>=3.5"]
+keywords = ["flowchart", "diagram", "c", "code2chart",
+            "visualization", "svg"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Education",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Graphics :: Graphics Conversion",
+    "Topic :: Software Development :: Documentation",
+]
+
+[project.scripts]
+gostpadi = "gostpadi:main"
+
+[project.urls]
+Repository = "https://github.com/sehaxe/gostpadi"
+Issues = "https://github.com/sehaxe/gostpadi/issues"
+
+[tool.hatch.version]
+path = "gostpadi.py"
+
+[tool.hatch.build.targets.wheel]
+include = ["gostpadi.py"]
+
+[tool.hatch.build.targets.sdist]
+include = ["gostpadi.py", "README.md", "LICENSE", "examples/", "docs/"]

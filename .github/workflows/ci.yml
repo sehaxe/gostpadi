@@ -22,7 +22,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
-      - name: Самопроверка (все вариации + инварианты ГОСТ + эталон геометрии)
+      - name: Самопроверка (все вариации + инварианты раскладки + эталон геометрии)
         run: uv run --python ${{ matrix.python }} --with matplotlib
              python selftest.py
 
@@ -61,7 +61,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${GITHUB_REF#refs/tags/}"
-          gh release create "$tag" release/*.png release/*.svg \
+          case "$tag" in
+            *a*|*b*|*rc*) flags="--prerelease";;
+            *) flags="";;
+          esac
+          gh release create "$tag" release/*.png release/*.svg $flags \
             --title "gostpadi $tag" \
             --generate-notes \
             --notes "Проверено CI: самопроверка всех вариаций и эталон геометрии — зелёные. В приложении — готовые схемы всех примеров (PNG и векторные SVG)."

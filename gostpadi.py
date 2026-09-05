@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""gostpadi — блок-схемы по ГОСТ из своего текстового формата .gvn.
+"""gostpadi — рисовальщик аккуратных блок-схем из своего
+текстового формата .gvn или прямо из кода на C.
 
 Идея: вы описываете только текст блоков и порядок — раскладку библиотека
 делает сама, строго по шаблону:
@@ -69,7 +70,7 @@ from matplotlib.patches import Circle, FancyArrowPatch, FancyBboxPatch, Polygon,
 
 # ---------- настройки оформления ----------
 
-__version__ = "1.1"
+__version__ = "1.2.0a0"
 
 
 @dataclass(frozen=True)
@@ -589,7 +590,7 @@ def layout(nodes, sizes, st=DEFAULT):
                      arrow=False)
         has_axis = any(p[1] == "axis" for p in plan)
         has_merges = any(not e["to_end"] for e in exits.values())
-        # по ГОСТ у решения оба выхода — из боковых вершин: пустая ветка
+        # у решения оба выхода — из боковых вершин: пустая ветка
         # (нет/иначе) идёт обходом справа и сливается на основной линии,
         # от нижней вершины ромба ничего не выходит
         if empty:
@@ -1083,9 +1084,12 @@ def render_file(in_path, out_png, **kw):
     """Файл схемы (.gvn) или кода C (.c) -> PNG.
     Возвращает (код возврата, список файлов)."""
     try:
-        src = open(in_path, encoding="utf-8").read()
+        src = open(in_path, encoding="utf-8-sig").read()
     except OSError as e:
-        print(f"нет файла: {e}", file=sys.stderr)
+        print(f"не удалось открыть: {e}", file=sys.stderr)
+        return 1, []
+    except UnicodeDecodeError as e:
+        print(f"файл не в UTF-8: {e}", file=sys.stderr)
         return 1, []
     try:
         text = c_to_gvn(src) if in_path.endswith(".c") else src
@@ -1149,7 +1153,10 @@ def _show_in_terminal(png_path):
     return False
 
 
-def main(argv):
+def main(argv=None):
+    """Точка входа CLI (совместима и с прямым вызовом main([...]))."""
+    if argv is None:
+        argv = sys.argv
     args, output = [], None
     page, scale, font, lw, dpi = "a4", None, FONT, None, DPI
     show, template, gvn = False, False, False
