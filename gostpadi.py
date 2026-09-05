@@ -334,6 +334,17 @@ def parse(text, st=DEFAULT, labels="en"):
                 j += 1
             if not branches:
                 raise ParseError(f"line {lineno}: «{kw}» has no branches")
+            if cond.startswith("switch"):
+                # подписи кейсов switch: case 1, case 2, default
+                fixed = []
+                for (label, stmts, to_end, link) in branches:
+                    low = label.strip().lower()
+                    if low in ("default", "else", "otherwise", "иначе"):
+                        label = "default"
+                    elif re.fullmatch(r"\d+", label.strip()):
+                        label = "case " + label.strip()
+                    fixed.append((label, stmts, to_end, link))
+                branches = fixed
             if len(branches) == 1 and branches[0][1] and not cond.startswith("switch"):
                 # одиночное условие: второй выход «no» рисуем сами
                 branches.append((LANGS[labels]["no"], [], False, None))
@@ -492,22 +503,12 @@ def layout(nodes, sizes, st=DEFAULT):
         nonempty = [b for b in nd.branches if b[1]]
         n = len(nonempty)
         comb = bool(svar) and n >= 2
-        # у switch линия раздачи кейсов лежит прямо на нижнем углу ромба
-        # (проходит через его вершину), и все кейсы висят на ней
+        # switch: линия раздачи кейсов лежит прямо на нижнем углу ромба,
+        # и все кейсы висят на ней вертикальными спусками
         top0 = cy + dh / 2 + st.vgap
         y_b = cy + dh / 2
 
-        def fmt(label):
-            """Ветка switch: «1» -> «status = 1», «иначе» -> «default»."""
-            if svar:
-                if label.strip().lower() in ("иначе", "default", "else",
-                                             "otherwise"):
-                    return "default"
-                if "=" not in label:
-                    return f"{svar} = {label}"
-            return label
-
-        empty = [fmt(b[0]) for b in nd.branches if not b[1]]
+        empty = [b[0] for b in nd.branches if not b[1]]
         pitch = colw + st.colgap
         base = dw / 2 + st.hgap + colw / 2
         # колонка на каждую ветку: средняя — прямо по оси от нижней вершины,
@@ -528,9 +529,6 @@ def layout(nodes, sizes, st=DEFAULT):
 
         exits = {}  # id(ветки) -> dict(x, y, to_end, side)
         link_bottom = cy + dh / 2
-        # switch: из нижнего угла ромба выходит горизонтальная линия во всю
-        # ширину колонок (проходит ровно через угол), и все кейсы висят
-        # на ней вертикальными спусками
         if comb and len(plan) >= 2:
             xs = [tx for _b, _s, _t, tx in plan]
             edge([(min(xs), y_b), (max(xs), y_b)], arrow=False)
@@ -549,20 +547,20 @@ def layout(nodes, sizes, st=DEFAULT):
                         edge([(tx, y_b), (tx, top)])
                         labels.append(dict(x=st.label_axis_dx,
                                            y=top - st.label_dy,
-                                           text=fmt(label), ha="left"))
+                                           text=label, ha="left"))
                     elif comb:
                         # кейс висит на горизонтальной линии угла
                         edge([(tx, y_b), (tx, top)])
                         labels.append(dict(
                             x=tx + (-st.label_dx if side == "L"
                                     else st.label_dx),
-                            y=top - st.label_dy, text=fmt(label),
+                            y=top - st.label_dy, text=label,
                             ha="right" if side == "L" else "left"))
                     else:
                         v = vl if side == "L" else vr
                         edge([v, (tx, cy), (tx, top)])
-                        labels.append(dict(x=(v[0] + tx) / 2, y=cy - 11.0,
-                                           text=fmt(label), ha="center"))
+                        labels.append(dict(x=(v[0] + tx) / 2, y=cy - st.label_dy,
+                                           text=label, ha="center"))
                 else:
                     edge([(tx, prev_bottom), (tx, top)])
                 prev_bottom = bottom

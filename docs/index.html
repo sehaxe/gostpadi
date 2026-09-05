@@ -13,17 +13,22 @@
   header h1 { margin: 0; font-size: 20px; letter-spacing: .3px; }
   header p { margin: 3px 0 0; font-size: 13px; opacity: .75; }
   header a { color: #9ad; }
-  main { display: grid; grid-template-columns: minmax(300px, 2fr) 3fr;
+  main { display: grid; grid-template-columns: minmax(320px, 2fr) 3fr;
          gap: 14px; padding: 14px; max-width: 1500px; margin: 0 auto; }
   @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
   .pane { background: #fff; border: 1px solid #ddd; border-radius: 10px;
           padding: 12px; }
   .pane h2 { margin: 0 0 8px; font-size: 14px; text-transform: uppercase;
              letter-spacing: .6px; color: #666; }
-  textarea { width: 100%; height: 52vh; min-height: 260px; resize: vertical;
+  textarea { width: 100%; height: 38vh; min-height: 220px; resize: vertical;
              font: 13px/1.45 ui-monospace, Consolas, monospace;
              border: 1px solid #ccc; border-radius: 8px; padding: 10px;
              white-space: pre; overflow-wrap: normal; overflow-x: auto; }
+  .drop { border: 2px dashed #b9b9a8; border-radius: 10px; padding: 22px 14px;
+          text-align: center; color: #666; font-size: 14px; cursor: pointer;
+          transition: background .15s, border-color .15s; }
+  .drop:hover { background: #fafaf2; }
+  .drop.over { border-color: #2a7a2a; background: #eef7ee; color: #2a5a2a; }
   .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
          margin: 10px 0; }
   button, .btn { background: #16161a; color: #fff; border: 0; border-radius: 8px;
@@ -31,15 +36,27 @@
                  text-decoration: none; display: inline-block; }
   button:disabled { opacity: .5; cursor: default; }
   .btn { background: #eee; color: #16161a; border: 1px solid #ccc; }
-  #status { padding: 8px 12px; border-radius: 8px; background: #eee;
-            font-size: 13px; min-height: 20px; white-space: pre-wrap; }
+  #status { display: flex; align-items: center; gap: 10px;
+            padding: 9px 12px; border-radius: 8px; background: #eee;
+            font-size: 13px; min-height: 20px; }
   #status.err { background: #ffd9d9; color: #7a1020; }
+  .spinner { width: 16px; height: 16px; border: 3px solid #bbb;
+             border-top-color: #16161a; border-radius: 50%;
+             animation: spin 0.8s linear infinite; flex: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .stage { color: #555; }
   #images img { max-width: 100%; border: 1px solid #ddd; border-radius: 8px;
                 margin: 8px 0; background: #fff; }
+  #preview-wrap { position: relative; min-height: 300px; }
+  #preview-wrap.processing #images { opacity: .45; }
   .sheet { margin-bottom: 14px; }
   .sheet h3 { margin: 6px 0; font-size: 13px; color: #444; }
-  .drop { outline: 2px dashed #7aa; outline-offset: -6px; }
   .hint { font-size: 12px; color: #777; margin-top: 6px; }
+  .skeleton { height: 120px; border-radius: 8px; margin: 8px 0;
+              background: linear-gradient(100deg, #eee 40%, #f7f7f0 50%, #eee 60%);
+              background-size: 200% 100%; animation: shimmer 1.2s infinite; }
+  @keyframes shimmer { to { background-position: -200% 0; } }
+  .chk { font-size: 13px; display: flex; gap: 6px; align-items: center; }
 </style>
 </head>
 <body>
@@ -51,25 +68,30 @@
 </header>
 <main>
   <section class="pane">
-    <h2>Код / схема</h2>
-    <textarea id="code" spellcheck="false"></textarea>
-    <div class="row">
-      <input type="file" id="file" accept=".c,.gvn,.txt">
-      <label><input type="checkbox" id="ru"> надписи по-русски (да/нет)</label>
+    <div class="drop" id="drop">
+      <b>Перетащи сюда файл</b> <code>.c</code> или <code>.gvn</code><br>
+      или нажми, чтобы выбрать
+      <input type="file" id="file" accept=".c,.gvn,.txt" hidden>
     </div>
+    <div class="row">
+      <label class="chk"><input type="checkbox" id="ru"> надписи по-русски
+        (начало/конец, да/нет)</label>
+    </div>
+    <textarea id="code" spellcheck="false"></textarea>
     <div class="row">
       <button id="render" disabled>Схема →</button>
       <a class="btn" id="dlpng" download="scheme.png" hidden>Скачать PNG</a>
       <a class="btn" id="dlsvg" download="scheme.svg" hidden>Скачать SVG</a>
     </div>
-    <div id="status">Загружаю Pyodide и matplotlib — первый раз ~20 секунд,
-потом из кеша.</div>
-    <p class="hint">Перетащи сюда файл .c или .gvn — содержимое откроется
-слева. Расширение файла определяет тип: .c — код, .gvn — готовая схема.</p>
+    <div id="status"><span class="spinner"></span><span class="stage">
+      Загружаю Python (Pyodide)… первый раз ~20 секунд, потом из кеша.</span></div>
+    <p class="hint">Расширение файла определяет тип: <code>.c</code> — код,
+<code>.gvn</code> — готовая схема. Править текст можно прямо здесь —
+кнопка «Схема →» перерисует.</p>
   </section>
-  <section class="pane" id="drop">
+  <section class="pane" id="preview-wrap">
     <h2>Схема</h2>
-    <div id="images"><p style="color:#888">Здесь появится схема.</p></div>
+    <div id="images"></div>
   </section>
 </main>
 
@@ -98,29 +120,34 @@ int main(void) {
     return 0;
 }`;
 
-const SRC_FALLBACK =
+const SRC_URL =
   "https://raw.githubusercontent.com/sehaxe/gostpadi/main/gostpadi.py";
 
 const $ = id => document.getElementById(id);
 let pyodide = null, engineReady = false, initPromise = null;
+let renderTimer = null;
 
-function status(text, isErr) {
+function status(html, isErr) {
   const el = $("status");
-  el.textContent = text;
   el.className = isErr ? "err" : "";
-  el.id = "status";
+  el.innerHTML = html;
+}
+
+function spinner(text) {
+  status(`<span class="spinner"></span><span class="stage">${text}</span>`);
 }
 
 async function init() {
   if (initPromise) return initPromise;
   initPromise = (async () => {
+    spinner("Загружаю Python (Pyodide)…");
     pyodide = await loadPyodide();
-    status("Загружаю matplotlib…");
+    spinner("Загружаю matplotlib…");
     await pyodide.loadPackage("matplotlib");
-    // движок gostpadi: сначала локальная копия (для запуска из репо),
-    // потом GitHub
+    spinner("Загружаю движок gostpadi…");
+    // ?t= — сброс кеша: браузер не должен держать старую версию движка
     let src = null;
-    for (const url of ["../gostpadi.py", SRC_FALLBACK]) {
+    for (const url of ["../gostpadi.py", SRC_URL + "?t=" + Date.now()]) {
       try {
         const r = await fetch(url);
         if (r.ok) { src = await r.text(); break; }
@@ -132,19 +159,18 @@ async function init() {
     pyodide.runPython("import gostpadi");
     engineReady = true;
     $("render").disabled = false;
-    status("Готово: вставь код слева и нажми «Схема →»");
+    status("Готово: перетащи файл или нажми «Схема →»");
+    if ($("code").value.trim()) renderNow();
   })();
   return initPromise;
 }
 
 async function renderNow() {
-  if (!engineReady) {
-    status("Движок ещё загружается…");
-    return;
-  }
+  if (!engineReady) return;
   const text = $("code").value;
   const labels = $("ru").checked ? "ru" : "en";
-  status("Рисую…");
+  spinner("Рисую схему…");
+  $("preview-wrap").classList.add("processing");
   $("render").disabled = true;
   try {
     pyodide.globals.set("code_text", text);
@@ -173,28 +199,29 @@ json.dumps(out)
 `));
     const box = $("images");
     box.innerHTML = "";
-    let pngShown = false, svgShown = false;
     for (const [i, sh] of sheets.entries()) {
       const h = document.createElement("h3");
-      h.textContent = sheets.length > 1
-        ? `лист ${i + 1}` : "схема";
+      h.textContent = sheets.length > 1 ? `лист ${i + 1}` : "схема";
       box.appendChild(h);
       const img = document.createElement("img");
       img.src = "data:image/png;base64," + sh.png;
       img.alt = sh.name;
       box.appendChild(img);
-      if (!pngShown) {
-        $("dlpng").href = "data:image/png;base64," + sh.png;
-        $("dlpng").hidden = false;
-        pngShown = true;
-      }
-      if (sh.svg && !svgShown) {
-        $("dlsvg").href = "data:image/svg+xml;base64," + sh.svg;
-        $("dlsvg").hidden = false;
-        svgShown = true;
-      }
+      const row = document.createElement("div");
+      const a1 = document.createElement("a");
+      a1.href = "data:image/png;base64," + sh.png;
+      a1.download = sh.name + ".png";
+      a1.textContent = "Скачать PNG";
+      a1.className = "btn";
+      const a2 = document.createElement("a");
+      a2.href = "data:image/svg+xml;base64," + sh.svg;
+      a2.download = sh.name + ".svg";
+      a2.textContent = "Скачать SVG";
+      a2.className = "btn";
+      row.append(a1, a2);
+      box.appendChild(row);
     }
-    status(`Готово: листов ${sheets.length} · PDF-качество у SVG`);
+    status(`Готово: листов ${sheets.length}`);
   } catch (e) {
     const msg = (e && e.message) ? e.message : String(e);
     status("Ошибка: " + msg, true);
@@ -203,26 +230,40 @@ json.dumps(out)
   }
 }
 
-$("render").addEventListener("click", () => { if (engineReady) renderNow(); });
+function queueRender() {
+  if (renderTimer) clearTimeout(renderTimer);
+  renderTimer = setTimeout(() => {
+    if (engineReady) renderNow();
+  }, 400);
+}
 
-$("file").addEventListener("change", e => {
-  const f = e.target.files[0];
-  if (!f) return;
-  f.text().then(t => { $("code").value = t; if (engineReady) renderNow(); });
-});
+$("render").addEventListener("click", () => { if (engineReady) renderNow(); });
+$("ru").addEventListener("change", () => { if (engineReady) renderNow(); });
+
+$("code").addEventListener("input", queueRender);
 
 const drop = $("drop");
-drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("drop"); });
-drop.addEventListener("dragleave", () => drop.classList.remove("drop"));
+const fileInput = $("file");
+drop.addEventListener("click", () => fileInput.click());
+drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
 drop.addEventListener("drop", e => {
   e.preventDefault();
-  drop.classList.remove("drop");
+  drop.classList.remove("over");
   const f = e.dataTransfer.files[0];
   if (!f) return;
   f.text().then(t => {
     $("code").value = t;
-    $("file").value = "";
-    if (engineReady) renderNow();
+    fileInput.value = "";
+    if (engineReady) renderNow(); else init();
+  });
+});
+fileInput.addEventListener("change", e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  f.text().then(t => {
+    $("code").value = t;
+    if (engineReady) renderNow(); else init();
   });
 });
 
