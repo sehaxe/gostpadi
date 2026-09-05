@@ -425,10 +425,15 @@ def layout(nodes, sizes):
             edge([prev, (0.0, cy - dh / 2)])
         anchors.append(dict(sh=dmd, ext=0.0))  # дополнится низом колонок
         vl, vr, vb = (-dw / 2, cy), (dw / 2, cy), (0.0, cy + dh / 2)
-        top0 = cy + dh / 2 + VGAP  # верх первой плитки любой колонки
-        y_b = cy + dh / 2 + 12.0   # уровень гребёнки раздачи кейсов
 
         svar = getattr(nd, "switch_var", None)
+        nonempty = [b for b in nd.branches if b[1]]
+        n = len(nonempty)
+        comb = bool(svar) and n >= 2
+        # у switch гребёнка раздачи кейсов заметно ниже ромба — линия не
+        # задевает его нижний угол, а подписи не налипают на линии
+        top0 = cy + dh / 2 + (46.0 if comb else VGAP)
+        y_b = cy + dh / 2 + (26.0 if comb else 12.0)
 
         def fmt(label):
             """Ветка switch: «1» -> «status = 1», «иначе» -> «default»."""
@@ -440,9 +445,7 @@ def layout(nodes, sizes):
                     return f"{svar} = {label}"
             return label
 
-        nonempty = [b for b in nd.branches if b[1]]
         empty = [fmt(b[0]) for b in nd.branches if not b[1]]
-        n = len(nonempty)
         pitch = colw + COLGAP
         base = dw / 2 + HGAP + colw / 2
         # колонка на каждую ветку: средняя — прямо по оси от нижней вершины,
