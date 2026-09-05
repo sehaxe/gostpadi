@@ -290,6 +290,12 @@ def main():
                            capture_output=True, text=True)
         check("CLI: рендер с -o", r.returncode == 0 and os.path.exists(out),
               r.stderr[-120:] if r.returncode else "")
+        out_svg = os.path.join(td, "ok.svg")
+        r = subprocess.run([sys.executable, SCRIPT, gvn, "-o", out_svg],
+                           capture_output=True, text=True)
+        svg_ok = r.returncode == 0 and os.path.exists(out_svg) and \
+                 "<svg" in open(out_svg, encoding="utf-8").read(300)
+        check("CLI: рендер в SVG", svg_ok, "")
         r = subprocess.run([sys.executable, SCRIPT, gvn, "--show"],
                            capture_output=True, text=True,
                            env={**os.environ, "GOSTPADI_SHOW": "kitty"})

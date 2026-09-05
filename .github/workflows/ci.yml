@@ -50,9 +50,10 @@ jobs:
       - name: Собрать картинки всех примеров
         run: |
           mkdir -p release
-          uv run --with matplotlib python gostpadi.py examples/main.c -o release/example-from-c.png --scale=2
-          for f in examples/*.gvn; do
-            uv run --with matplotlib python gostpadi.py "$f" -o "release/$(basename "$f" .gvn).png" --scale=2
+          for f in examples/main.c examples/*.gvn; do
+            name="$(basename "$f")"; name="${name%.*}"
+            uv run --with matplotlib python gostpadi.py "$f" -o "release/$name.png" --scale=2
+            uv run --with matplotlib python gostpadi.py "$f" -o "release/$name.svg" --scale=2
           done
 
       - name: Создать релиз с картинками
@@ -60,7 +61,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${GITHUB_REF#refs/tags/}"
-          gh release create "$tag" release/*.png \
+          gh release create "$tag" release/*.png release/*.svg \
             --title "gostpadi $tag" \
             --generate-notes \
-            --notes "Проверено CI: самопроверка всех вариаций и эталон геометрии — зелёные. В приложении — готовые PNG всех примеров."
+            --notes "Проверено CI: самопроверка всех вариаций и эталон геометрии — зелёные. В приложении — готовые схемы всех примеров (PNG и векторные SVG)."
