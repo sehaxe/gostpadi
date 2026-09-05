@@ -342,7 +342,11 @@ def normalize(nodes):
         for _lbl, stmts, _te, _ln in nd.branches:
             for s in stmts:
                 put("io" if IO_RE.match(s) else "act", s)
-    put("conn", "А")  # кружки-соединители появляются при разбивке на части
+    # базовые размеры всегда есть, даже если типа в схеме не было
+    # (иначе раскладка падает на отсутствующем ключе)
+    for kind, sample in (("term", "x"), ("io", "x"), ("act", "x"),
+                         ("if", "x"), ("conn", "А")):
+        put(kind, sample)
     return sizes
 
 
@@ -466,11 +470,12 @@ def layout(nodes, sizes):
 
         exits = {}  # id(ветки) -> dict(x, y, to_end, side)
         link_bottom = cy + dh / 2
-        # switch: из нижней вершины ромба выходит одна вертикаль,
-        # и все кейсы висят на ней (крайние — через гребёнку на y_b)
-        comb = bool(svar) and n >= 2
-        if comb and not any(p[1] == "axis" for p in plan):
-            edge([vb, (0.0, y_b)], arrow=False)
+        # switch: из нижнего угла ромба выходит горизонтальная линия во всю
+        # ширину колонок (проходит ровно через угол), и все кейсы висят
+        # на ней вертикальными спусками
+        if comb and len(plan) >= 2:
+            xs = [tx for _b, _s, _t, tx in plan]
+            edge([(min(xs), y_b), (max(xs), y_b)], arrow=False)
         for b, side, _t, tx in plan:
             label, stmts, to_end, link = b
             prev_bottom = None
