@@ -11,29 +11,24 @@
 
 ![switch](docs/scheme-switch.png)
 
+Пакет на PyPI: [pypi.org/project/gostpadi](https://pypi.org/project/gostpadi/)
+
 ## Установка
 
-Достаточно [uv](https://docs.astral.sh/uv/), ничего ставить не нужно:
-
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh     # Linux / macOS
+pip install gostpadi
 ```
 
-Схема из кода одной командой, без клонирования:
+Нужен только [matplotlib](https://matplotlib.org/), он поставится сам.
+
+Вариант без установки — [uv](https://docs.astral.sh/uv/) запускает утилиту
+прямо с GitHub:
 
 ```bash
 uv run https://raw.githubusercontent.com/sehaxe/gostpadi/main/gostpadi.py main.c
 ```
 
-Классический вариант:
-
-```bash
-git clone https://github.com/sehaxe/gostpadi && cd gostpadi
-pip install matplotlib
-python gostpadi.py main.c
-```
-
-## Как пользоваться
+## Использование
 
 ```bash
 gostpadi main.c                 # -> main.png, вписано в А4
@@ -44,14 +39,29 @@ gostpadi main.c --gvn           # сохранить текст схемы (мо
 ```
 
 Понимает: `printf`/`scanf` (сами параллелограммы), присваивания, `if/else`,
-`switch/case/default` (кейсы висят на линии из нижнего угла ромба),
-`return` (ветка уходит в «End»). Объявления переменных выбрасываются.
-Циклов и `else if` пока нет — утилита скажет сама.
+`switch/case/default` (кейсы висят на линии из нижнего угла ромба,
+подписи `s = 1` … `default`), `return` (ветка уходит в «End»).
+Объявления переменных выбрасываются. Циклов и `else if` пока нет —
+утилита скажет сама.
 
-Хочешь управлять каждой строкой — пиши `.gvn` руками: строка = блок,
-ветки — отступ в 4 пробела. Примеры в `examples/`.
+## Свой формат .gvn
 
-## Опции
+Если хочется управлять каждой строкой — пиши схему текстом:
+строка = блок, ветки — отступом в 4 пробела.
+
+```text
+#gostpadi 1
+input scanf("%d", &x)
+y = x * 2
+if y > 10
+    yes: printf("big")
+    no: printf("small")
+output printf("done")
+```
+
+Примеры и заготовка — в `examples/` и по команде `--template`.
+
+## Все опции
 
 | опция | что делает |
 |---|---|
@@ -64,6 +74,16 @@ gostpadi main.c --gvn           # сохранить текст схемы (мо
 | `--lw=N` | толщина всех линий (1.4) |
 | `--dpi=N` | плотность пикселей (200) |
 | `--template` | заготовка схемы |
+
+## Из Python
+
+```python
+import gostpadi
+
+gostpadi.render(open("main.c").read(), "схема.png")          # из кода C
+gostpadi.render(open("схема.gvn").read(), "результат.png")   # из .gvn
+gostpadi.render(text, "x2.png", page="auto", scale=2.0)      # опции
+```
 
 ## Проверка
 
