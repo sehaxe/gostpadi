@@ -162,6 +162,13 @@ EDGE_LW = DEFAULT.edge_lw
 FONT_STACK = list(DEFAULT.font_stack)
 LETTERS = DEFAULT.letters
 IO_RE = DEFAULT.io_re()
+
+# языки надписей схем: терминаторы и автоподписи веток
+LANGS = {
+    "en": {"start": "Start", "end": "End", "yes": "yes", "no": "no"},
+    "ru": {"start": "начало", "end": "конец", "yes": "да", "no": "нет"},
+}
+
 TEMPLATE = """\
 #gostpadi 1
 # One line = one block; top to bottom. Five words: input, output, if, yes/no.
@@ -277,8 +284,8 @@ def strip_comments(line):
     return "".join(out)
 
 
-def parse(text, st=DEFAULT):
-    """Текст схемы (.gvn) -> список узлов (начало/конец добавляются сами)."""
+def parse(text, st=DEFAULT, labels="en"):
+    """Текст схемы (.gvn) -> список узлов (Start/End добавляются сами)."""
     text = text.lstrip("\ufeff")  # BOM
     lines = []
     for lineno, line in enumerate(text.splitlines(), 1):
@@ -286,7 +293,7 @@ def parse(text, st=DEFAULT):
         if body.strip():
             lines.append((lineno, body))
 
-    nodes = [Node("term", "Start")]
+    nodes = [Node("term", LANGS[labels]["start"])]
     i = 0
     while i < len(lines):
         lineno, line = lines[i]
@@ -329,7 +336,7 @@ def parse(text, st=DEFAULT):
                 raise ParseError(f"line {lineno}: «{kw}» has no branches")
             if len(branches) == 1 and branches[0][1] and not cond.startswith("switch"):
                 # одиночное условие: второй выход «no» рисуем сами
-                branches.append(("no", [], False, None))
+                branches.append((LANGS[labels]["no"], [], False, None))
             nd = Node("if", cond, branches)
             m = re.match(r"switch\s*\(([^)]*)\)", cond)
             nd.switch_var = m.group(1).strip() if m else None
@@ -350,7 +357,7 @@ def parse(text, st=DEFAULT):
         else:
             nodes.append(Node("act", wrap(stripped)))
         i += 1
-    nodes.append(Node("term", "End"))
+    nodes.append(Node("term", LANGS[labels]["end"]))
     return nodes
 
 
@@ -779,7 +786,7 @@ def _suffixed(path, n):
 
 
 def render(text, out_png, page="a4", scale=None, font=FONT, edge_lw=None,
-           dpi=DPI):
+           dpi=DPI, labels="en"):
     """Текст схемы -> PNG (или несколько: результат.png, результат-2.png...).
 
     page="a4" — вписать в А4 (по умолчанию), page="auto" — канвас по
@@ -787,7 +794,7 @@ def render(text, out_png, page="a4", scale=None, font=FONT, edge_lw=None,
     edge_lw — единая толщина линий, dpi — плотность пикселей.
     Возвращает список записанных файлов.
     """
-    nodes = parse(text)
+    nodes = parse(text, labels=labels)
     sizes = normalize(nodes)
     files = []
     parts = [nodes] if page == "auto" else split_scheme(nodes, sizes)
@@ -1038,7 +1045,7 @@ def _abbrev_stmt(s):
     return f'{m.group(1)}("{cut}...")'
 
 
-def c_to_gvn(src):
+def c_to_gvn(src, labels="en"):
     """Код C -> текст схемы .gvn. if/else, switch/case/default, return;
     объявления переменных выбрасываются, ветка с return уходит в «конец».
     Циклы (while/for/do) пока не поддерживаются."""
@@ -1049,7 +1056,7 @@ def c_to_gvn(src):
     s = _CSrc(src)
     s.i = m.end()
     items = [it for it in _c_parse_block(s) if it[0] != "skip"]
-    tag_yes, tag_no = "yes", "no"
+    tag_yes, tag_no = LANGS[labels]["yes"], LANGS[labels]["no"]
     lines = ["#gostpadi 1"]
 
     def emit(items):
@@ -1094,7 +1101,8 @@ def render_file(in_path, out_png, **kw):
         print(f"файл не в UTF-8: {e}", file=sys.stderr)
         return 1, []
     try:
-        text = c_to_gvn(src) if in_path.endswith(".c") else src
+        labels = kw.pop("labels", "en")
+        text = c_to_gvn(src, labels=labels) if in_path.endswith(".c") else src
         files = render(text, out_png, **kw)
     except ParseError as e:
         print(f"ошибка: {e}", file=sys.stderr)
@@ -1162,6 +1170,7 @@ def main(argv=None):
     args, output = [], None
     page, scale, font, lw, dpi = "a4", None, FONT, None, DPI
     show, template, gvn = False, False, False
+    labels = "en"
     i = 1
     while i < len(argv):
         a = argv[i]
@@ -1173,6 +1182,12 @@ def main(argv=None):
             template = True
         elif a == "--gvn":
             gvn = True
+        elif a.startswith("--labels="):
+            labels = a[9:]
+            if labels not in ("ru", "en"):
+                print(f"--labels={labels}: поддерживаются ru и en",
+                      file=sys.stderr)
+                return 2
         elif a in ("-o", "--output"):
             i += 1
             if i >= len(argv):
@@ -1202,6 +1217,9 @@ def main(argv=None):
             args.append(a)
         i += 1
 
+    if labels not in ("ru", "en"):
+        print(f"--labels={labels}: поддерживаются ru и en", file=sys.stderr)
+        return 2
     for opt_name, val in (("--scale", scale), ("--font", font),
                           ("--lw", lw), ("--dpi", dpi)):
         if val is not None and val <= 0:
@@ -1226,7 +1244,11 @@ def main(argv=None):
         print("-o можно указывать только с одним файлом схемы", file=sys.stderr)
         return 2
 
-    kw = dict(page=page, scale=scale, font=font, edge_lw=lw, dpi=dpi)
+    if labels not in ("ru", "en"):
+        print(f"--labels={labels}: поддерживаются ru и en", file=sys.stderr)
+        return 2
+    kw = dict(page=page, scale=scale, font=font, edge_lw=lw, dpi=dpi,
+              labels=labels)
     code = 0
     for inp in args:
         out = output if (output and len(args) == 1) else _default_output(inp)
