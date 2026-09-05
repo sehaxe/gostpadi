@@ -70,7 +70,7 @@ from matplotlib.patches import Circle, FancyArrowPatch, FancyBboxPatch, Polygon,
 
 # ---------- настройки оформления ----------
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 
 @dataclass(frozen=True)
