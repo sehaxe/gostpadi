@@ -153,9 +153,14 @@ async function renderNow() {
 import json, base64, os
 import gostpadi
 
+# если это код C — сначала переводим в текст схемы
+src = code_text
+if "#include" in src or "int main" in src:
+    src = gostpadi.c_to_gvn(src)
+
 stem = "/tmp/scheme"
-pngs = gostpadi.render(code_text, stem + ".png", labels=labels)
-svgs = gostpadi.render(code_text, stem + ".svg", labels=labels)
+pngs = gostpadi.render(src, stem + ".png", labels=labels)
+svgs = gostpadi.render(src, stem + ".svg", labels=labels)
 out = []
 for png, svg in zip(pngs, svgs):
     name = os.path.basename(png)[:-4]
