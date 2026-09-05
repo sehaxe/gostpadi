@@ -216,7 +216,7 @@ def parse(text):
     text = text.lstrip("\ufeff")  # BOM
     lines = []
     for lineno, line in enumerate(text.splitlines(), 1):
-        body = strip_comments(line).rstrip()
+        body = strip_comments(line).expandtabs(4).rstrip()
         if body.strip():
             lines.append((lineno, body))
 
@@ -226,7 +226,8 @@ def parse(text):
     while i < len(lines):
         lineno, line = lines[i]
         stripped = line.strip()
-        if stripped.startswith("@"):
+        indent = len(line) - len(line.lstrip())
+        if stripped.startswith("@") and indent == 0:
             m = re.match(r"^@labels\s+(ru|en)\s*$", stripped)
             if not m:
                 raise ParseError(f"строка {lineno}: неизвестная директива "
@@ -234,7 +235,6 @@ def parse(text):
             labels_lang = m.group(1)
             i += 1
             continue
-        indent = len(line) - len(line.lstrip())
         if indent >= 4:
             raise ParseError(f"строка {lineno}: отступ допустим только внутри "
                              "«если»/«if»")
@@ -1045,6 +1045,9 @@ def render_file(in_path, out_png, **kw):
     except ParseError as e:
         print(f"ошибка: {e}", file=sys.stderr)
         return 1, []
+    except OSError as e:
+        print(f"не удалось записать: {e}", file=sys.stderr)
+        return 1, []
     for f in files:
         print(f)
     return 0, files
@@ -1145,6 +1148,12 @@ def main(argv):
             args.append(a)
         i += 1
 
+    for opt_name, val in (("--scale", scale), ("--font", font),
+                          ("--lw", lw), ("--dpi", dpi)):
+        if val is not None and val <= 0:
+            print(f"{opt_name}={val}: значение должно быть > 0",
+                  file=sys.stderr)
+            return 2
     if template:
         sys.stdout.write(TEMPLATE)
         return 0
