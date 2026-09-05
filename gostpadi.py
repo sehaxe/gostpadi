@@ -540,14 +540,16 @@ def layout(nodes, sizes, st=DEFAULT):
                     if side == "axis":
                         # средний кейс: спуск прямо из нижнего угла ромба
                         edge([(tx, y_b), (tx, top)])
-                        labels.append(dict(x=9.0, y=cy + dh / 2 + 12.0,
+                        labels.append(dict(x=st.label_axis_dx,
+                                           y=top - st.label_dy,
                                            text=fmt(label), ha="left"))
                     elif comb:
                         # кейс висит на горизонтальной линии угла
                         edge([(tx, y_b), (tx, top)])
                         labels.append(dict(
-                            x=tx + (-8.0 if side == "L" else 8.0),
-                            y=top - 12.0, text=fmt(label),
+                            x=tx + (-st.label_dx if side == "L"
+                                    else st.label_dx),
+                            y=top - st.label_dy, text=fmt(label),
                             ha="right" if side == "L" else "left"))
                     else:
                         v = vl if side == "L" else vr
