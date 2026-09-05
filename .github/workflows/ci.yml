@@ -47,16 +47,18 @@ jobs:
 
       - uses: astral-sh/setup-uv@v5
 
-      - name: Собрать картинки всех примеров
-        run: |
-          mkdir -p release
-          for f in examples/main.c examples/*.gvn; do
-            name="$(basename "$f")"; name="${name%.*}"
-            uv run --with matplotlib python gostpadi.py "$f" -o "release/$name.png" --scale=2
-            uv run --with matplotlib python gostpadi.py "$f" -o "release/$name.svg" --scale=2
-          done
+      - name: Собрать пакет (sdist + wheel)
+        run: uv build
 
-      - name: Создать релиз с картинками
+      - name: Проверить установку из wheel в чистое окружение
+        run: |
+          uv venv /tmp/release-venv
+          uv pip install --python /tmp/release-venv/bin/python dist/*.whl
+          /tmp/release-venv/bin/gostpadi --version
+          /tmp/release-venv/bin/gostpadi examples/main.c -o /tmp/check.png
+          test -s /tmp/check.png
+
+      - name: Создать релиз (sdist + wheel)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -65,7 +67,7 @@ jobs:
             *a*|*b*|*rc*) flags="--prerelease";;
             *) flags="";;
           esac
-          gh release create "$tag" release/*.png release/*.svg $flags \
+          gh release create "$tag" dist/*.tar.gz dist/*.whl $flags \
             --title "gostpadi $tag" \
             --generate-notes \
-            --notes "Проверено CI: самопроверка всех вариаций и эталон геометрии — зелёные. В приложении — готовые схемы всех примеров (PNG и векторные SVG)."
+            --notes "Проверено CI: самопроверка всех вариаций, эталон геометрии и установка из wheel — зелёные."
