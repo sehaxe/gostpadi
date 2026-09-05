@@ -12,6 +12,8 @@
 ![switch](docs/scheme-switch.png)
 
 Пакет на PyPI: [pypi.org/project/gostpadi](https://pypi.org/project/gostpadi/)
+Онлайн-версия (схема из кода прямо в браузере):
+[sehaxe.github.io/gostpadi](https://sehaxe.github.io/gostpadi/)
 
 ## Установка
 
