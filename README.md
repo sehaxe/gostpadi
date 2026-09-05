@@ -8,9 +8,9 @@
 кейсов из нижнего угла ромба, `return` уводит ветку в «конец». Ничего
 рисовать руками не надо.
 
-![схема из кода C](docs/from-c.png)
+![схема из кода C](docs/scheme-from-c.png)
 
-![switch](docs/preview.png)
+![switch](docs/scheme-switch.png)
 
 ## Установка
 
