@@ -162,10 +162,10 @@ CASES = {
                                 '    1 -> end: printf("раз"); return 1\n'
                                 '    2: printf("два")\n'
                                 '    иначе: printf("три")'),
-    "русские ключевые слова": ('ввод scanf("%d", &a)\n'
-                               "если a > 0\n"
-                               '    да: printf("да")\n'
-                               "вывод printf(a)"),
+    "английские ключевые слова": ('input scanf("%d", &a)\n'
+                                 "if a > 0\n"
+                                 '    yes: printf("plus")\n'
+                                 "output printf(a)"),
     "перенос длинных строк": ("b = a / 100000 + a / 10000 % 10 + "
                               "a / 1000 % 10 + a % 10"),
     "комментарии": '// привет\ninput scanf("%d", &a) # хвост\n action b = 1',
@@ -299,6 +299,13 @@ def main():
                            capture_output=True, text=True,
                            env={**os.environ, "GOSTPADI_SHOW": "none"})
         check("CLI: --show без графики", r.returncode == 0, "")
+
+    # русские ключевые слова больше не часть языка — отказ с кодом 1
+    with tempfile.TemporaryDirectory() as td2:
+        ru = os.path.join(td2, "ru.gvn")
+        open(ru, "w", encoding="utf-8").write(
+            'если a > 0\n    да: printf("плюс")\n')
+        expected_error("CLI: русские ключевые слова отклоняются", [ru], 1)
 
     expected_error("CLI: нет файла", ["нет.gvn"], 1)
     expected_error("CLI: неизвестный флаг", ["--что", "x.gvn"], 2)

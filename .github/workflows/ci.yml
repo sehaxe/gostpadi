@@ -1,0 +1,67 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: selftest (python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Установить зависимости
+        run: uv python install ${{ matrix.python }} && uv venv --python ${{ matrix.python }}
+
+      - name: Самопроверка (все вариации + инварианты ГОСТ + эталон геометрии)
+        run: uv run --with matplotlib python selftest.py
+
+      - name: Дымовой прогон CLI (схемы из кода и .gvn)
+        run: |
+          uv run --with matplotlib python gostpadi.py examples/main.c -o /tmp/main.png
+          uv run --with matplotlib python gostpadi.py examples/hello.gvn -o /tmp/hello.png
+          uv run --with matplotlib python gostpadi.py --template > /tmp/new.gvn
+          uv run --with matplotlib python gostpadi.py /tmp/new.gvn -o /tmp/new.png
+          test -s /tmp/main.png -a -s /tmp/hello.png -a -s /tmp/new.png
+
+  release:
+    name: release
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Собрать картинки всех примеров
+        run: |
+          mkdir -p release
+          uv run --with matplotlib python gostpadi.py examples/main.c -o release/example-from-c.png --scale=2
+          for f in examples/*.gvn; do
+            uv run --with matplotlib python gostpadi.py "$f" -o "release/$(basename "$f" .gvn).png" --scale=2
+          done
+
+      - name: Создать релиз с картинками
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          gh release create "$tag" release/*.png \
+            --title "gostpadi $tag" \
+            --generate-notes \
+            --notes "Проверено CI: самопроверка всех вариаций и эталон геометрии — зелёные. В приложении — готовые PNG всех примеров."

@@ -1,10 +1,10 @@
 # Ветвление (как на доске): да — налево, нет — направо, слияние внизу
-вывод printf(a)
-ввод scanf("%d", &a)
-вывод printf(b)
-ввод scanf("%d", &b)
-действие c = a + b
-вывод printf(c)
-если c > 5
-    да: printf(c)
-    нет: c = 0
+output printf(a)
+input scanf("%d", &a)
+output printf(b)
+input scanf("%d", &b)
+action c = a + b
+output printf(c)
+if c > 5
+    yes: printf(c)
+    no: c = 0

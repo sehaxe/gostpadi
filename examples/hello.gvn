@@ -1,5 +1,4 @@
 #gostpadi 1
-@labels en
 # Идеальный минимум: одна строка = один блок, отступ = ветка.
 input scanf("%d", &x)
 if scanf != 1

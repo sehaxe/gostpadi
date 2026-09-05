@@ -1,9 +1,9 @@
 input scanf("%d", &a)
 if a < 100000 || ...
-    да -> end: printf("Ошибка..."); return 1
-    нет:
+    yes -> end: printf("Ошибка..."); return 1
+    no:
 action b = a / 100000 + ...
 action c = a % 10 + ...
 if b == c
-    да: printf("БИЛЕТ СЧАСТЛИВЫЙ...")
-    нет: printf("Вам не повезло...")
+    yes: printf("БИЛЕТ СЧАСТЛИВЫЙ...")
+    no: printf("Вам не повезло...")

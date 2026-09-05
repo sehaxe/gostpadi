@@ -1,10 +1,10 @@
 input scanf("%d", &status)
 if status <= 0 || ...
-    да -> end: printf("ТЫ НЕ ПРОЙ..."); return 1
-    нет:
+    yes -> end: printf("ТЫ НЕ ПРОЙ..."); return 1
+    no:
 if switch (status)
     1: printf("Декабрь...")
     2: printf("Март...")
     3: printf("Июнь...")
     4: printf("Сентябрь...")
-    иначе: printf("Как ты...")
+    default: printf("Как ты...")

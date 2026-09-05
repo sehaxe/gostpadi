@@ -14,19 +14,20 @@
     - если схема не влезает в лист А4, она сама режется на части:
       часть кончается кружком «А», следующая начинается кружком «А».
 
-Формат .gvn (построчный, как markdown; «начало» и «конец» добавляются сами;
-первой строкой можно написать «#gostpadi 1» — это просто подпись формата):
+Формат .gvn (построчный, ключевые слова только английские; «Start»
+и «End» добавляются сами; первой строкой можно написать «#gostpadi 1» —
+это просто подпись формата):
 
-    # комментарий (и // тоже)
-    ввод scanf("%d", &a)              # параллелограмм (ввод)
-    b = a / 100000 + ...              # прямоугольник (действие)
-    вывод printf("Гипотенуза...")     # параллелограмм (вывод)
-    если a < 100000 || a > 999999     # ромб; ветки ниже с отступом (4 пробела)
-        да -> конец: printf("Ош..."); return 1   # ветка уходит в конец
-        нет:                          # пустая ветка = подпись на линии
-    если switch (status)              # веток может быть сколько угодно
-        1: printf("Декабрь...")       # подпись станет «status = 1»
-        иначе: printf("Как ты сюда попал...")    # подпись станет «default»
+    # comment (# and // both work)
+    input scanf("%d", &a)             # parallelogram (input)
+    b = a / 100000 + ...              # rectangle (action); keyword optional
+    output printf("Result...")        # parallelogram (output)
+    if a < 100000 || a > 999999       # diamond; branches indented 4 spaces
+        yes -> end: printf("Err..."); return 1  # branch goes straight to End
+        no:                           # empty branch = label on the line
+    switch (status)                   # any number of cases
+        1: printf("December...")      # label becomes «status = 1»
+        default: printf("Impossible...")         # default branch
 
 Строка без ключевого слова тоже действие; printf/scanf и т.п. сами
 становятся вводом-выводом. Условие ромба автоматически оформляется
@@ -133,12 +134,6 @@ class Style:
 
 DEFAULT = Style()
 
-# языки подписей и ключевых слов
-LANGS = {
-    "ru": {"start": "начало", "end": "конец", "yes": "да", "no": "нет"},
-    "en": {"start": "Start", "end": "End", "yes": "yes", "no": "no"},
-}
-
 # алиасы для обратной совместимости (старый код и самотест)
 FONT = DEFAULT.font
 CHAR_W = DEFAULT.char_w
@@ -168,7 +163,6 @@ LETTERS = DEFAULT.letters
 IO_RE = DEFAULT.io_re()
 TEMPLATE = """\
 #gostpadi 1
-@labels en
 # One line = one block; top to bottom. Five words: input, output, if, yes/no.
 input scanf("%d", &a)
 c = a * 2
@@ -291,28 +285,20 @@ def parse(text, st=DEFAULT):
         if body.strip():
             lines.append((lineno, body))
 
-    nodes = [Node("term", "начало", lang="ru")]
-    labels_lang = "ru"  # язык надписей «начало»/«конец»: @labels en|ru
+    nodes = [Node("term", "Start")]
     i = 0
     while i < len(lines):
         lineno, line = lines[i]
         stripped = line.strip()
         indent = len(line) - len(line.lstrip())
         if stripped.startswith("@") and indent == 0:
-            m = re.match(r"^@labels\s+(ru|en)\s*$", stripped)
-            if not m:
-                raise ParseError(f"строка {lineno}: неизвестная директива "
-                                 f"«{stripped}» (есть только @labels ru|en)")
-            labels_lang = m.group(1)
-            i += 1
-            continue
+            raise ParseError(f"line {lineno}: unknown directive «{stripped}»")
         if indent >= 4:
-            raise ParseError(f"строка {lineno}: отступ допустим только внутри "
-                             "«если»/«if»")
-        if re.match(r"^(если|if|switch)[ (]", stripped):
-            # ромб: «если усл.» / «if усл.» / голый «switch (...)»
+            raise ParseError(f"line {lineno}: indentation is only allowed "
+                             "inside an «if» block")
+        if re.match(r"^(if|switch)[ (]", stripped):
+            # decision: «if cond» or bare «switch (...)»
             kw = stripped.split("(", 1)[0].split(" ", 1)[0]
-            lang = "ru" if kw == "если" else "en"
             rest = stripped[len(kw):].strip()
             cond = wrap(("switch " + rest) if kw == "switch"
                         else cond_text(rest), st.cond_chars)
@@ -323,7 +309,7 @@ def parse(text, st=DEFAULT):
                 if len(jline) - len(jline.lstrip()) < 4:
                     break
                 jline = jline.strip()
-                m1 = re.match(r"(.+?)\s*->\s*(?:конец|end)\s*:\s*(.*)$", jline)
+                m1 = re.match(r"(.+?)\s*->\s*end\s*:\s*(.*)$", jline)
                 m2 = re.match(r"(.+?)\s*:\s*(.*)$", jline)
                 if m1:
                     label, to_end, btext = m1.group(1).strip(), True, m1.group(2).strip()
@@ -331,46 +317,39 @@ def parse(text, st=DEFAULT):
                     label, to_end, btext = m2.group(1).strip(), False, m2.group(2).strip()
                 else:
                     raise ParseError(
-                        f"строка {lines[j][0]}: ветка должна быть вида "
-                        "«метка: текст»")
-                for suf in ("-> конец", "-> end"):
-                    if btext.endswith(suf):
-                        btext = btext[:-len(suf)].rstrip()
-                        to_end = True
+                        f"line {lines[j][0]}: branch must look like "
+                        "«label: text»")
+                if btext.endswith("-> end"):
+                    btext = btext[:-len("-> end")].rstrip()
+                    to_end = True
                 branches.append((label, split_statements(btext), to_end, None))
                 j += 1
             if not branches:
-                raise ParseError(f"строка {lineno}: у «{kw}» нет ни одной ветки")
+                raise ParseError(f"line {lineno}: «{kw}» has no branches")
             if len(branches) == 1 and branches[0][1] and not cond.startswith("switch"):
-                # у одиночного условия второй путь рисуем сами
-                branches.append(("no" if labels_lang == "en" else "нет",
-                                 [], False, None))
-            nd = Node("if", cond, branches, lang=lang)
+                # одиночное условие: второй выход «no» рисуем сами
+                branches.append(("no", [], False, None))
+            nd = Node("if", cond, branches)
             m = re.match(r"switch\s*\(([^)]*)\)", cond)
             nd.switch_var = m.group(1).strip() if m else None
             nodes.append(nd)
             i = j
             continue
-        m_in = re.match(r"^(?:ввод|input)\s+(?![=+\-*/])", stripped)
-        m_out = re.match(r"^(?:вывод|output)\s+(?![=+\-*/])", stripped)
-        m_act = re.match(r"^(?:действие|action)\s+", stripped)
+        m_in = re.match(r"^input\s+(?![=+\-*/])", stripped)
+        m_out = re.match(r"^output\s+(?![=+\-*/])", stripped)
+        m_act = re.match(r"^action\s+", stripped)
         if m_in:
-            nodes.append(Node("io", wrap(stripped[m_in.end():].strip()), lang="ru"))
+            nodes.append(Node("io", wrap(stripped[m_in.end():].strip())))
         elif m_out:
             nodes.append(Node("io", wrap(stripped[m_out.end():].strip())))
         elif m_act:
-            nodes.append(Node("act", wrap(stripped[m_act.end():].strip()),
-                              lang="ru"))
+            nodes.append(Node("act", wrap(stripped[m_act.end():].strip())))
         elif IO_RE.match(stripped):
             nodes.append(Node("io", wrap(stripped)))
         else:
             nodes.append(Node("act", wrap(stripped)))
         i += 1
-    nodes.append(Node("term", "", lang=labels_lang))
-    st, fin = (("Start", "End") if labels_lang == "en"
-               else ("начало", "конец"))
-    nodes[0].text = st
-    nodes[-1].text = fin
+    nodes.append(Node("term", "End"))
     return nodes
 
 
@@ -797,13 +776,12 @@ def _suffixed(path, n):
 
 
 def render(text, out_png, page="a4", scale=None, font=FONT, edge_lw=None,
-           dpi=DPI, c_labels="ru"):
+           dpi=DPI):
     """Текст схемы -> PNG (или несколько: результат.png, результат-2.png...).
 
     page="a4" — вписать в А4 (по умолчанию), page="auto" — канвас по
     контенту без ужимания, scale — принудительный масштаб, font — кегль,
-    edge_lw — единая толщина линий, dpi — плотность пикселей, c_labels —
-    язык подписей при чтении кода C (да/нет или yes/no).
+    edge_lw — единая толщина линий, dpi — плотность пикселей.
     Возвращает список записанных файлов.
     """
     nodes = parse(text)
@@ -1057,7 +1035,7 @@ def _abbrev_stmt(s):
     return f'{m.group(1)}("{cut}...")'
 
 
-def c_to_gvn(src, labels="ru"):
+def c_to_gvn(src):
     """Код C -> текст схемы .gvn. if/else, switch/case/default, return;
     объявления переменных выбрасываются, ветка с return уходит в «конец».
     Циклы (while/for/do) пока не поддерживаются."""
@@ -1068,10 +1046,8 @@ def c_to_gvn(src, labels="ru"):
     s = _CSrc(src)
     s.i = m.end()
     items = [it for it in _c_parse_block(s) if it[0] != "skip"]
-    tag_yes, tag_no = ("yes", "no") if labels == "en" else ("да", "нет")
+    tag_yes, tag_no = "yes", "no"
     lines = ["#gostpadi 1"]
-    if labels == "en":
-        lines.append("@labels en")
 
     def emit(items):
         for it in items:
@@ -1112,8 +1088,7 @@ def render_file(in_path, out_png, **kw):
         print(f"нет файла: {e}", file=sys.stderr)
         return 1, []
     try:
-        text = (c_to_gvn(src, labels=kw.pop("c_labels", "ru"))
-                if in_path.endswith(".c") else src)
+        text = c_to_gvn(src) if in_path.endswith(".c") else src
         files = render(text, out_png, **kw)
     except ParseError as e:
         print(f"ошибка: {e}", file=sys.stderr)
@@ -1178,7 +1153,6 @@ def main(argv):
     args, output = [], None
     page, scale, font, lw, dpi = "a4", None, FONT, None, DPI
     show, template, gvn = False, False, False
-    c_labels = "ru"
     i = 1
     while i < len(argv):
         a = argv[i]
@@ -1202,8 +1176,6 @@ def main(argv):
             scale = float(a[8:])
         elif a.startswith("--font="):
             font = float(a[7:])
-        elif a.startswith("--labels="):
-            c_labels = a[9:]
         elif a.startswith("--lw="):
             lw = float(a[5:])
         elif a.startswith("--dpi="):
@@ -1245,10 +1217,7 @@ def main(argv):
         print("-o можно указывать только с одним файлом схемы", file=sys.stderr)
         return 2
 
-    kw = dict(page=page, scale=scale, font=font, edge_lw=lw, dpi=dpi,
-              c_labels=c_labels)
-    if c_labels != "en":
-        kw["c_labels"] = c_labels
+    kw = dict(page=page, scale=scale, font=font, edge_lw=lw, dpi=dpi)
     code = 0
     for inp in args:
         out = output if (output and len(args) == 1) else _default_output(inp)
