@@ -46,8 +46,13 @@
     import gostpadi
     gostpadi.render(open("схема.gvn").read(), "результат.png")
 
-Зависимости: matplotlib.
+Зависимости: matplotlib (ставятся сами при запуске через uv).
 """
+
+# /// script
+# requires-python = ">=3.9"
+# dependencies = ["matplotlib"]
+# ///
 import base64
 import os
 import re

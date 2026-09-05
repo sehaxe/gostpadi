@@ -1,3 +1,4 @@
+output printf("Введите катеты...")
 input scanf("%f %f", &a, &b)
 if scanf != 2 || a <= 0 || b <= 0
     да -> end: printf("Ошибка..."); return 1
