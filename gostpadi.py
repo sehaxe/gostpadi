@@ -53,6 +53,7 @@
 # requires-python = ">=3.9"
 # dependencies = ["matplotlib"]
 # ///
+from dataclasses import dataclass
 import base64
 import os
 import re
@@ -65,36 +66,106 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle, FancyArrowPatch, FancyBboxPatch, Polygon, Rectangle
 
-# ---------- геометрия и типографика ----------
+# ---------- настройки оформления ----------
 
-__version__ = "1.0"
-CHAR_W = 7.3       # ширина символа моношрифта при кегле FONT (DejaVu: 0.61em)
-FONT = 12.0        # базовый кегль
-PAD_X = 18.0       # поля текста внутри фигуры (суммарно по горизонтали)
-PAD_Y = 14.0       # поля текста внутри фигуры (суммарно по вертикали)
-PITCH = 18.0       # межстрочный шаг внутри фигуры
-VGAP = 30.0        # вертикальный зазор между блоками
-HGAP = 30.0        # зазор между ромбом и первой колонкой веток
-COLGAP = 14.0      # зазор между соседними колонками веток
-RAIL = 14.0        # отступ рельсы подачи от края колонки
-RAIL_STEP = 18.0   # шаг между рельсами «-> конец» разных веток
-JOG = 6.0          # короткий уступ при обходе плитки линией слияния
-MGAP = 24.0        # расстояние от плиток до линии слияния
-TERM_ROUND = 14.0  # скругление углов начала/конца
-CONN_R = 15.0      # радиус кружка-соединителя
-MAX_CHARS = 30     # перенос строк в блоках
-COND_CHARS = 22    # перенос строк в условии ромба
-A4_W = 468.0       # рабочая ширина A4 вертикально (165 мм в пунктах)
-A4_H = 700.0       # рабочая высота A4 вертикально (247 мм в пунктах)
-PAGE_PAD = 14.0    # поля страницы
-ASPECT = 0.36      # отношение высоты ромба к ширине
-SPLIT_SCALE = 0.70  # режем на части, лишь бы не мельче этого масштаба
-DPI = 200
-EDGE_LW = 1.4
-FONT_STACK = ["DejaVu Sans Mono", "Noto Sans CJK TC", "DejaVu Sans"]
-LETTERS = "АБВГДЕЖЗИКЛМНОПРСТУФХЦЧШЭЮЯ"  # буквы кружков-соединителей
-IO_RE = re.compile(r"^(printf|scanf|scan|print|println|puts|putchar|echo|"
-                   r"getchar|gets|cin|cout|read|write)\b")
+__version__ = "1.1"
+
+
+@dataclass(frozen=True)
+class Style:
+    """Все параметры оформления схем в одном месте.
+
+    Меняйте поля — геометрия подстроится сама; жёстко зашитых чисел
+    в раскладке нет.
+    """
+
+    # шрифт и текст
+    font: float = 12.0            # базовый кегль, пункты
+    font_stack: tuple = ("DejaVu Sans Mono", "Noto Sans CJK TC", "DejaVu Sans")
+    char_w: float = 7.3           # ширина символа моношрифта (0.61em)
+    pad_x: float = 18.0           # запас ширины текста в фигуре
+    pad_y: float = 14.0
+    pitch: float = 18.0           # межстрочный шаг текста
+    max_chars: int = 30           # перенос длинных строк в блоках
+    cond_chars: int = 22          # перенос строк в условии ромба
+
+    # зазоры
+    vgap: float = 30.0            # зазор между блоками основной линии
+    hgap: float = 30.0            # ромб -> первая колонка веток
+    colgap: float = 14.0          # зазор между соседними колонками
+    mgap: float = 24.0            # плитки -> линия слияния
+    jog: float = 6.0              # уступ линии при обходе плитки
+
+    # рельсы «-> конец»
+    rail: float = 14.0            # отступ рельсы от края колонки
+    rail_step: float = 18.0       # шаг между рельсами разных веток
+
+    # фигуры и лист
+    term_round: float = 14.0      # скругление углов начала/конца
+    conn_r: float = 15.0          # радиус кружка-соединителя
+    conn_from_end: float = 22.0   # кружок у «конца»: отступ от края
+    conn_step: float = 10.0       # шаг между кружками у «конца»
+    aspect: float = 0.36          # отношение высоты ромба к ширине
+    a4_w: float = 468.0           # рабочая ширина А4 вертикально (пункты)
+    a4_h: float = 700.0           # рабочая высота А4 вертикально
+    page_pad: float = 14.0        # поля страницы
+    split_scale: float = 0.70     # режем на листы, лишь бы не мельче этого
+
+    # качество и подписи
+    dpi: int = 200                # плотность пикселей
+    edge_lw: float = 1.4          # толщина всех линий и рамок (единая)
+    label_dx: float = 8.0         # отступ подписи кейса от линии спуска
+    label_dy: float = 12.0        # подпись: над плиткой / под углом ромба
+    label_axis_dx: float = 9.0    # подпись среднего кейса: от осевой линии
+    vertex_label_dy: float = 11.0 # подпись ветки «если»: над выходом ромба
+    label_gap: float = 16.0       # шаг между подписями пустых веток
+    letters: str = "АБВГДЕЖЗИКЛМНОПРСТУФХЦЧШЭЮЯ"  # кружки-соединители
+
+    # ввод-вывод: вызовы, начинающиеся с этих слов, становятся
+    # параллелограммами ввода-вывода
+    io_words: tuple = ("printf", "scanf", "scan", "print", "println", "puts",
+                       "putchar", "echo", "getchar", "gets", "cin", "cout",
+                       "read", "write")
+
+    def io_re(self):
+        return re.compile(r"^(?:" + "|".join(self.io_words) + r")\b")
+
+
+DEFAULT = Style()
+
+# языки подписей и ключевых слов
+LANGS = {
+    "ru": {"start": "начало", "end": "конец", "yes": "да", "no": "нет"},
+    "en": {"start": "Start", "end": "End", "yes": "yes", "no": "no"},
+}
+
+# алиасы для обратной совместимости (старый код и самотест)
+FONT = DEFAULT.font
+CHAR_W = DEFAULT.char_w
+PAD_X = DEFAULT.pad_x
+PAD_Y = DEFAULT.pad_y
+PITCH = DEFAULT.pitch
+VGAP = DEFAULT.vgap
+HGAP = DEFAULT.hgap
+COLGAP = DEFAULT.colgap
+RAIL = DEFAULT.rail
+RAIL_STEP = DEFAULT.rail_step
+JOG = DEFAULT.jog
+MGAP = DEFAULT.mgap
+TERM_ROUND = DEFAULT.term_round
+CONN_R = DEFAULT.conn_r
+MAX_CHARS = DEFAULT.max_chars
+COND_CHARS = DEFAULT.cond_chars
+A4_W = DEFAULT.a4_w
+A4_H = DEFAULT.a4_h
+PAGE_PAD = DEFAULT.page_pad
+ASPECT = DEFAULT.aspect
+SPLIT_SCALE = DEFAULT.split_scale
+DPI = DEFAULT.dpi
+EDGE_LW = DEFAULT.edge_lw
+FONT_STACK = list(DEFAULT.font_stack)
+LETTERS = DEFAULT.letters
+IO_RE = DEFAULT.io_re()
 TEMPLATE = """\
 #gostpadi 1
 @labels en
@@ -211,7 +282,7 @@ def strip_comments(line):
     return "".join(out)
 
 
-def parse(text):
+def parse(text, st=DEFAULT):
     """Текст схемы (.gvn) -> список узлов (начало/конец добавляются сами)."""
     text = text.lstrip("\ufeff")  # BOM
     lines = []
@@ -244,7 +315,7 @@ def parse(text):
             lang = "ru" if kw == "если" else "en"
             rest = stripped[len(kw):].strip()
             cond = wrap(("switch " + rest) if kw == "switch"
-                        else cond_text(rest), COND_CHARS)
+                        else cond_text(rest), st.cond_chars)
             branches = []
             j = i + 1
             while j < len(lines):
@@ -305,33 +376,33 @@ def parse(text):
 
 # ---------- измерение: один тип фигур — один размер ----------
 
-def measure(kind, text):
+def measure(st, kind, text):
     """(ширина, высота) фигуры по её тексту."""
     ls = text.split("\n")
-    tw = max(len(l) for l in ls) * CHAR_W
+    tw = max(len(l) for l in ls) * st.char_w
     n = len(ls)
     if kind == "term":
-        return max(tw + PAD_X + 22.0, 78.0), max(n * PITCH * 0.8 + 16.0, 36.0)
+        return max(tw + st.pad_x + 22.0, 78.0), max(n * st.pitch * 0.8 + 16.0, 36.0)
     if kind == "conn":
-        return 2 * CONN_R, 2 * CONN_R
+        return 2 * st.conn_r, 2 * st.conn_r
     if kind == "if":
         # текст помещается между рёбрами ромба на глубине текста,
         # пропорции остаются ромбом (~1 : 2.8), а не приплюснутым
-        # четырёхугольником; закрутная формула: h = ASPECT * w
-        ymax = (n - 1) * PITCH / 2 + 6.0
+        # четырёхугольником; закрутная формула: h = st.aspect * w
+        ymax = (n - 1) * st.pitch / 2 + 6.0
         need = tw + 26.0
-        w = max(need + ymax * 2.0 / ASPECT, 150.0)
-        h = max(ASPECT * w, 2 * ymax + 28.0, 44.0)
+        w = max(need + ymax * 2.0 / st.aspect, 150.0)
+        h = max(st.aspect * w, 2 * ymax + 28.0, 44.0)
         return w, h
-    return tw + PAD_X + 6.0, n * PITCH + PAD_Y - 4.0
+    return tw + st.pad_x + 6.0, n * st.pitch + st.pad_y - 4.0
 
 
-def normalize(nodes):
+def normalize(nodes, st=DEFAULT):
     """Максимальный размер на каждый тип фигур — единый для всей схемы."""
     sizes = {}
 
     def put(kind, t):
-        w, h = measure(kind, t)
+        w, h = measure(st, kind, t)
         if kind in sizes:
             sizes[kind] = (max(sizes[kind][0], w), max(sizes[kind][1], h))
         else:
@@ -352,7 +423,7 @@ def normalize(nodes):
 
 # ---------- раскладка ----------
 
-def layout(nodes, sizes):
+def layout(nodes, sizes, st=DEFAULT):
     """Схема -> (фигуры, рёбра, подписи, границы, якоря узлов) в пунктах.
 
     Фигура: dict(kind, cx, cy, w, h, lines).
@@ -388,7 +459,7 @@ def layout(nodes, sizes):
 
     def simple(nd, prev, cursor):
         w, h = sizes[nd.kind]
-        cy = cursor + VGAP + h / 2
+        cy = cursor + st.vgap + h / 2
         sh = add(nd.kind, 0.0, cy, nd.text)
         if prev is not None:
             edge([prev, (0.0, cy - h / 2)])
@@ -409,21 +480,21 @@ def layout(nodes, sizes):
             if idx == last and pend:
                 for p in pend:
                     ex = stop_l if p["rail"] < 0 else stop_r
-                    edge([(p["x"], p["y"]), (p["x"], p["cb"] + JOG),
-                          (p["rail"], p["cb"] + JOG), (p["rail"], sh["cy"]),
+                    edge([(p["x"], p["y"]), (p["x"], p["cb"] + st.jog),
+                          (p["rail"], p["cb"] + st.jog), (p["rail"], sh["cy"]),
                           (ex, sh["cy"])])
             if idx == last and getattr(nd, "inbound", None):
                 # кружки-соединители «-> конец» с предыдущих листов
                 for i, letter in enumerate(nd.inbound):
-                    cx_ = (sh["cx"] - sh["w"] / 2 - 2 * CONN_R - 22
-                           - i * (2 * CONN_R + 10))
+                    cx_ = (sh["cx"] - sh["w"] / 2 - 2 * st.conn_r - 22
+                           - i * (2 * st.conn_r + 10))
                     add("conn", cx_, sh["cy"], letter)
-                    edge([(cx_ + CONN_R, sh["cy"]), (stop_l, sh["cy"])])
+                    edge([(cx_ + st.conn_r, sh["cy"]), (stop_l, sh["cy"])])
             continue
 
         # ---------- ромб «если» ----------
         dw, dh = sizes["if"]
-        cy = cursor + VGAP + dh / 2
+        cy = cursor + st.vgap + dh / 2
         dmd = add("if", 0.0, cy, nd.text)
         if prev is not None:
             edge([prev, (0.0, cy - dh / 2)])
@@ -436,7 +507,7 @@ def layout(nodes, sizes):
         comb = bool(svar) and n >= 2
         # у switch линия раздачи кейсов лежит прямо на нижнем углу ромба
         # (проходит через его вершину), и все кейсы висят на ней
-        top0 = cy + dh / 2 + VGAP
+        top0 = cy + dh / 2 + st.vgap
         y_b = cy + dh / 2
 
         def fmt(label):
@@ -450,8 +521,8 @@ def layout(nodes, sizes):
             return label
 
         empty = [fmt(b[0]) for b in nd.branches if not b[1]]
-        pitch = colw + COLGAP
-        base = dw / 2 + HGAP + colw / 2
+        pitch = colw + st.colgap
+        base = dw / 2 + st.hgap + colw / 2
         # колонка на каждую ветку: средняя — прямо по оси от нижней вершины,
         # соседние — от боковых вершин, дальние — ещё одной линией под 90°
         plan = []  # (ветка, side, tier, tx)
@@ -482,7 +553,7 @@ def layout(nodes, sizes):
             for si, s in enumerate(stmts):
                 k = "io" if IO_RE.match(s) else "act"
                 w_k, h_k = sizes[k]
-                top = top0 if prev_bottom is None else prev_bottom + VGAP
+                top = top0 if prev_bottom is None else prev_bottom + st.vgap
                 bottom = top + h_k
                 sh_k = add(k, tx, top + h_k / 2, s)
                 if si == 0:
@@ -512,7 +583,7 @@ def layout(nodes, sizes):
         merge_y = cy + dh / 2
         for b, _s, _t, _x in plan:
             if not exits[id(b)]["to_end"]:
-                merge_y = max(merge_y, exits[id(b)]["y"] + MGAP)
+                merge_y = max(merge_y, exits[id(b)]["y"] + st.mgap)
         col_bottom = max([e["y"] for e in exits.values()] or [cy + dh / 2])
         for b, side, _t, _x in plan:
             e = exits[id(b)]
@@ -520,17 +591,17 @@ def layout(nodes, sizes):
                 # рельса снаружи колонок всех ромбов схемы: спуск до «конца»
                 # не касается ни плиток, ни линий подачи, ни линий слияния
                 sgn, key = (-1.0, "L") if side == "L" else (1.0, "R")
-                rail = sgn * (base + max_tier * pitch + colw / 2 + RAIL +
-                              pend_count[key] * RAIL_STEP)
+                rail = sgn * (base + max_tier * pitch + colw / 2 + st.rail +
+                              pend_count[key] * st.rail_step)
                 pend_count[key] += 1
                 if link:
                     # «конец» на другом листе: ветка кончается кружком-
                     # соединителем с той же буквой у «конца»
-                    ccy = col_bottom + JOG + VGAP + CONN_R
+                    ccy = col_bottom + st.jog + st.vgap + st.conn_r
                     add("conn", rail, ccy, link)
-                    edge([(e["x"], e["y"]), (e["x"], col_bottom + JOG),
-                          (rail, col_bottom + JOG), (rail, ccy - CONN_R)])
-                    link_bottom = ccy + CONN_R
+                    edge([(e["x"], e["y"]), (e["x"], col_bottom + st.jog),
+                          (rail, col_bottom + st.jog), (rail, ccy - st.conn_r)])
+                    link_bottom = ccy + st.conn_r
                 else:
                     pend.append(dict(x=e["x"], y=e["y"], cb=col_bottom,
                                      rail=rail))
@@ -573,14 +644,14 @@ def layout(nodes, sizes):
         else:
             xs += [l["x"] - half, l["x"] + half]
         ys.append(l["y"])
-    pad = PAGE_PAD
+    pad = st.page_pad
     minx, miny = min(xs) - pad, min(ys) - pad
     return (shapes, edges, labels,
             (minx, miny, max(xs) - minx + 2 * pad, max(ys) - miny + 2 * pad),
             anchors)
 
 
-def split_scheme(nodes, sizes):
+def split_scheme(nodes, sizes, st=DEFAULT):
     """Не влезает в А4 -> части, соединённые кружками «А», «Б», ..."""
     items = list(nodes)
     parts = []
@@ -589,11 +660,11 @@ def split_scheme(nodes, sizes):
         result = layout(items, sizes)
         bounds = result[3]
         # лёгкое уменьшение лучше разрыва схемы: режем только если без
-        # разбиения масштаб упал бы ниже SPLIT_SCALE
-        if bounds[3] <= (A4_H - 2 * PAGE_PAD) / SPLIT_SCALE or len(items) < 6:
+        # разбиения масштаб упал бы ниже st.split_scale
+        if bounds[3] <= (st.a4_h - 2 * st.page_pad) / st.split_scale or len(items) < 6:
             parts.append(items)
             break
-        limit = (A4_H - 2 * PAGE_PAD) * 0.88
+        limit = (st.a4_h - 2 * st.page_pad) * 0.88
         cut = None
         for j, a in enumerate(result[4]):
             if j < 2 or j > len(items) - 3:
@@ -607,7 +678,7 @@ def split_scheme(nodes, sizes):
         if cut is None:
             parts.append(items)
             break
-        letter = LETTERS[li % len(LETTERS)]
+        letter = st.letters[li % len(st.letters)]
         li += 1
         parts.append(items[:cut] + [Node("conn", letter)])
         items = [Node("conn", letter)] + items[cut:]
@@ -620,7 +691,7 @@ def split_scheme(nodes, sizes):
                 continue
             for bi, br in enumerate(nd.branches):
                 if br[2] and not br[3]:
-                    letter = LETTERS[li % len(LETTERS)]
+                    letter = st.letters[li % len(st.letters)]
                     li += 1
                     nd.branches[bi] = (br[0], br[1], True, letter)
                     links.append(letter)
@@ -630,7 +701,7 @@ def split_scheme(nodes, sizes):
 
 # ---------- рендер ----------
 
-def _draw_shape(ax, sh, s, ox, oy, fs, lw=EDGE_LW):
+def _draw_shape(ax, sh, s, ox, oy, fs, lw, st):
     X = lambda x: (x - ox) * s
     Y = lambda y: (y - oy) * s
     cx, cy = X(sh["cx"]), Y(sh["cy"])
@@ -639,7 +710,7 @@ def _draw_shape(ax, sh, s, ox, oy, fs, lw=EDGE_LW):
     if k == "term":
         ax.add_patch(FancyBboxPatch(
             (cx - w / 2, cy - h / 2), w, h,
-            boxstyle=f"round,pad=0,rounding_size={min(TERM_ROUND * s, h / 2.4)}",
+            boxstyle=f"round,pad=0,rounding_size={min(st.term_round * s, h / 2.4)}",
             fill=True, facecolor="white", edgecolor="black", lw=lw))
     elif k == "io":
         skew = h * 0.3
@@ -660,11 +731,11 @@ def _draw_shape(ax, sh, s, ox, oy, fs, lw=EDGE_LW):
                                facecolor="white", edgecolor="black", lw=lw))
     if k == "conn":
         ax.text(cx, cy, "\n".join(sh["lines"]), ha="center", va="center",
-                fontsize=fs * 0.95, family=FONT_STACK, weight="bold",
+                fontsize=fs * 0.95, family=st.font_stack, weight="bold",
                 color="black")
     else:
         ax.text(cx, cy, "\n".join(sh["lines"]), ha="center", va="center",
-                fontsize=fs, family=FONT_STACK, linespacing=1.25,
+                fontsize=fs, family=st.font_stack, linespacing=1.25,
                 color="black")
 
 
@@ -684,12 +755,14 @@ def _draw_edge(ax, e, s, ox, oy, lw=EDGE_LW):
 
 
 def draw(shapes, edges, labels, bounds, out_png, page="a4", scale=None,
-         font=FONT, edge_lw=None, dpi=DPI):
+         font=None, edge_lw=None, dpi=None, st=DEFAULT):
     """Раскладка -> PNG. page="a4" вписывает в А4 вертикально (165x247 мм),
     page="auto" оставляет канвас по размеру контента (масштаб 1:1),
     scale задаёт масштаб вручную, font — базовый кегль, edge_lw — толщина
     всех линий и рамок (по умолчанию единая EDGE_LW), dpi — плотность."""
-    lw = edge_lw if edge_lw else EDGE_LW
+    lw = edge_lw if edge_lw else st.edge_lw
+    font = font if font is not None else st.font
+    dpi = dpi if dpi else st.dpi
     dpi = dpi or DPI
     minx, miny, W, H = bounds
     if scale is not None:
@@ -707,7 +780,7 @@ def draw(shapes, edges, labels, bounds, out_png, page="a4", scale=None,
     ax.axis("off")
     fs = font * s
     for sh in shapes:
-        _draw_shape(ax, sh, s, minx, miny, fs, lw)
+        _draw_shape(ax, sh, s, minx, miny, fs, lw, st)
     for e in edges:
         _draw_edge(ax, e, s, minx, miny, lw)
     for l in labels:

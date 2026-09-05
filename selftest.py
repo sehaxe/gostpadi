@@ -264,6 +264,22 @@ def main():
         except Exception as e:  # noqa: BLE001
             check(f"examples/{name}", False, f"{type(e).__name__}: {e}")
 
+    print("== эталон геометрии ==")
+    base_path = os.path.join(HERE, "tests", "baseline.json")
+    if os.path.exists(base_path):
+        import json
+        import snapshot as sn
+        base = json.load(open(base_path, encoding="utf-8"))
+        for name, text in CASES.items():
+            cur = json.dumps(sn.snapshot_layout(name, text),
+                             ensure_ascii=False, sort_keys=True)
+            check(f"эталон: {name}",
+                  cur == json.dumps(base.get(name), ensure_ascii=False,
+                                    sort_keys=True),
+                  "геометрия изменилась — обновите snapshot.py")
+    else:
+        print("  baseline.json нет — запустите snapshot.py")
+
     print("== CLI ==")
     with tempfile.TemporaryDirectory() as td:
         gvn = os.path.join(td, "ok.gvn")
