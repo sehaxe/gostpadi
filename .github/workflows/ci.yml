@@ -22,18 +22,17 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
-      - name: Установить зависимости
-        run: uv python install ${{ matrix.python }} && uv venv --python ${{ matrix.python }}
-
       - name: Самопроверка (все вариации + инварианты ГОСТ + эталон геометрии)
-        run: uv run --with matplotlib python selftest.py
+        run: uv run --python ${{ matrix.python }} --with matplotlib
+             python selftest.py
 
       - name: Дымовой прогон CLI (схемы из кода и .gvn)
         run: |
-          uv run --with matplotlib python gostpadi.py examples/main.c -o /tmp/main.png
-          uv run --with matplotlib python gostpadi.py examples/hello.gvn -o /tmp/hello.png
-          uv run --with matplotlib python gostpadi.py --template > /tmp/new.gvn
-          uv run --with matplotlib python gostpadi.py /tmp/new.gvn -o /tmp/new.png
+          set -e
+          uv run --python ${{ matrix.python }} --with matplotlib python gostpadi.py examples/main.c -o /tmp/main.png
+          uv run --python ${{ matrix.python }} --with matplotlib python gostpadi.py examples/hello.gvn -o /tmp/hello.png
+          uv run --python ${{ matrix.python }} --with matplotlib python gostpadi.py --template > /tmp/new.gvn
+          uv run --python ${{ matrix.python }} --with matplotlib python gostpadi.py /tmp/new.gvn -o /tmp/new.png
           test -s /tmp/main.png -a -s /tmp/hello.png -a -s /tmp/new.png
 
   release:
