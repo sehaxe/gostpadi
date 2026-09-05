@@ -1,4 +1,4 @@
-# Линейная схема (как на доске): блоки в столбик, стрелки вниз
+# Linear scheme: one block per line, arrows down
 action a = 5
 action b = 17
 action c = a + b

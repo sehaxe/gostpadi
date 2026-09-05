@@ -1,5 +1,5 @@
-# switch (как на доске): колонка на каждую ветку — слева, по центру, справа;
-# подписи веток стоят над первой плиткой своей колонки
+# Switch: one column per case, all cases hang
+# on the horizontal line from the bottom corner
 input scanf("%d", &a)
 if switch (a)
     1: printf(y); break

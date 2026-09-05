@@ -1,4 +1,4 @@
-# Ветвление (как на доске): да — налево, нет — направо, слияние внизу
+# Branch: yes goes left, no goes right, both merge below
 output printf(a)
 input scanf("%d", &a)
 output printf(b)

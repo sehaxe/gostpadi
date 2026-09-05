@@ -30,7 +30,7 @@ CASES = {
                             "    да -> end: printf(\"err\"); return 1\n"
                             "b = 1"),
     "switch 2": 'if switch (x)\n    1: printf("один")\n    2: printf("два")',
-    "switch 3 (доска)": ("if switch (a)\n"
+    "switch 3": ("if switch (a)\n"
                          "    1: printf(y); break\n"
                          "    2: printf(z); break\n"
                          "    иначе: a = 10; break"),
