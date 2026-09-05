@@ -482,13 +482,13 @@ def layout(nodes, sizes):
                 sh_k = add(k, tx, top + h_k / 2, s)
                 if si == 0:
                     if side == "axis":
-                        # средний кейс: вертикаль входит прямо в плитку
-                        edge([vb, (tx, top)])
+                        # средний кейс: спуск прямо из нижнего угла ромба
+                        edge([(tx, y_b), (tx, top)])
                         labels.append(dict(x=9.0, y=cy + dh / 2 + 12.0,
                                            text=fmt(label), ha="left"))
                     elif comb:
-                        # кейс висит на вертикали: гребёнка и спуск
-                        edge([(0.0, y_b), (tx, y_b), (tx, top)])
+                        # кейс висит на горизонтальной линии угла
+                        edge([(tx, y_b), (tx, top)])
                         labels.append(dict(
                             x=tx + (-8.0 if side == "L" else 8.0),
                             y=top - 12.0, text=fmt(label),
