@@ -434,10 +434,10 @@ def layout(nodes, sizes):
         nonempty = [b for b in nd.branches if b[1]]
         n = len(nonempty)
         comb = bool(svar) and n >= 2
-        # у switch гребёнка раздачи кейсов заметно ниже ромба — линия не
-        # задевает его нижний угол, а подписи не налипают на линии
-        top0 = cy + dh / 2 + (46.0 if comb else VGAP)
-        y_b = cy + dh / 2 + (26.0 if comb else 12.0)
+        # у switch линия раздачи кейсов лежит прямо на нижнем углу ромба
+        # (проходит через его вершину), и все кейсы висят на ней
+        top0 = cy + dh / 2 + VGAP
+        y_b = cy + dh / 2
 
         def fmt(label):
             """Ветка switch: «1» -> «status = 1», «иначе» -> «default»."""
