@@ -57,6 +57,7 @@
 # ///
 from dataclasses import dataclass
 import base64
+import math
 import os
 import re
 import shutil
@@ -91,22 +92,23 @@ class Style:
     max_chars: int = 30           # перенос длинных строк в блоках
     cond_chars: int = 22          # перенос строк в условии ромба
 
-    # зазоры
-    vgap: float = 30.0            # зазор между блоками основной линии
-    hgap: float = 30.0            # ромб -> первая колонка веток
-    colgap: float = 14.0          # зазор между соседними колонками
-    mgap: float = 24.0            # плитки -> линия слияния
-    jog: float = 6.0              # уступ линии при обходе плитки
+    # зазоры: все кратны модульной сетке 5 мм (st.grid) — ГОСТ 19.701-90
+    grid: float = 14.17            # модульная сетка, пункты (5 мм)
+    vgap: float = 42.5            # зазор между блоками основной линии (15 мм)
+    hgap: float = 28.3            # ромб -> первая колонка веток (10 мм)
+    colgap: float = 14.2          # зазор между соседними колонками (5 мм)
+    mgap: float = 28.3            # плитки -> линия слияния (10 мм)
+    jog: float = 14.2             # уступ линии при обходе плитки (5 мм)
 
     # рельсы «-> конец»
-    rail: float = 14.0            # отступ рельсы от края колонки
-    rail_step: float = 18.0       # шаг между рельсами разных веток
+    rail: float = 14.2            # отступ рельсы от края колонки (5 мм)
+    rail_step: float = 28.3       # шаг между рельсами разных веток (10 мм)
 
     # фигуры и лист
     term_round: float = 14.0      # скругление углов начала/конца
-    conn_r: float = 15.0          # радиус кружка-соединителя
-    conn_from_end: float = 22.0   # кружок у «конца»: отступ от края
-    conn_step: float = 10.0       # шаг между кружками у «конца»
+    conn_r: float = 14.2          # радиус кружка-соединителя (диаметр 10 мм)
+    conn_from_end: float = 28.3   # кружок у «конца»: отступ от края (10 мм)
+    conn_step: float = 14.2       # шаг между кружками у «конца» (5 мм)
     aspect: float = 0.5           # высота ромба к ширине: ГОСТ 19.701-90, b = 2a
     a4_w: float = 468.0           # рабочая ширина А4 вертикально (пункты)
     a4_h: float = 700.0           # рабочая высота А4 вертикально
@@ -115,7 +117,7 @@ class Style:
 
     # качество и подписи
     dpi: int = 200                # плотность пикселей
-    edge_lw: float = 1.4          # толщина всех линий и рамок (единая)
+    edge_lw: float = 1.0          # толщина всех линий и рамок (тонкая, 0.35 мм)
     label_dx: float = 8.0         # отступ подписи кейса от линии спуска
     label_dy: float = 12.0        # подпись: над плиткой / под углом ромба
     label_axis_dx: float = 9.0    # подпись среднего кейса: от осевой линии
@@ -375,26 +377,27 @@ def parse(text, st=DEFAULT, labels="en"):
 # ---------- измерение: один тип фигур — один размер ----------
 
 def measure(st, kind, text):
-    """(ширина, высота) фигуры по её тексту; пропорции ГОСТ 19.701-90:
-    ширина символа b = 2a (высота)."""
+    """(ширина, высота) фигуры по её тексту; размеры кратны модульной
+    сетке 5 мм, пропорции b = 2a — ГОСТ 19.701-90."""
+    g = st.grid
+    up = lambda v: int(math.ceil(v / g - 1e-9)) * g
     ls = text.split("\n")
     tw = max(len(l) for l in ls) * st.char_w
     n = len(ls)
     if kind == "term":
-        h = max(n * st.pitch * 0.8 + 16.0, 36.0)
-        return max(tw + st.pad_x + 22.0, 78.0, 2.0 * h), h
+        h = max(2 * g, up(n * st.pitch * 0.8 + 16.0))
+        return max(up(tw + st.pad_x + 22.0), 2.0 * h), h
     if kind == "conn":
         return 2 * st.conn_r, 2 * st.conn_r
     if kind == "if":
         # текст помещается между рёбрами ромба на глубине текста;
-        # закрутная формула: h = st.aspect * w, aspect = 0.5 (b = 2a)
+        # пропорции h = st.aspect * w, aspect = 0.5 (b = 2a)
         ymax = (n - 1) * st.pitch / 2 + 6.0
         need = tw + 26.0
-        w = max(need + ymax * 2.0 / st.aspect, 150.0)
-        h = max(st.aspect * w, 2 * ymax + 28.0, 44.0)
-        return w, h
-    h = n * st.pitch + st.pad_y - 4.0
-    return max(tw + st.pad_x + 6.0, 2.0 * h), h
+        w = up(max(need + ymax * 2.0 / st.aspect, 11 * g))
+        return w, w * st.aspect
+    h = max(2 * g, up(n * st.pitch + st.pad_y - 4.0))
+    return max(up(tw + st.pad_x + 6.0), 2.0 * h), h
 
 
 def normalize(nodes, st=DEFAULT):
@@ -432,6 +435,8 @@ def layout(nodes, sizes, st=DEFAULT):
     Якоря:  главная фигура каждого узла (для разбивки схемы на части).
     """
     shapes, edges, labels, anchors = [], [], [], []
+    g = st.grid
+    up = lambda v: int(math.ceil(v / g - 1e-9)) * g
     colw = max(sizes["act"][0], sizes["io"][0])
     pend = []  # ветки «-> конец»: ждут блока «конец»
     pend_count = {"L": 0, "R": 0}  # рельсы «-> конец» гнездятся снаружи
@@ -487,8 +492,8 @@ def layout(nodes, sizes, st=DEFAULT):
                 # кружки-соединители «-> конец» с предыдущих листов:
                 # (буква, номер листа, откуда пришла ветка)
                 for i, (letter, src) in enumerate(nd.inbound):
-                    cx_ = (sh["cx"] - sh["w"] / 2 - 2 * st.conn_r - 22
-                           - i * (2 * st.conn_r + 10))
+                    cx_ = (sh["cx"] - sh["w"] / 2 - 2 * st.conn_r - st.rail
+                           - i * (2 * st.conn_r + st.conn_step))
                     add("conn", cx_, sh["cy"], f"{letter}\n{src}")
                     edge([(cx_ + st.conn_r, sh["cy"]), (stop_l, sh["cy"])])
             continue
@@ -579,10 +584,11 @@ def layout(nodes, sizes, st=DEFAULT):
             e = exits[id(b)]
             if e["to_end"]:  # «-> конец» — ждём блока конца
                 # рельса снаружи колонок всех ромбов схемы: спуск до «конца»
-                # не касается ни плиток, ни линий подачи, ни линий слияния
+                # не касается ни плиток, ни линий подачи, ни линий слияния;
+                # абсцисса кратна сетке
                 sgn, key = (-1.0, "L") if side == "L" else (1.0, "R")
-                rail = sgn * (base + max_tier * pitch + colw / 2 + st.rail +
-                              pend_count[key] * st.rail_step)
+                rail = sgn * up(base + max_tier * pitch + colw / 2 + st.rail
+                                + pend_count[key] * st.rail_step)
                 pend_count[key] += 1
                 if link:
                     # «конец» на другом листе: ветка кончается кружком-
@@ -598,6 +604,7 @@ def layout(nodes, sizes, st=DEFAULT):
             else:
                 edge([(e["x"], e["y"]), (e["x"], merge_y), (0.0, merge_y)])
         # ГОСТ 19.701-90: место слияния линий потока помечается точкой
+        # (входящая линия + продолжение вниз — тоже слияние)
         n_merge = (sum(1 for e in exits.values() if not e["to_end"])
                    + len(empty))
         has_axis = any(p[1] == "axis" for p in plan)
@@ -605,13 +612,14 @@ def layout(nodes, sizes, st=DEFAULT):
         # (нет/иначе) идёт обходом справа и сливается на основной линии,
         # от нижней вершины ромба ничего не выходит
         if empty:
-            merge_y = max(merge_y, cy + dh / 2 + 18.0)
+            merge_y = max(merge_y, cy + dh / 2 + 2 * g)
         for k, lbl in enumerate(empty):
-            bx = dw / 2 + 24.0 + max_tier * pitch + colw + k * 20.0
+            bx = (up(dw / 2 + 2 * g + max_tier * pitch + colw)
+                  + k * 2 * g)
             edge([vr, (bx, cy), (bx, merge_y), (0.0, merge_y)])
             labels.append(dict(x=dw / 2 + 10.0, y=cy - 11.0, text=lbl,
                                ha="left"))
-        if n_merge >= 2 and edges:
+        if n_merge and edges:
             edges[-1].setdefault("dots", []).append((0.0, merge_y))
         if not n_merge and not empty and not has_axis:
             edge([vb, (0.0, merge_y)], arrow=False)
