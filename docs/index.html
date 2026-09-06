@@ -17,18 +17,21 @@
          gap: 14px; padding: 14px; max-width: 1500px; margin: 0 auto; }
   @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
   .pane { background: #fff; border: 1px solid #ddd; border-radius: 10px;
-          padding: 12px; }
-  .pane h2 { margin: 0 0 8px; font-size: 14px; text-transform: uppercase;
+          padding: 12px; align-self: start; }
+  .pane h2 { margin: 0; font-size: 14px; text-transform: uppercase;
              letter-spacing: .6px; color: #666; }
   textarea { width: 100%; height: 38vh; min-height: 220px; resize: vertical;
              font: 13px/1.45 ui-monospace, Consolas, monospace;
              border: 1px solid #ccc; border-radius: 8px; padding: 10px;
              white-space: pre; overflow-wrap: normal; overflow-x: auto; }
+  textarea:focus, .drop:focus-visible { outline: 2px solid #2a7a2a;
+                                        outline-offset: 1px; }
   .drop { border: 2px dashed #b9b9a8; border-radius: 10px; padding: 22px 14px;
           text-align: center; color: #666; font-size: 14px; cursor: pointer;
           transition: background .15s, border-color .15s; }
   .drop:hover { background: #fafaf2; }
   .drop.over { border-color: #2a7a2a; background: #eef7ee; color: #2a5a2a; }
+  .drop code { background: #f0f0e8; border-radius: 4px; padding: 0 4px; }
   .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
          margin: 10px 0; }
   button, .btn { background: #16161a; color: #fff; border: 0; border-radius: 8px;
@@ -36,6 +39,14 @@
                  text-decoration: none; display: inline-block; }
   button:disabled { opacity: .5; cursor: default; }
   .btn { background: #eee; color: #16161a; border: 1px solid #ccc; }
+  .btn:hover { background: #e2e2da; }
+  button:not(:disabled):hover { background: #2c2c33; }
+  .ex { background: #eee; color: #16161a; border: 1px solid #ccc;
+        border-radius: 999px; padding: 4px 12px; font-size: 13px; }
+  .ex:hover { background: #e2e2da; }
+  kbd { font: 11px ui-monospace, Consolas, monospace; border: 1px solid #ccc;
+        border-bottom-width: 2px; border-radius: 4px; padding: 0 4px;
+        background: #f6f6f0; color: #555; }
   #status { display: flex; align-items: center; gap: 10px;
             padding: 9px 12px; border-radius: 8px; background: #eee;
             font-size: 13px; min-height: 20px; }
@@ -45,18 +56,32 @@
              animation: spin 0.8s linear infinite; flex: none; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .stage { color: #555; }
-  #images img { max-width: 100%; border: 1px solid #ddd; border-radius: 8px;
-                margin: 8px 0; background: #fff; }
   #preview-wrap { position: relative; min-height: 300px; }
-  #preview-wrap.processing #images { opacity: .45; }
+  .preview-head { display: flex; align-items: center; gap: 10px;
+                  margin-bottom: 8px; }
+  #busy { display: flex; align-items: center; gap: 8px; font-size: 13px;
+          color: #555; }
+  #busy .spinner { width: 13px; height: 13px; border-width: 2px; }
+  #images img { max-width: 100%; border: 1px solid #ddd; border-radius: 8px;
+                margin: 8px 0; background: #fff; cursor: zoom-in; }
+  #images img:hover { border-color: #bbb; }
   .sheet { margin-bottom: 14px; }
   .sheet h3 { margin: 6px 0; font-size: 13px; color: #444; }
-  .hint { font-size: 12px; color: #777; margin-top: 6px; }
+  .sheet .row { margin: 4px 0 10px; }
+  .hint { font-size: 12px; color: #777; margin: 6px 0 0; }
+  .empty { text-align: center; padding: 40px 10px; }
+  .empty p { color: #888; font-size: 14px; margin: 14px 0 0; }
   .skeleton { height: 120px; border-radius: 8px; margin: 8px 0;
               background: linear-gradient(100deg, #eee 40%, #f7f7f0 50%, #eee 60%);
               background-size: 200% 100%; animation: shimmer 1.2s infinite; }
   @keyframes shimmer { to { background-position: -200% 0; } }
   .chk { font-size: 13px; display: flex; gap: 6px; align-items: center; }
+  #lightbox { position: fixed; inset: 0; background: rgba(10, 10, 12, .82);
+              display: flex; align-items: center; justify-content: center;
+              padding: 20px; cursor: zoom-out; z-index: 10; }
+  #lightbox[hidden] { display: none; }
+  #lightbox img { max-width: 100%; max-height: 100%; background: #fff;
+                  border-radius: 8px; }
 </style>
 </head>
 <body>
@@ -71,35 +96,47 @@
     <div class="drop" id="drop">
       <b>Перетащи сюда файл</b> <code>.c</code> или <code>.gvn</code><br>
       или нажми, чтобы выбрать
+      <span id="dropname"></span>
       <input type="file" id="file" accept=".c,.gvn,.txt" hidden>
     </div>
     <div class="row">
       <label class="chk"><input type="checkbox" id="ru"> надписи по-русски
         (начало/конец, да/нет)</label>
     </div>
-    <textarea id="code" spellcheck="false"></textarea>
+    <textarea id="code" spellcheck="false"
+      aria-label="код на C или текст схемы .gvn"></textarea>
     <div class="row">
       <button id="render" disabled>Схема →</button>
-      <a class="btn" id="dlpng" download="scheme.png" hidden>Скачать PNG</a>
-      <a class="btn" id="dlsvg" download="scheme.svg" hidden>Скачать SVG</a>
+      <span class="hint">перерисовывается сама; <kbd>Ctrl</kbd>+<kbd>Enter</kbd>
+        — сразу</span>
     </div>
     <div id="status"><span class="spinner"></span><span class="stage">
       Загружаю Python (Pyodide)… первый раз ~20 секунд, потом из кеша.</span></div>
     <p class="hint">Расширение файла определяет тип: <code>.c</code> — код,
-<code>.gvn</code> — готовая схема. Править текст можно прямо здесь —
-кнопка «Схема →» перерисует.</p>
+<code>.gvn</code> — готовая схема. Правь текст прямо здесь — схема
+перерисуется. Нажми на схему, чтобы рассмотреть её целиком.</p>
   </section>
   <section class="pane" id="preview-wrap">
-    <h2>Схема</h2>
+    <div class="preview-head">
+      <h2>Схема</h2>
+      <span id="busy" hidden><span class="spinner"></span> рисую…</span>
+    </div>
     <div id="images"></div>
+    <div id="placeholder" class="empty">
+      <div class="skeleton" style="width:70%"></div>
+      <div class="skeleton" style="width:90%"></div>
+      <div class="skeleton" style="width:55%"></div>
+      <p>Схема появится здесь, как только движок догрузится.</p>
+    </div>
   </section>
 </main>
+<div id="lightbox" hidden><img alt="схема крупно"></div>
 
 <script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
 <script>
 "use strict";
 
-const EXAMPLE = `#include <stdio.h>
+const EXAMPLE_C = `#include <stdio.h>
 
 int main(void) {
     int month;
@@ -120,12 +157,32 @@ int main(void) {
     return 0;
 }`;
 
+const EXAMPLE_GVN = [
+  'output printf("Введите катеты...")',
+  'input scanf("%f %f", &a, &b)',
+  'if scanf != 2 || a <= 0 || b <= 0',
+  '    yes -> end: printf("Ошибка..."); return 1',
+  '    no:',
+  'output printf("Гипотенуза...")',
+  'output printf("Площадь...")',
+  'action c = sqrt(a*a + b*b)',
+  'output printf("c = %f\\n", c)',
+].join("\n") + "\n";
+
+const EXAMPLES = { c: EXAMPLE_C, gvn: EXAMPLE_GVN };
+
 const SRC_URL =
   "https://raw.githubusercontent.com/sehaxe/gostpadi/main/gostpadi.py";
 
 const $ = id => document.getElementById(id);
 let pyodide = null, engineReady = false, initPromise = null;
 let renderTimer = null;
+let fileStem = "scheme";
+
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
+};
 
 function status(html, isErr) {
   const el = $("status");
@@ -135,6 +192,11 @@ function status(html, isErr) {
 
 function spinner(text) {
   status(`<span class="spinner"></span><span class="stage">${text}</span>`);
+}
+
+function setBusy(on) {
+  $("busy").hidden = !on;
+  $("render").disabled = on || !engineReady;
 }
 
 async function init() {
@@ -158,7 +220,7 @@ async function init() {
     pyodide.runPython("import sys; sys.path.insert(0, '/')");
     pyodide.runPython("import gostpadi");
     engineReady = true;
-    $("render").disabled = false;
+    setBusy(false);
     status("Готово: перетащи файл или нажми «Схема →»");
     if ($("code").value.trim()) renderNow();
   })();
@@ -170,21 +232,22 @@ async function renderNow() {
   const text = $("code").value;
   const labels = $("ru").checked ? "ru" : "en";
   spinner("Рисую схему…");
-  $("preview-wrap").classList.add("processing");
-  $("render").disabled = true;
+  setBusy(true);
+  const t0 = performance.now();
   try {
     pyodide.globals.set("code_text", text);
     pyodide.globals.set("labels", labels);
+    pyodide.globals.set("stem", fileStem);
     const sheets = JSON.parse(pyodide.runPython(`
-import json, base64, os
+import json, base64, os, re
 import gostpadi
 
 # если это код C — сначала переводим в текст схемы
 src = code_text
-if "#include" in src or "int main" in src:
-    src = gostpadi.c_to_gvn(src)
+if "#include" in src or re.search(r"\\bint\\s+main\\s*\\(", src):
+    src = gostpadi.c_to_gvn(src, labels=labels)
 
-stem = "/tmp/scheme"
+stem = "/tmp/" + stem
 pngs = gostpadi.render(src, stem + ".png", labels=labels)
 svgs = gostpadi.render(src, stem + ".svg", labels=labels)
 out = []
@@ -200,14 +263,18 @@ json.dumps(out)
     const box = $("images");
     box.innerHTML = "";
     for (const [i, sh] of sheets.entries()) {
+      const sheet = document.createElement("div");
+      sheet.className = "sheet";
       const h = document.createElement("h3");
       h.textContent = sheets.length > 1 ? `лист ${i + 1}` : "схема";
-      box.appendChild(h);
+      sheet.appendChild(h);
       const img = document.createElement("img");
       img.src = "data:image/png;base64," + sh.png;
       img.alt = sh.name;
-      box.appendChild(img);
+      img.title = "нажми, чтобы увеличить";
+      sheet.appendChild(img);
       const row = document.createElement("div");
+      row.className = "row";
       const a1 = document.createElement("a");
       a1.href = "data:image/png;base64," + sh.png;
       a1.download = sh.name + ".png";
@@ -219,14 +286,17 @@ json.dumps(out)
       a2.textContent = "Скачать SVG";
       a2.className = "btn";
       row.append(a1, a2);
-      box.appendChild(row);
+      sheet.appendChild(row);
+      box.appendChild(sheet);
     }
-    status(`Готово: листов ${sheets.length}`);
+    $("placeholder").hidden = true;
+    const sec = ((performance.now() - t0) / 1000).toFixed(1).replace(".", ",");
+    status(`Готово: листов ${sheets.length} · ${sec} с`);
   } catch (e) {
     const msg = (e && e.message) ? e.message : String(e);
     status("Ошибка: " + msg, true);
   } finally {
-    $("render").disabled = false;
+    setBusy(false);
   }
 }
 
@@ -237,10 +307,43 @@ function queueRender() {
   }, 400);
 }
 
-$("render").addEventListener("click", () => { if (engineReady) renderNow(); });
-$("ru").addEventListener("change", () => { if (engineReady) renderNow(); });
+function setCode(text, stem) {
+  $("code").value = text;
+  if (stem) fileStem = stem;
+  store.set("gostpadi.code", text);
+  if (engineReady) renderNow(); else init();
+}
 
-$("code").addEventListener("input", queueRender);
+function loadFile(f) {
+  fileStem = f.name.replace(/\.[^.]+$/, "").replace(/[^\wа-яё.-]+/gi, "_")
+              || "scheme";
+  $("dropname").textContent = ` · выбран: ${f.name}`;
+  f.text().then(t => setCode(t, fileStem));
+}
+
+$("render").addEventListener("click", () => { if (engineReady) renderNow(); });
+$("ru").addEventListener("change", () => {
+  store.set("gostpadi.ru", $("ru").checked ? "1" : "");
+  if (engineReady) renderNow();
+});
+
+$("code").addEventListener("input", () => {
+  store.set("gostpadi.code", $("code").value);
+  queueRender();
+});
+$("code").addEventListener("keydown", e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+    e.preventDefault();
+    if (engineReady) renderNow();
+  }
+});
+
+for (const b of document.querySelectorAll(".ex")) {
+  b.addEventListener("click", () => {
+    $("dropname").textContent = "";
+    setCode(EXAMPLES[b.dataset.ex], "scheme");
+  });
+}
 
 const drop = $("drop");
 const fileInput = $("file");
@@ -251,23 +354,28 @@ drop.addEventListener("drop", e => {
   e.preventDefault();
   drop.classList.remove("over");
   const f = e.dataTransfer.files[0];
-  if (!f) return;
-  f.text().then(t => {
-    $("code").value = t;
-    fileInput.value = "";
-    if (engineReady) renderNow(); else init();
-  });
+  if (f) loadFile(f);
 });
 fileInput.addEventListener("change", e => {
   const f = e.target.files[0];
-  if (!f) return;
-  f.text().then(t => {
-    $("code").value = t;
-    if (engineReady) renderNow(); else init();
-  });
+  if (f) loadFile(f);
+  fileInput.value = "";
 });
 
-$("code").value = EXAMPLE;
+const lightbox = $("lightbox");
+$("images").addEventListener("click", e => {
+  if (e.target.tagName !== "IMG") return;
+  lightbox.querySelector("img").src = e.target.src;
+  lightbox.hidden = false;
+});
+lightbox.addEventListener("click", () => { lightbox.hidden = true; });
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && !lightbox.hidden) lightbox.hidden = true;
+});
+
+const savedCode = store.get("gostpadi.code");
+$("code").value = (savedCode && savedCode.trim()) ? savedCode : EXAMPLE_C;
+$("ru").checked = store.get("gostpadi.ru") === "1";
 init();
 </script>
 </body>
