@@ -10,7 +10,7 @@ readme = "README.md"
 license = { file = "LICENSE" }
 authors = [{ name = "sehaxe" }]
 requires-python = ">=3.9"
-dependencies = ["matplotlib>=3.5"]
+dependencies = ["matplotlib>=3.5", "pycparser>=2.20"]
 keywords = ["flowchart", "diagram", "c", "code2chart",
             "visualization", "svg"]
 classifiers = [

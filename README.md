@@ -21,7 +21,8 @@
 pip install gostpadi
 ```
 
-Нужен только [matplotlib](https://matplotlib.org/), он поставится сам.
+Нужны [matplotlib](https://matplotlib.org/) и [pycparser](https://github.com/eliben/pycparser) —
+поставятся сами.
 
 Вариант без установки — [uv](https://docs.astral.sh/uv/) запускает утилиту
 прямо с GitHub:
@@ -94,7 +95,7 @@ gostpadi.render(text, "x2.png", page="auto", scale=2.0)      # опции
 ## Проверка
 
 ```bash
-uv run --with matplotlib python selftest.py
+uv run --with matplotlib --with pycparser python selftest.py
 ```
 
 Прогоняет все вариации и сверяет геометрию с эталоном

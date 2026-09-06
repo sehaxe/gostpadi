@@ -48,12 +48,12 @@
     import gostpadi
     gostpadi.render(open("схема.gvn").read(), "результат.png")
 
-Зависимости: matplotlib (ставятся сами при запуске через uv).
+Зависимости: matplotlib и pycparser (ставятся сами при запуске через uv).
 """
 
 # /// script
 # requires-python = ">=3.9"
-# dependencies = ["matplotlib"]
+# dependencies = ["matplotlib", "pycparser>=2.20"]
 # ///
 from dataclasses import dataclass
 import base64
@@ -806,9 +806,6 @@ def render(text, out_png, page="a4", scale=None, font=FONT, edge_lw=None,
 
 # ---------- C -> .gvn ----------
 
-C_TYPE_RE = re.compile(r"^(?:(?:unsigned|signed|long|short)\s+)*"
-                       r"(?:int|float|double|char)\b")
-
 
 def _strip_c_comments(src):
     """Убирает /* */ и // из кода C, строковые литералы не трогает."""
@@ -844,170 +841,92 @@ def _strip_c_comments(src):
     return "".join(out)
 
 
-def _clean_stmt(text):
-    """Инструкция: схлопнуть пробелы; объявление без '=' выбросить,
-    объявление с инициализацией превратить в присваивание."""
-    text = re.sub(r"\s+", " ", text).strip().rstrip(";").strip()
-    m = re.match(r"(?:(?:unsigned|signed|long|short)\s+)*"
-                 r"(?:int|float|double|char)\s+(.*)$", text)
-    if m:
-        rest = m.group(1).strip()
-        return rest if "=" in rest else None
-    return text or None
+def _c_prepare(src):
+    """pycparser ест чистый C: снять комментарии и строки препроцессора."""
+    src = _strip_c_comments(src)
+    return "\n".join(l for l in src.splitlines()
+                     if not l.lstrip().startswith("#"))
 
 
-class _CSrc:
-    def __init__(self, s):
-        self.s, self.i, self.n = s, 0, len(s)
-
-    def skip_ws(self):
-        while self.i < self.n and self.s[self.i] in " \t\r\n":
-            self.i += 1
-
-    def at_word(self, w):
-        if not self.s.startswith(w, self.i):
-            return False
-        after = self.s[self.i + len(w):self.i + len(w) + 1]
-        return after not in "abcdefghijklmnopqrstuvwxyz" \
-                             "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+_C_PREC = {"||": 1, "&&": 2, "|": 3, "^": 4, "&": 5, "==": 6, "!=": 6,
+           "<": 7, ">": 7, "<=": 7, ">=": 7, "<<": 8, ">>": 8,
+           "+": 9, "-": 9, "*": 10, "/": 10, "%": 10}
 
 
-def _cs_at_word(s, w):
-    if not s.s.startswith(w, s.i):
-        return False
-    after = s.s[s.i + len(w):s.i + len(w) + 1]
-    return after not in "abcdefghijklmnopqrstuvwxyz" \
-                        "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+def _c_text(node, prec=0):
+    """Узел AST -> однострочный текст C. Генератор pycparser окружает
+    скобками каждый операнд цепочек ||/&&, поэтому для бинарных операций
+    скобки расставляем сами (минимально, лево-ассоциативно)."""
+    from pycparser import c_ast as A, c_generator
+    if isinstance(node, A.BinaryOp):
+        p = _C_PREC[node.op]
+        s = f"{_c_text(node.left, p)} {node.op} {_c_text(node.right, p + 1)}"
+        return f"({s})" if p < prec else s
+    t = re.sub(r"\s+", " ", c_generator.CGenerator().visit(node))
+    return t.strip().rstrip(";").strip()
 
 
-def _cs_read_paren(s):
-    """От '(' до парной ')': возвращает текст внутри."""
-    s.skip_ws()
-    if s.s[s.i] != "(":
-        raise ParseError("в коде ожидалась (")
-    depth, i = 0, s.i
-    while i < s.n:
-        c = s.s[i]
-        if c == '"':
-            i += 1
-            while i < s.n and s.s[i] != '"':
-                i += 2 if s.s[i] == "\\" else 1
-            i += 1
-            continue
-        if c == "(":
-            depth += 1
-        elif c == ")":
-            depth -= 1
-            if depth == 0:
-                inner = s.s[s.i + 1:i]
-                s.i = i + 1
-                return inner
-        i += 1
-    raise ParseError("в коде не закрыта скобка (")
+def _c_items(node):
+    """Блок -> items: («stmt», текст) | («if», …) | («switch», …)."""
+    out = []
+    for st in (node.block_items if node is not None else None) or []:
+        out.extend(_c_stmt(st))
+    return out
 
 
-def _cs_read_simple(s):
-    """Инструкция до ';' на нулевой глубине (строки и скобки внутри)."""
-    depth, i, start = 0, s.i, s.i
-    while i < s.n:
-        c = s.s[i]
-        if c == '"':
-            i += 1
-            while i < s.n and s.s[i] != '"':
-                i += 2 if s.s[i] == "\\" else 1
-            i += 1
-            continue
-        if c in "([":
-            depth += 1
-        elif c in ")]":
-            depth -= 1
-        elif c == ";" and depth == 0:
-            break
-        i += 1
-    text = s.s[start:i]
-    s.i = i + 1 if i < s.n else i
-    return text
+def _c_block(node):
+    """Тело ветки (блок в скобках или одна инструкция без них) -> items."""
+    from pycparser import c_ast as A
+    if node is None:
+        return []
+    if isinstance(node, A.Compound):
+        return _c_items(node)
+    return _c_stmt(node)
+
+
+def _c_stmt(node):
+    from pycparser import c_ast as A
+    if isinstance(node, A.Decl):
+        # объявление без значения не рисуем; с ним — как присваивание
+        return ([] if node.init is None
+                else [("stmt", f"{node.name} = {_c_text(node.init)}")])
+    if isinstance(node, A.If):
+        if isinstance(node.iffalse, A.If):
+            raise ParseError("в коде else if — .gvn не вкладывает ромбы "
+                             "друг в друга, разбей условие")
+        return [("if", _shorten_calls(_c_text(node.cond)),
+                 _c_block(node.iftrue), _c_block(node.iffalse))]
+    if isinstance(node, A.Switch):
+        cases = []
+        for st in node.stmt.block_items or []:
+            if isinstance(st, A.Case):
+                exprs = st.expr if isinstance(st.expr, list) else [st.expr]
+                labels = [_c_text(e) for e in exprs]
+            elif isinstance(st, A.Default):
+                labels = ["default"]
+            else:
+                if not cases:
+                    raise ParseError(
+                        "в switch инструкция до первой метки case")
+                cases[-1][1].extend(_c_stmt(st))
+                continue
+            body = [x for s in st.stmts for x in _c_stmt(s)]
+            for lab in labels[:-1]:  # case 1: case 2: … — метки подряд
+                cases.append((lab, []))
+            cases.append((labels[-1], body))
+        return [("switch", _c_text(node.cond), cases)]
+    if isinstance(node, (A.While, A.For, A.DoWhile)):
+        raise ParseError("в коде цикл (while/for/do) — циклы пока не "
+                         "поддерживаются")
+    if isinstance(node, A.Goto):
+        raise ParseError("в коде goto — не поддерживается")
+    text = _c_text(node)
+    return [] if not text else [("stmt", text)]
 
 
 def _shorten_calls(cond):
     """scanf("%d", &x) -> scanf(...) — форматные строки в условиях не нужны."""
     return re.sub(r'(\w+)\("[^"]*"[^)]*\)', r"\1(...)", cond)
-
-
-def _c_statement(s):
-    """Инструкция C -> ("stmt", текст) | ("if", условие, да, нет) |
-    ("switch", выражение, [(метка, инструкции)])."""
-    s.skip_ws()
-    if s.at_word("if"):
-        s.i += 2
-        cond = _shorten_calls(_cs_read_paren(s))
-        s.skip_ws()
-        if s.s[s.i] == "{":
-            s.i += 1
-            yes = _c_parse_block(s)
-        else:
-            yes = [_c_statement(s)]
-        s.skip_ws()
-        no = []
-        if s.at_word("else"):
-            s.i += 4
-            s.skip_ws()
-            if s.at_word("if"):
-                raise ParseError("в коде else if — .gvn не вкладывает ромбы "
-                                 "друг в друга, разбей условие")
-            if s.s[s.i] == "{":
-                s.i += 1
-                no = _c_parse_block(s)
-            else:
-                no = [_c_statement(s)]
-        return ("if", cond, yes, no)
-    if s.at_word("switch"):
-        s.i += 6
-        expr = _cs_read_paren(s)
-        s.skip_ws()
-        if s.s[s.i] != "{":
-            raise ParseError("в коде после switch (...) ожидалась {")
-        s.i += 1
-        cases = []
-        while True:
-            s.skip_ws()
-            if s.i >= s.n:
-                raise ParseError("в коде не закрыта скобка {")
-            if s.s[s.i] == "}":
-                s.i += 1
-                return ("switch", expr, cases)
-            m = re.match(r"case\s+([^:]+):", s.s[s.i:])
-            if m:
-                s.i += m.end()
-                cases.append((m.group(1).strip(), []))
-                continue
-            if re.match(r"default\s*:", s.s[s.i:]):
-                s.i += s.s[s.i:].find(":") + 1
-                cases.append(("default", []))
-                continue
-            if not cases:
-                raise ParseError("в switch инструкция до первой метки case")
-            cases[-1][1].append(_c_statement(s))
-    if s.at_word("while") or s.at_word("for") or s.at_word("do"):
-        raise ParseError("в коде цикл (while/for/do) — циклы пока не "
-                         "поддерживаются")
-    if s.at_word("goto"):
-        raise ParseError("в коде goto — не поддерживается")
-    text = _clean_stmt(_cs_read_simple(s))
-    return ("skip",) if text is None else ("stmt", text)
-
-
-def _c_parse_block(s):
-    """Инструкции до закрывающей } (её съедает) или до конца ввода."""
-    items = []
-    while True:
-        s.skip_ws()
-        if s.i >= s.n:
-            raise ParseError("в коде не закрыта скобка {")
-        if s.s[s.i] == "}":
-            s.i += 1
-            return items
-        items.append(_c_statement(s))
 
 
 def _branch_text(items):
@@ -1044,16 +963,20 @@ def _abbrev_stmt(s):
 
 
 def c_to_gvn(src, labels="en"):
-    """Код C -> текст схемы .gvn. if/else, switch/case/default, return;
-    объявления переменных выбрасываются, ветка с return уходит в «конец».
+    """Код C -> текст схемы .gvn; грамматику C99 читает pycparser.
+    if/else, switch/case/default, return; объявления переменных
+    выбрасываются, ветка с return уходит в «конец».
     Циклы (while/for/do) пока не поддерживаются."""
-    src = _strip_c_comments(src)
-    m = re.search(r"\bmain\s*\([^)]*\)\s*\{", src)
-    if not m:
+    from pycparser import c_ast, c_parser
+    try:
+        ast = c_parser.CParser().parse(_c_prepare(src))
+    except c_parser.ParseError as e:  # 2.x: из plyparser, 3.x: отсюда же
+        raise ParseError(f"в коде C: {e}") from None
+    main = next((ext for ext in ast.ext
+                 if isinstance(ext, c_ast.FuncDef)
+                 and ext.decl.name == "main"), None)
+    if main is None:
         raise ParseError("в коде не найден int main(...)")
-    s = _CSrc(src)
-    s.i = m.end()
-    items = [it for it in _c_parse_block(s) if it[0] != "skip"]
     tag_yes, tag_no = LANGS[labels]["yes"], LANGS[labels]["no"]
     lines = ["#gostpadi 1"]
 
@@ -1083,7 +1006,7 @@ def c_to_gvn(src, labels="en"):
                                      + (" -> end: " if _has_return(case_items)
                                         else ": ") + text)
 
-    emit(items)
+    emit(_c_items(main.body))
     return "\n".join(lines) + "\n"
 
 

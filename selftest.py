@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Самопроверка gostpadi: рендер всех вариаций + инварианты раскладки.
 
-Запуск:  uv run --with matplotlib python selftest.py
+Запуск:  uv run --with matplotlib --with pycparser python selftest.py
 Печатает OK/FAIL по каждой проверке; код возврата 0, если всё прошло.
 """
 import glob
