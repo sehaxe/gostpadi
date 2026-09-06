@@ -106,10 +106,23 @@ def check_layout(name, text):
             if not starts_ok:
                 check(f"{tag}: линия выходит из фигуры", False, f"{pts[0]}")
                 good = False
-            if e.get("arrow", True) and not any(
-                    on_border(pts[-1], sh) for sh in shapes):
-                check(f"{tag}: стрелка входит в фигуру", False, f"{pts[-1]}")
-                good = False
+            if e.get("arrow", True):
+                ok = any(on_border(pts[-1], sh) for sh in shapes)
+                # стрелка может кончаться и в точке слияния (ГОСТ):
+                # либо помеченной точкой, либо на другой линии потока
+                if not ok and e.get("dots"):
+                    ok = True
+                if not ok:
+                    for e2 in edges:
+                        if e2 is e:
+                            continue
+                        if near_line(pts[-1], e2["points"]):
+                            ok = True
+                            break
+                if not ok:
+                    check(f"{tag}: стрелка входит в фигуру", False,
+                          f"{pts[-1]}")
+                    good = False
 
         # 4. подписи в границах листа
         for l in labels:

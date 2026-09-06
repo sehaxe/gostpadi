@@ -107,7 +107,7 @@ class Style:
     conn_r: float = 15.0          # радиус кружка-соединителя
     conn_from_end: float = 22.0   # кружок у «конца»: отступ от края
     conn_step: float = 10.0       # шаг между кружками у «конца»
-    aspect: float = 0.36          # отношение высоты ромба к ширине
+    aspect: float = 0.5           # высота ромба к ширине: ГОСТ 19.701-90, b = 2a
     a4_w: float = 468.0           # рабочая ширина А4 вертикально (пункты)
     a4_h: float = 700.0           # рабочая высота А4 вертикально
     page_pad: float = 14.0        # поля страницы
@@ -375,24 +375,26 @@ def parse(text, st=DEFAULT, labels="en"):
 # ---------- измерение: один тип фигур — один размер ----------
 
 def measure(st, kind, text):
-    """(ширина, высота) фигуры по её тексту."""
+    """(ширина, высота) фигуры по её тексту; пропорции ГОСТ 19.701-90:
+    ширина символа b = 2a (высота)."""
     ls = text.split("\n")
     tw = max(len(l) for l in ls) * st.char_w
     n = len(ls)
     if kind == "term":
-        return max(tw + st.pad_x + 22.0, 78.0), max(n * st.pitch * 0.8 + 16.0, 36.0)
+        h = max(n * st.pitch * 0.8 + 16.0, 36.0)
+        return max(tw + st.pad_x + 22.0, 78.0, 2.0 * h), h
     if kind == "conn":
         return 2 * st.conn_r, 2 * st.conn_r
     if kind == "if":
-        # текст помещается между рёбрами ромба на глубине текста,
-        # пропорции остаются ромбом (~1 : 2.8), а не приплюснутым
-        # четырёхугольником; закрутная формула: h = st.aspect * w
+        # текст помещается между рёбрами ромба на глубине текста;
+        # закрутная формула: h = st.aspect * w, aspect = 0.5 (b = 2a)
         ymax = (n - 1) * st.pitch / 2 + 6.0
         need = tw + 26.0
         w = max(need + ymax * 2.0 / st.aspect, 150.0)
         h = max(st.aspect * w, 2 * ymax + 28.0, 44.0)
         return w, h
-    return tw + st.pad_x + 6.0, n * st.pitch + st.pad_y - 4.0
+    h = n * st.pitch + st.pad_y - 4.0
+    return max(tw + st.pad_x + 6.0, 2.0 * h), h
 
 
 def normalize(nodes, st=DEFAULT):
@@ -593,10 +595,11 @@ def layout(nodes, sizes, st=DEFAULT):
                     pend.append(dict(x=e["x"], y=e["y"], cb=col_bottom,
                                      rail=rail))
             else:
-                edge([(e["x"], e["y"]), (e["x"], merge_y), (0.0, merge_y)],
-                     arrow=False)
+                edge([(e["x"], e["y"]), (e["x"], merge_y), (0.0, merge_y)])
+        # ГОСТ 19.701-90: место слияния линий потока помечается точкой
+        n_merge = (sum(1 for e in exits.values() if not e["to_end"])
+                   + len(empty))
         has_axis = any(p[1] == "axis" for p in plan)
-        has_merges = any(not e["to_end"] for e in exits.values())
         # у решения оба выхода — из боковых вершин: пустая ветка
         # (нет/иначе) идёт обходом справа и сливается на основной линии,
         # от нижней вершины ромба ничего не выходит
@@ -604,10 +607,12 @@ def layout(nodes, sizes, st=DEFAULT):
             merge_y = max(merge_y, cy + dh / 2 + 18.0)
         for k, lbl in enumerate(empty):
             bx = dw / 2 + 24.0 + max_tier * pitch + colw + k * 20.0
-            edge([vr, (bx, cy), (bx, merge_y), (0.0, merge_y)], arrow=False)
+            edge([vr, (bx, cy), (bx, merge_y), (0.0, merge_y)])
             labels.append(dict(x=dw / 2 + 10.0, y=cy - 11.0, text=lbl,
                                ha="left"))
-        if not has_merges and not empty and not has_axis:
+        if n_merge >= 2 and edges:
+            edges[-1].setdefault("dots", []).append((0.0, merge_y))
+        if not n_merge and not empty and not has_axis:
             edge([vb, (0.0, merge_y)], arrow=False)
         prev = (0.0, merge_y)
         cursor = max(merge_y, col_bottom, link_bottom)
@@ -728,17 +733,24 @@ def _draw_shape(ax, sh, s, ox, oy, fs, lw, st):
 
 def _draw_edge(ax, e, s, ox, oy, lw=EDGE_LW):
     pts = [((x - ox) * s, (y - oy) * s) for x, y in e["points"]]
-    tail = pts if not e.get("arrow", True) else pts[:-1]
+    # ГОСТ 19.701-90 / СТП БГУИР 3.12.2: поток сверху вниз и слева направо
+    # рисуют без стрелок; стрелка (развал 60°) — только вверх или вправо-влево
+    dx, dy = pts[-1][0] - pts[-2][0], pts[-1][1] - pts[-2][1]
+    head = e.get("arrow", True) and (dy < -0.01 or dx < -0.01)
+    tail = pts[:-1] if head else pts
     if len(tail) >= 2:
         xs, ys = zip(*tail)
         ax.plot(xs, ys, color="black", lw=lw, solid_capstyle="projecting",
                 solid_joinstyle="miter")
-    if e.get("arrow", True):
-        a, b = pts[-2], pts[-1]
-        ax.add_patch(FancyArrowPatch(a, b, arrowstyle="-|>",
-                                     mutation_scale=max(6.0, 14.0 * s),
-                                     color="black", lw=lw, shrinkA=0,
-                                     shrinkB=0))
+    if head:
+        ax.add_patch(FancyArrowPatch(
+            pts[-2], pts[-1],
+            arrowstyle="-|>, head_width=0.7, head_length=0.6",
+            mutation_scale=max(6.0, 12.0 * s),
+            color="black", lw=lw, shrinkA=0, shrinkB=0))
+    for dx_, dy_ in e.get("dots", []):  # точка слияния линий потока
+        ax.plot((dx_ - ox) * s, (dy_ - oy) * s, "o", color="black",
+                ms=max(2.6, 5.2 * s), zorder=3)
 
 
 def draw(shapes, edges, labels, bounds, out_png, page="a4", scale=None,
