@@ -210,6 +210,8 @@ async function init() {
     pyodide = await loadPyodide();
     spinner("Загружаю matplotlib…");
     await pyodide.loadPackage("matplotlib");
+    spinner("Загружаю pycparser…");
+    await pyodide.loadPackage("pycparser");
     spinner("Загружаю движок gostpadi…");
     // ?t= — сброс кеша: браузер не должен держать старую версию движка
     let src = null;
