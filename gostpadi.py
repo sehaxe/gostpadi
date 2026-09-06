@@ -484,11 +484,12 @@ def layout(nodes, sizes, st=DEFAULT):
                           (p["rail"], p["cb"] + st.jog), (p["rail"], sh["cy"]),
                           (ex, sh["cy"])])
             if idx == last and getattr(nd, "inbound", None):
-                # кружки-соединители «-> конец» с предыдущих листов
-                for i, letter in enumerate(nd.inbound):
+                # кружки-соединители «-> конец» с предыдущих листов:
+                # (буква, номер листа, откуда пришла ветка)
+                for i, (letter, src) in enumerate(nd.inbound):
                     cx_ = (sh["cx"] - sh["w"] / 2 - 2 * st.conn_r - 22
                            - i * (2 * st.conn_r + 10))
-                    add("conn", cx_, sh["cy"], letter)
+                    add("conn", cx_, sh["cy"], f"{letter}\n{src}")
                     edge([(cx_ + st.conn_r, sh["cy"]), (stop_l, sh["cy"])])
             continue
 
@@ -644,7 +645,9 @@ def layout(nodes, sizes, st=DEFAULT):
 
 
 def split_scheme(nodes, sizes, st=DEFAULT):
-    """Не влезает в А4 -> части, соединённые кружками «А», «Б», ..."""
+    """Не влезает в А4 -> части, соединённые кружками «А», «Б», ...
+    Межстраничный соединитель: буква + номер листа, где продолжение
+    (ГОСТ 19.701-90: первая строка — номер листа)."""
     items = list(nodes)
     parts = []
     li = 0
@@ -672,12 +675,15 @@ def split_scheme(nodes, sizes, st=DEFAULT):
             break
         letter = st.letters[li % len(st.letters)]
         li += 1
-        parts.append(items[:cut] + [Node("conn", letter)])
-        items = [Node("conn", letter)] + items[cut:]
+        # кружок внизу этого листа -> продолжение на следующем листе;
+        # кружок вверху следующего -> лист, откуда пришли (len(parts)
+        # после append = номер текущего листа)
+        parts.append(items[:cut] + [Node("conn", f"{letter}\n{len(parts) + 2}")])
+        items = [Node("conn", f"{letter}\n{len(parts)}")] + items[cut:]
     # ветки «-> конец» в не-последних частях кончаются кружком-соединителем:
     # сам «конец» живёт на последнем листе, туда же ставятся его кружки
     links = []
-    for part in parts[:-1]:
+    for pi, part in enumerate(parts[:-1]):
         for nd in part:
             if nd.kind != "if":
                 continue
@@ -685,8 +691,10 @@ def split_scheme(nodes, sizes, st=DEFAULT):
                 if br[2] and not br[3]:
                     letter = st.letters[li % len(st.letters)]
                     li += 1
-                    nd.branches[bi] = (br[0], br[1], True, letter)
-                    links.append(letter)
+                    # кружок у ветки ссылается на лист с «концом»
+                    nd.branches[bi] = (br[0], br[1], True,
+                                       f"{letter}\n{len(parts)}")
+                    links.append((letter, pi + 1))
     parts[-1][-1].inbound = sorted(links)
     return parts
 
@@ -722,9 +730,11 @@ def _draw_shape(ax, sh, s, ox, oy, fs, lw, st):
         ax.add_patch(Rectangle((cx - w / 2, cy - h / 2), w, h, fill=True,
                                facecolor="white", edgecolor="black", lw=lw))
     if k == "conn":
+        # межстраничный: буква + номер листа — две строки, шрифт мельче
         ax.text(cx, cy, "\n".join(sh["lines"]), ha="center", va="center",
-                fontsize=fs * 0.95, family=st.font_stack, weight="bold",
-                color="black")
+                fontsize=fs * (0.95 if len(sh["lines"]) == 1 else 0.68),
+                family=st.font_stack, weight="bold",
+                linespacing=1.1, color="black")
     else:
         ax.text(cx, cy, "\n".join(sh["lines"]), ha="center", va="center",
                 fontsize=fs, family=st.font_stack, linespacing=1.25,
