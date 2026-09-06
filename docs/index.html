@@ -102,6 +102,10 @@
     <div class="row">
       <label class="chk"><input type="checkbox" id="ru"> надписи по-русски
         (начало/конец, да/нет)</label>
+      <label class="chk">линии
+        <input type="range" id="lw" min="0.6" max="3" step="0.1" value="1.4"
+               style="vertical-align:middle">
+        <span id="lw-val">1,4</span></label>
     </div>
     <textarea id="code" spellcheck="false"
       aria-label="код на C или текст схемы .gvn"></textarea>
@@ -231,12 +235,14 @@ async function renderNow() {
   if (!engineReady) return;
   const text = $("code").value;
   const labels = $("ru").checked ? "ru" : "en";
+  const lw = parseFloat($("lw").value);
   spinner("Рисую схему…");
   setBusy(true);
   const t0 = performance.now();
   try {
     pyodide.globals.set("code_text", text);
     pyodide.globals.set("labels", labels);
+    pyodide.globals.set("lw", lw);
     pyodide.globals.set("stem", fileStem);
     const sheets = JSON.parse(pyodide.runPython(`
 import json, base64, os, re
@@ -248,8 +254,8 @@ if "#include" in src or re.search(r"\\bint\\s+main\\s*\\(", src):
     src = gostpadi.c_to_gvn(src, labels=labels)
 
 stem = "/tmp/" + stem
-pngs = gostpadi.render(src, stem + ".png", labels=labels)
-svgs = gostpadi.render(src, stem + ".svg", labels=labels)
+pngs = gostpadi.render(src, stem + ".png", labels=labels, edge_lw=lw)
+svgs = gostpadi.render(src, stem + ".svg", labels=labels, edge_lw=lw)
 out = []
 for png, svg in zip(pngs, svgs):
     name = os.path.basename(png)[:-4]
@@ -327,6 +333,14 @@ $("ru").addEventListener("change", () => {
   if (engineReady) renderNow();
 });
 
+$("lw").addEventListener("input", () => {
+  $("lw-val").textContent = $("lw").value.replace(".", ",");
+});
+$("lw").addEventListener("change", () => {
+  store.set("gostpadi.lw", $("lw").value);
+  if (engineReady) renderNow();
+});
+
 $("code").addEventListener("input", () => {
   store.set("gostpadi.code", $("code").value);
   queueRender();
@@ -375,7 +389,7 @@ document.addEventListener("keydown", e => {
 
 const savedCode = store.get("gostpadi.code");
 $("code").value = (savedCode && savedCode.trim()) ? savedCode : EXAMPLE_C;
-$("ru").checked = store.get("gostpadi.ru") === "1";
+$("ru").checked = store.get("gostpadi.ru") !== "";
 init();
 </script>
 </body>
