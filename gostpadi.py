@@ -624,6 +624,10 @@ def layout(nodes, sizes, st=DEFAULT):
         for it in items:
             top = top0 if prev_bottom is None else prev_bottom + st.vgap
             if isinstance(it, Node):
+                # вход в ромб/шестиугольник из предыдущей плитки колонки
+                # (для первого элемента вход рисует вызывающий)
+                if prev_bottom is not None:
+                    edge([(tx, prev_bottom), (tx, top)])
                 if it.kind == "if":
                     prev_bottom = sub_if(it, tx, top)
                 else:
