@@ -120,6 +120,8 @@ class Style:
     edge_lw: float = 1.0          # толщина всех линий и рамок (тонкая, 0.35 мм)
     label_dx: float = 8.0         # отступ подписи кейса от линии спуска
     label_dy: float = 12.0        # подпись: над плиткой / под углом ромба
+    label_exit_dx: float = grid * 2  # подпись да/нет: от вершины ромба по
+    #                                 линии выхода, всегда одно и то же
     label_axis_dx: float = 9.0    # подпись среднего кейса: от осевой линии
     vertex_label_dy: float = 11.0 # подпись ветки «если»: над выходом ромба
     label_gap: float = 16.0       # шаг между подписями пустых веток
@@ -688,12 +690,11 @@ def layout(nodes, sizes, st=DEFAULT):
                 v = vl if side == "L" else vr
                 edge([v, (txx, cy), (txx, top2)])
                 if t2 == 0:
-                    # метка у выхода ромба: да/нет на равном удалении
+                    # метка да/нет: одинаковый отступ от вершины
                     labels.append(dict(
-                        x=v[0] + (-st.label_dx if side == "L"
-                                  else st.label_dx),
-                        y=cy - st.label_dy, text=label,
-                        ha="right" if side == "L" else "left"))
+                        x=v[0] + (-st.label_exit_dx if side == "L"
+                                  else st.label_exit_dx),
+                        y=cy - st.label_dy, text=label, ha="center"))
                 else:
                     labels.append(dict(x=(v[0] + txx) / 2,
                                        y=cy - st.label_dy,
@@ -714,9 +715,9 @@ def layout(nodes, sizes, st=DEFAULT):
             for k_i, lbl in enumerate(empty):
                 edge([vr, (bx2 + k_i * 2 * g, cy),
                       (bx2 + k_i * 2 * g, merge2), (tx, merge2)])
-                labels.append(dict(x=tx + dw / 2 + st.label_dx,
+                labels.append(dict(x=tx + dw / 2 + st.label_exit_dx,
                                    y=cy - st.label_dy,
-                                   text=lbl, ha="left"))
+                                   text=lbl, ha="center"))
         if n_merge and edges:
             edges[-1].setdefault("dots", []).append((tx, merge2))
         return max(merge2, max(ybottoms.values(), default=y_b))
@@ -746,9 +747,9 @@ def layout(nodes, sizes, st=DEFAULT):
         edge([(tx + lw / 2, cy), (tx + chan, cy), (tx + chan, merge2),
               (tx, merge2)])
         if nd.no_label:
-            labels.append(dict(x=tx + lw / 2 + st.label_dx,
+            labels.append(dict(x=(tx + lw / 2 + tx + chan) / 2,
                                y=cy - st.label_dy,
-                               text=nd.no_label, ha="left"))
+                               text=nd.no_label, ha="center"))
         if edges:
             edges[-1].setdefault("dots", []).append((tx, merge2))
         return merge2
@@ -779,9 +780,9 @@ def layout(nodes, sizes, st=DEFAULT):
             edge([(0.0, yend), (-chan, yend), (-chan, cy), (-lw / 2, cy)])
             edge([(lw / 2, cy), (chan, cy), (chan, merge_y), (0.0, merge_y)])
             if nd.no_label:
-                labels.append(dict(x=lw / 2 + st.label_dx,
+                labels.append(dict(x=(lw / 2 + chan) / 2,
                                    y=cy - st.label_dy,
-                                   text=nd.no_label, ha="left"))
+                                   text=nd.no_label, ha="center"))
             if edges:
                 edges[-1].setdefault("dots", []).append((0.0, merge_y))
             prev = (0.0, merge_y)
@@ -877,13 +878,12 @@ def layout(nodes, sizes, st=DEFAULT):
                 v = vl if side == "L" else vr
                 edge([v, (tx, cy), (tx, top0)])
                 if _t == 0:
-                    # метка у самого выхода ромба: «да» и «нет» всегда
-                    # на равном удалении от боковых вершин
+                    # метка да/нет на линии выхода: отступ от вершины
+                    # всегда один и тот же, у обеих сторон одинаковый
                     labels.append(dict(
-                        x=v[0] + (-st.label_dx if side == "L"
-                                  else st.label_dx),
-                        y=cy - st.label_dy, text=label,
-                        ha="right" if side == "L" else "left"))
+                        x=v[0] + (-st.label_exit_dx if side == "L"
+                                  else st.label_exit_dx),
+                        y=cy - st.label_dy, text=label, ha="center"))
                 else:
                     # дальняя колонка той же стороны: метка на середине линии
                     labels.append(dict(x=(v[0] + tx) / 2, y=cy - st.label_dy,
@@ -934,9 +934,9 @@ def layout(nodes, sizes, st=DEFAULT):
             bx = (up(dw / 2 + 2 * g + max_tier * pitch + colw)
                   + k * 2 * g)
             edge([vr, (bx, cy), (bx, merge_y), (0.0, merge_y)])
-            labels.append(dict(x=dw / 2 + st.label_dx + k * 2 * g,
-                               y=cy - st.label_dy, text=lbl,
-                               ha="left"))
+            labels.append(dict(x=dw / 2 + st.label_exit_dx
+                               + k * 2 * g, y=cy - st.label_dy,
+                               text=lbl, ha="center"))
         if n_merge and edges:
             edges[-1].setdefault("dots", []).append((0.0, merge_y))
         if not n_merge and not empty and not has_axis:
