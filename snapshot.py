@@ -72,6 +72,32 @@ CASES = {
                                      '    3: printf("лето"); break\n'
                                      '    4: printf("осень"); break\n'
                                      '    иначе: printf("?")'),
+    "вложенный if в ветке": ('input scanf("%d", &a)\n'
+                             "if scanf != 1\n"
+                             '    да: printf("Ошибка ввода!")\n'
+                             "    нет:\n"
+                             "b = a * 2\n"
+                             "if b > 10\n"
+                             '    да: printf("большое")\n'
+                             '    нет: printf("маленькое")\n'
+                             'output printf(b)'),
+    "вложенный switch в ветке": ('input scanf("%d", &a)\n'
+                                 "if scanf != 1\n"
+                                 '    да: printf("Ошибка ввода!")\n'
+                                 "    нет:\n"
+                                 "switch (a)\n"
+                                 '    1: printf("раз"); break\n'
+                                 '    2: printf("два"); break\n'
+                                 '    иначе: printf("много")'),
+    "while": ("a = 0\nwhile a < 5\n    a = a + 1\n"
+              'output printf(a)'),
+    "for": ("for i = 0; i < 5; i = i + 1\n    s = s + i\n"
+            'output printf(s)'),
+    "цикл с if в теле": ("s = 0\nfor i = 0; i < 5; i = i + 1\n"
+                         "    if i % 2 == 0\n"
+                         "        да: s = s + i\n"
+                         "        нет: s = s + 1\n"
+                         'output printf(s)'),
 }
 
 C_SRCS = {
@@ -109,6 +135,22 @@ int main(void) {
     if (a > 0)
         printf("плюс");
     printf("готово");
+    return 0;
+}''',
+    "циклы и вложенность": '''#include <stdio.h>
+int main(void) {
+    int s = 0;
+    for (int i = 0; i < 5; i = i + 1) {
+        if (i % 2 == 0) {
+            s = s + i;
+        } else {
+            s = s + 1;
+        }
+    }
+    while (s > 3) {
+        s = s - 1;
+    }
+    printf("%d", s);
     return 0;
 }''',
 }

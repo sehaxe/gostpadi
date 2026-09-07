@@ -193,6 +193,32 @@ CASES = {
                                      '    3: printf("лето"); break\n'
                                      '    4: printf("осень"); break\n'
                                      '    иначе: printf("?")'),
+    "вложенный if в ветке": ('input scanf("%d", &a)\n'
+                             "if scanf != 1\n"
+                             '    да: printf("Ошибка ввода!")\n'
+                             "    нет:\n"
+                             "b = a * 2\n"
+                             "if b > 10\n"
+                             '    да: printf("большое")\n'
+                             '    нет: printf("маленькое")\n'
+                             'output printf(b)'),
+    "вложенный switch в ветке": ('input scanf("%d", &a)\n'
+                                 "if scanf != 1\n"
+                                 '    да: printf("Ошибка ввода!")\n'
+                                 "    нет:\n"
+                                 "switch (a)\n"
+                                 '    1: printf("раз"); break\n'
+                                 '    2: printf("два"); break\n'
+                                 '    иначе: printf("много")'),
+    "while": ("a = 0\nwhile a < 5\n    a = a + 1\n"
+              'output printf(a)'),
+    "for": ("for i = 0; i < 5; i = i + 1\n    s = s + i\n"
+            'output printf(s)'),
+    "цикл с if в теле": ("s = 0\nfor i = 0; i < 5; i = i + 1\n"
+                         "    if i % 2 == 0\n"
+                         "        да: s = s + i\n"
+                         "        нет: s = s + 1\n"
+                         'output printf(s)'),
 }
 
 C_SRCS = {
@@ -230,6 +256,22 @@ int main(void) {
     if (a > 0)
         printf("плюс");
     printf("готово");
+    return 0;
+}''',
+    "циклы и вложенность": '''#include <stdio.h>
+int main(void) {
+    int s = 0;
+    for (int i = 0; i < 5; i = i + 1) {
+        if (i % 2 == 0) {
+            s = s + i;
+        } else {
+            s = s + 1;
+        }
+    }
+    while (s > 3) {
+        s = s - 1;
+    }
+    printf("%d", s);
     return 0;
 }''',
 }
@@ -329,6 +371,31 @@ def main():
     expected_error("CLI: нет файла", ["нет.gvn"], 1)
     expected_error("CLI: неизвестный флаг", ["--что", "x.gvn"], 2)
     expected_error("CLI: без аргументов", [], 2)
+
+    # пачка файлов: фигуры и масштаб общие для всех схем
+    with tempfile.TemporaryDirectory() as td3:
+        a = os.path.join(td3, "a.gvn")
+        b = os.path.join(td3, "b.gvn")
+        open(a, "w", encoding="utf-8").write(
+            'scanf("%d", &x)\nif x > 0\n    да: printf("плюс")\n'
+            '    нет: printf("минус")')
+        open(b, "w", encoding="utf-8").write(
+            'if a == b\n    да: printf("да")\n    нет: printf("нет")\n'
+            "while a > 0\n    a = a - 1")
+        r = subprocess.run([sys.executable, SCRIPT, a, b,
+                            "-o", "scheme.png", "--labels=ru"],
+                           capture_output=True, text=True)
+        ok = (r.returncode == 0
+              and os.path.exists(os.path.join(td3, "scheme.png")))
+        check("CLI: пачка файлов рендерится", ok,
+              r.stderr[-120:] if r.returncode else "")
+        na = gp.parse(open(a, encoding="utf-8").read(), labels="ru")
+        nb = gp.parse(open(b, encoding="utf-8").read(), labels="ru")
+        sizes = gp.uniform_sizes([gp.normalize(na), gp.normalize(nb)])
+        la, lb = gp.layout(na, sizes), gp.layout(nb, sizes)
+        wa = [s["w"] for s in la[0] if s["kind"] == "if"][0]
+        wb = [s["w"] for s in lb[0] if s["kind"] == "if"][0]
+        check("CLI: фигуры пачки одинаковы", wa == wb, f"{wa} != {wb}")
 
     print()
     if FAILS:

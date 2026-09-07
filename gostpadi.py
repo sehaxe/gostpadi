@@ -109,7 +109,7 @@ class Style:
     conn_r: float = 14.2          # радиус кружка-соединителя (диаметр 10 мм)
     conn_from_end: float = 28.3   # кружок у «конца»: отступ от края (10 мм)
     conn_step: float = 14.2       # шаг между кружками у «конца» (5 мм)
-    aspect: float = 0.5           # высота ромба к ширине: ГОСТ 19.701-90, b = 2a
+    aspect: float = 1.0           # наклон боковых сторон ромба: 45° (h = w)
     a4_w: float = 468.0           # рабочая ширина А4 вертикально (пункты)
     a4_h: float = 700.0           # рабочая высота А4 вертикально
     page_pad: float = 14.0        # поля страницы
@@ -189,10 +189,15 @@ class ParseError(Exception):
 
 class Node:
     def __init__(self, kind, text, branches=None, lang="en"):
-        self.kind = kind                  # term | io | act | if | conn
+        self.kind = kind                  # term | io | act | if | loop | conn
         self.text = text
-        self.branches = branches or []    # [(метка, [инструкции], to_end, link)]
+        self.branches = branches or []    # [(метка, [элементы], to_end, link)]
         self.lang = lang                  # "en" | "ru" — язык ключевого слова
+        # элемент ветки/тела: строка-инструкция или вложенный Node («if»/«loop»)
+        self.body = None        # тело цикла (kind == "loop")
+        self.loop_kw = None     # "while" | "for"
+        self.yes_label = None   # подпись входа в тело цикла (только while)
+        self.no_label = None    # подпись выхода из цикла (только while)
 
 
 class Scheme:
@@ -287,7 +292,10 @@ def strip_comments(line):
 
 
 def parse(text, st=DEFAULT, labels="en"):
-    """Текст схемы (.gvn) -> список узлов (Start/End добавляются сами)."""
+    """Текст схемы (.gvn) -> список узлов (Start/End добавляются сами).
+
+    Ветки «если» и тело цикла — блок с отступом в 4 пробела, вложенные
+    «если»/циклы внутри ветки — с отступом на 4 больше; строка = блок."""
     text = text.lstrip("\ufeff")  # BOM
     lines = []
     for lineno, line in enumerate(text.splitlines(), 1):
@@ -295,10 +303,142 @@ def parse(text, st=DEFAULT, labels="en"):
         if body.strip():
             lines.append((lineno, body))
 
+    pos = [0]
+
+    def peek():
+        return lines[pos[0]] if pos[0] < len(lines) else None
+
+    def take():
+        ln = lines[pos[0]]
+        pos[0] += 1
+        return ln
+
+    def indent_of(ln):
+        return len(ln[1]) - len(ln[1].lstrip())
+
+    def block(indent):
+        """Элементы блока с отступом indent: строки-инструкции и вложенные
+        «если»/циклы. Останавливается на первой строке с меньшим отступом."""
+        items = []
+        while True:
+            top = peek()
+            if top is None or indent_of(top) < indent:
+                return items
+            lineno, line = take()
+            if indent_of((lineno, line)) > indent:
+                raise ParseError(f"line {lineno}: неожиданный отступ")
+            s = line.strip()
+            if re.match(r"^(if|switch)[ (]", s):
+                items.append(decision(s, lineno, indent))
+            elif re.match(r"^(while|for)[ (]", s):
+                items.append(cycle(s, lineno, indent))
+            else:
+                items.append(s)
+
+    def decision(s, lineno, indent):
+        # decision: «if cond» or bare «switch (...)»
+        kw = s.split("(", 1)[0].split(" ", 1)[0]
+        rest = s[len(kw):].strip()
+        cond = wrap(("switch " + rest) if kw == "switch"
+                    else cond_text(rest), st.cond_chars)
+        branches = []
+        cur = None  # последняя ветка: не-меточные строки продолжают её контент
+        while True:
+            top = peek()
+            if top is None or indent_of(top) < indent + 4:
+                break
+            if indent_of(top) > indent + 4:
+                raise ParseError(f"line {top[0]}: неожиданный отступ")
+            lineno_b, line_b = take()
+            s_b = line_b.strip()
+            # метка — «да:», «case 1 -> end:» …: до двоеточия не бывает
+            # скобок и кавычек (иначе это плитка с двоеточием в строке)
+            m = re.match(r"([^:()\"]+?)\s*:\s*(.*)$", s_b)
+            if m:
+                label_part, btext = m.group(1).strip(), m.group(2).strip()
+                to_end = False
+                me = re.match(r"(.+?)\s*->\s*end$", label_part)
+                if me:
+                    label, to_end = me.group(1).strip(), True
+                else:
+                    label = label_part
+                if btext.endswith("-> end"):
+                    btext = btext[:-len("-> end")].rstrip()
+                    to_end = True
+                cur = [label, split_statements(btext), to_end, None]
+                branches.append(cur)
+            else:
+                if cur is None:
+                    raise ParseError(
+                        f"line {lineno_b}: branch must look like "
+                        "«label: text»")
+                if re.match(r"^(if|switch)[ (]", s_b):
+                    cur[1].append(decision(s_b, lineno_b, indent + 4))
+                elif re.match(r"^(while|for)[ (]", s_b):
+                    cur[1].append(cycle(s_b, lineno_b, indent + 4))
+                else:
+                    cur[1].append(s_b)  # строка-плитка в контент ветки
+        def _no_end_inside(items):
+            # «-> конец» разрешён только в ветках верхнеуровневых ромбов
+            for it_n in items:
+                if not isinstance(it_n, Node):
+                    continue
+                if it_n.kind == "if":
+                    for b_n in it_n.branches:
+                        if b_n[2]:
+                            raise ParseError(
+                                "«-> конец» внутри вложенной ветки не "
+                                "поддерживается")
+                        _no_end_inside(b_n[1])
+                elif it_n.kind == "loop" and it_n.body:
+                    _no_end_inside(it_n.body)
+        for cur_b in branches:
+            _no_end_inside(cur_b[1])
+        if not branches:
+            raise ParseError(f"line {lineno}: «{kw}» has no branches")
+        if cond.startswith("switch"):
+            # подписи кейсов: значения переключателя («status = 1»),
+            # не синтаксис C «case 1»; default остаётся default
+            m_sw = re.match(r"switch\s*\(([^)]*)\)", cond)
+            svar = m_sw.group(1).strip() if m_sw else None
+            fixed = []
+            for (label, stmts, to_end, link) in branches:
+                low = label.strip().lower()
+                if low in ("default", "else", "otherwise", "иначе"):
+                    label = "default"
+                else:
+                    mv = re.fullmatch(r"(?:case\s+)?(.+)", label.strip())
+                    if svar and mv:
+                        label = f"{svar} = {mv.group(1).strip()}"
+                fixed.append((label, stmts, to_end, link))
+            branches = fixed
+        if len(branches) == 1 and branches[0][1] and not cond.startswith("switch"):
+            # одиночное условие: второй выход «no» рисуем сами
+            branches.append((LANGS[labels]["no"], [], False, None))
+        nd = Node("if", cond, branches)
+        m = re.match(r"switch\s*\(([^)]*)\)", cond)
+        nd.switch_var = m.group(1).strip() if m else None
+        return nd
+
+    def cycle(s, _lineno, indent):
+        # цикл: «while cond» или «for init; cond; step», тело — блок глубже
+        kw = s.split("(", 1)[0].split(" ", 1)[0]
+        rest = s[len(kw):].strip()
+        if rest.startswith("(") and rest.endswith(")"):
+            rest = rest[1:-1].strip()
+        nd = Node("loop", wrap(rest, st.max_chars))
+        nd.loop_kw = kw
+        if kw == "while":
+            nd.yes_label = LANGS[labels]["yes"]
+            nd.no_label = LANGS[labels]["no"]
+        top = peek()
+        if top is not None and indent_of(top) > indent:
+            nd.body = block(indent_of(top))
+        return nd
+
     nodes = [Node("term", LANGS[labels]["start"])]
-    i = 0
-    while i < len(lines):
-        lineno, line = lines[i]
+    while pos[0] < len(lines):
+        lineno, line = take()
         stripped = line.strip()
         indent = len(line) - len(line.lstrip())
         if stripped.startswith("@") and indent == 0:
@@ -307,54 +447,10 @@ def parse(text, st=DEFAULT, labels="en"):
             raise ParseError(f"line {lineno}: indentation is only allowed "
                              "inside an «if» block")
         if re.match(r"^(if|switch)[ (]", stripped):
-            # decision: «if cond» or bare «switch (...)»
-            kw = stripped.split("(", 1)[0].split(" ", 1)[0]
-            rest = stripped[len(kw):].strip()
-            cond = wrap(("switch " + rest) if kw == "switch"
-                        else cond_text(rest), st.cond_chars)
-            branches = []
-            j = i + 1
-            while j < len(lines):
-                jline = lines[j][1]
-                if len(jline) - len(jline.lstrip()) < 4:
-                    break
-                jline = jline.strip()
-                m1 = re.match(r"(.+?)\s*->\s*end\s*:\s*(.*)$", jline)
-                m2 = re.match(r"(.+?)\s*:\s*(.*)$", jline)
-                if m1:
-                    label, to_end, btext = m1.group(1).strip(), True, m1.group(2).strip()
-                elif m2:
-                    label, to_end, btext = m2.group(1).strip(), False, m2.group(2).strip()
-                else:
-                    raise ParseError(
-                        f"line {lines[j][0]}: branch must look like "
-                        "«label: text»")
-                if btext.endswith("-> end"):
-                    btext = btext[:-len("-> end")].rstrip()
-                    to_end = True
-                branches.append((label, split_statements(btext), to_end, None))
-                j += 1
-            if not branches:
-                raise ParseError(f"line {lineno}: «{kw}» has no branches")
-            if cond.startswith("switch"):
-                # подписи кейсов switch: case 1, case 2, default
-                fixed = []
-                for (label, stmts, to_end, link) in branches:
-                    low = label.strip().lower()
-                    if low in ("default", "else", "otherwise", "иначе"):
-                        label = "default"
-                    elif re.fullmatch(r"\d+", label.strip()):
-                        label = "case " + label.strip()
-                    fixed.append((label, stmts, to_end, link))
-                branches = fixed
-            if len(branches) == 1 and branches[0][1] and not cond.startswith("switch"):
-                # одиночное условие: второй выход «no» рисуем сами
-                branches.append((LANGS[labels]["no"], [], False, None))
-            nd = Node("if", cond, branches)
-            m = re.match(r"switch\s*\(([^)]*)\)", cond)
-            nd.switch_var = m.group(1).strip() if m else None
-            nodes.append(nd)
-            i = j
+            nodes.append(decision(stripped, lineno, 0))
+            continue
+        if re.match(r"^(while|for)[ (]", stripped):
+            nodes.append(cycle(stripped, lineno, 0))
             continue
         m_in = re.match(r"^input\s+(?![=+\-*/])", stripped)
         m_out = re.match(r"^output\s+(?![=+\-*/])", stripped)
@@ -369,7 +465,6 @@ def parse(text, st=DEFAULT, labels="en"):
             nodes.append(Node("io", wrap(stripped)))
         else:
             nodes.append(Node("act", wrap(stripped)))
-        i += 1
     nodes.append(Node("term", LANGS[labels]["end"]))
     return nodes
 
@@ -389,9 +484,14 @@ def measure(st, kind, text):
         return max(up(tw + st.pad_x + 22.0), 2.0 * h), h
     if kind == "conn":
         return 2 * st.conn_r, 2 * st.conn_r
+    if kind == "loop":
+        # шестиугольник «подготовка»: торцы скошены под 45° (по h/2)
+        h = max(2 * g, up(n * st.pitch + st.pad_y - 4.0))
+        w = up(tw + st.pad_x + 6.0) + h
+        return max(w, 2 * h), h
     if kind == "if":
         # текст помещается между рёбрами ромба на глубине текста;
-        # пропорции h = st.aspect * w, aspect = 0.5 (b = 2a)
+        # боковые стороны под 45° к горизонтали: h = st.aspect * w
         ymax = (n - 1) * st.pitch / 2 + 6.0
         need = tw + 26.0
         w = up(max(need + ymax * 2.0 / st.aspect, 11 * g))
@@ -411,15 +511,26 @@ def normalize(nodes, st=DEFAULT):
         else:
             sizes[kind] = (w, h)
 
-    for nd in nodes:
+    def put_items(items):
+        for it in items:
+            if isinstance(it, Node):
+                put_node(it)
+            else:
+                put("io" if IO_RE.match(it) else "act", it)
+
+    def put_node(nd):
         put(nd.kind, nd.text)
         for _lbl, stmts, _te, _ln in nd.branches:
-            for s in stmts:
-                put("io" if IO_RE.match(s) else "act", s)
+            put_items(stmts)
+        if nd.body is not None:
+            put_items(nd.body)
+
+    for nd in nodes:
+        put_node(nd)
     # базовые размеры всегда есть, даже если типа в схеме не было
     # (иначе раскладка падает на отсутствующем ключе)
     for kind, sample in (("term", "x"), ("io", "x"), ("act", "x"),
-                         ("if", "x"), ("conn", "А")):
+                         ("if", "x"), ("loop", "x"), ("conn", "А")):
         put(kind, sample)
     return sizes
 
@@ -471,9 +582,201 @@ def layout(nodes, sizes, st=DEFAULT):
         anchors.append(dict(sh=sh, ext=cy + h / 2))
         return (0.0, cy + h / 2), cy + h / 2, sh
 
+    # полуширина содержимого колонки вокруг её оси: плитки, вложенные
+    # ромбы с их под-колонками, вложенные циклы с каналами возврата
+    def extent(items):
+        he = colw / 2
+        for it in items:
+            if not isinstance(it, Node):
+                continue
+            dw2 = sizes["if"][0]
+            if it.kind == "if":
+                ne = [b for b in it.branches if b[1]]
+                sub = max([extent(b[1]) for b in ne] + [colw / 2])
+                n = len(ne)
+                tiers = (n - 1) // 2 if n else 0
+                pitch2 = 2 * sub + st.colgap
+                he = max(he,
+                         dw2 / 2 + st.hgap + sub + tiers * pitch2,
+                         up(dw2 / 2 + 2 * g + tiers * pitch2 + sub))
+            elif it.kind == "loop":
+                he = max(he, sizes["loop"][0] / 2,
+                         extent(it.body) + st.mgap if it.body else he)
+        return he
+
+    # единая полуширина полос колонок по всей схеме (как размеры фигур):
+    # у вложенности ширина «распирает» все колонки одинаково
+    nhe = colw / 2
+    for scan in nodes:
+        if scan.kind == "if":
+            for b in scan.branches:
+                if b[1]:
+                    nhe = max(nhe, extent(b[1]))
+        elif scan.kind == "loop" and scan.body is not None:
+            nhe = max(nhe, sizes["loop"][0] / 2, extent(scan.body) + st.mgap)
+
+    def render_column(items, tx, top0):
+        """Колонка на абсциссе tx: плитки и вложенные «если»/циклы.
+        Возвращает y низа содержимого (top0, если пусто)."""
+        prev_bottom = None
+        for it in items:
+            top = top0 if prev_bottom is None else prev_bottom + st.vgap
+            if isinstance(it, Node):
+                if it.kind == "if":
+                    prev_bottom = sub_if(it, tx, top)
+                else:
+                    prev_bottom = sub_loop(it, tx, top)
+                continue
+            k = "io" if IO_RE.match(it) else "act"
+            w_k, h_k = sizes[k]
+            bottom = top + h_k
+            add(k, tx, top + h_k / 2, it)
+            if prev_bottom is not None:
+                edge([(tx, prev_bottom), (tx, top)])
+            prev_bottom = bottom
+        return prev_bottom if prev_bottom is not None else top0
+
+    def sub_if(nd, tx, top):
+        """Вложенный ромб внутри колонки: под-колонки вокруг tx, слияние
+        обратно на ось колонки. Возвращает y продолжения колонки."""
+        dw, dh = sizes["if"]
+        cy = top + dh / 2
+        add("if", tx, cy, nd.text)
+        vl, vr = (tx - dw / 2, cy), (tx + dw / 2, cy)
+        ne = [b for b in nd.branches if b[1]]
+        empty = [b[0] for b in nd.branches if not b[1]]
+        n = len(ne)
+        sub = max([extent(b[1]) for b in ne] + [colw / 2])
+        tiers = (n - 1) // 2 if n else 0
+        pitch2 = 2 * sub + st.colgap
+        base2 = dw / 2 + st.hgap + sub
+        comb = bool(getattr(nd, "switch_var", None)) and n >= 2
+        top2 = cy + dh / 2 + st.vgap
+        y_b = cy + dh / 2
+        plan = []
+        if n == 1 and empty:
+            plan.append((ne[0], "L", 0, tx - base2))
+        else:
+            for j, b in enumerate(ne):
+                if n % 2 and j == n // 2:
+                    plan.append((b, "axis", 0, tx))
+                elif j < n // 2:
+                    t = n // 2 - 1 - j
+                    plan.append((b, "L", t, tx - (base2 + t * pitch2)))
+                elif n:
+                    t = j - n // 2 - (n % 2)
+                    plan.append((b, "R", t, tx + (base2 + t * pitch2)))
+        if comb and len(plan) >= 2:
+            xs = [txx for _b, _s, _t, txx in plan]
+            edge([(min(xs), y_b), (max(xs), y_b)], arrow=False)
+        ybottoms = {}
+        for b, side, _t, txx in plan:
+            label, items_b = b[0], b[1]
+            if side == "axis":
+                edge([(txx, y_b), (txx, top2)])
+                labels.append(dict(x=txx + st.label_axis_dx,
+                                   y=top2 - st.label_dy,
+                                   text=label, ha="left"))
+            elif comb:
+                edge([(txx, y_b), (txx, top2)])
+                labels.append(dict(
+                    x=txx + (-st.label_dx if side == "L"
+                             else st.label_dx),
+                    y=top2 - st.label_dy, text=label,
+                    ha="right" if side == "L" else "left"))
+            else:
+                v = vl if side == "L" else vr
+                edge([v, (txx, cy), (txx, top2)])
+                labels.append(dict(x=(v[0] + txx) / 2, y=cy - st.label_dy,
+                                   text=label, ha="center"))
+            ybottoms[id(b)] = render_column(items_b, txx, top2)
+        merge2 = y_b
+        for b, _s, _t, _x in plan:
+            if b[2]:
+                raise ParseError("«-> конец» внутри вложенной ветки не "
+                                 "поддерживается")
+            merge2 = max(merge2, ybottoms[id(b)] + st.mgap)
+        for b, _s, _t, txx in plan:
+            edge([(txx, ybottoms[id(b)]), (txx, merge2), (tx, merge2)])
+        n_merge = len(plan) + len(empty)
+        if empty:
+            merge2 = max(merge2, y_b + 2 * g)
+            bx2 = tx + up(dw / 2 + 2 * g + tiers * pitch2 + sub)
+            for k_i, lbl in enumerate(empty):
+                edge([vr, (bx2 + k_i * 2 * g, cy),
+                      (bx2 + k_i * 2 * g, merge2), (tx, merge2)])
+                labels.append(dict(x=tx + dw / 2 + 10.0, y=cy - 11.0,
+                                   text=lbl, ha="left"))
+        if n_merge and edges:
+            edges[-1].setdefault("dots", []).append((tx, merge2))
+        return max(merge2, max(ybottoms.values(), default=y_b))
+
+    def sub_loop(nd, tx, top):
+        """Вложенный цикл внутри колонки: шестиугольник, тело на оси,
+        возврат слева, выход справа. Возвращает y продолжения колонки."""
+        lw, lh = sizes["loop"]
+        cy = top + lh / 2
+        add("loop", tx, cy, nd.text)
+        chan = up(max(nhe, lw / 2) + 2 * g)
+        top0 = cy + lh / 2 + st.vgap
+        if nd.body:
+            edge([(tx, cy + lh / 2), (tx, top0)])
+            if nd.yes_label:
+                labels.append(dict(x=tx + st.label_dx,
+                                   y=cy + lh / 2 + st.label_dy,
+                                   text=nd.yes_label, ha="left"))
+            yend = render_column(nd.body, tx, top0)
+        else:
+            yend = cy + lh / 2
+        merge2 = yend + st.mgap
+        # возврат: низ тела -> левый канал -> левая вершина шестиугольника
+        edge([(tx, yend), (tx - chan, yend), (tx - chan, cy),
+              (tx - lw / 2, cy)])
+        # выход: правая вершина -> правый канал -> обратно на ось
+        edge([(tx + lw / 2, cy), (tx + chan, cy), (tx + chan, merge2),
+              (tx, merge2)])
+        if nd.no_label:
+            labels.append(dict(x=tx + lw / 2 + 10.0, y=cy - 11.0,
+                               text=nd.no_label, ha="left"))
+        if edges:
+            edges[-1].setdefault("dots", []).append((tx, merge2))
+        return merge2
+
     prev, cursor = None, 0.0
     last = len(nodes) - 1
     for idx, nd in enumerate(nodes):
+        # ---------- цикл на основной линии ----------
+        if nd.kind == "loop":
+            lw, lh = sizes["loop"]
+            cy = cursor + st.vgap + lh / 2
+            sh = add("loop", 0.0, cy, nd.text)
+            if prev is not None:
+                edge([prev, (0.0, cy - lh / 2)])
+            chan = up(max(nhe, lw / 2) + 2 * g)
+            top0 = cy + lh / 2 + st.vgap
+            if nd.body:
+                edge([(0.0, cy + lh / 2), (0.0, top0)])
+                if nd.yes_label:
+                    labels.append(dict(x=st.label_dx,
+                                       y=cy + lh / 2 + st.label_dy,
+                                       text=nd.yes_label, ha="left"))
+                yend = render_column(nd.body, 0.0, top0)
+            else:
+                yend = cy + lh / 2
+            merge_y = yend + st.mgap
+            # возврат слева, выход справа — как у вложенного цикла
+            edge([(0.0, yend), (-chan, yend), (-chan, cy), (-lw / 2, cy)])
+            edge([(lw / 2, cy), (chan, cy), (chan, merge_y), (0.0, merge_y)])
+            if nd.no_label:
+                labels.append(dict(x=lw / 2 + 10.0, y=cy - 11.0,
+                                   text=nd.no_label, ha="left"))
+            if edges:
+                edges[-1].setdefault("dots", []).append((0.0, merge_y))
+            prev = (0.0, merge_y)
+            cursor = merge_y
+            anchors.append(dict(sh=sh, ext=cursor))
+            continue
+
         # ---------- простой блок на основной линии ----------
         if nd.kind != "if":
             if idx == last and pend:
@@ -517,8 +820,10 @@ def layout(nodes, sizes, st=DEFAULT):
         y_b = cy + dh / 2
 
         empty = [b[0] for b in nd.branches if not b[1]]
-        pitch = colw + st.colgap
-        base = dw / 2 + st.hgap + colw / 2
+        # полоса колонок «распирается» вложенным содержимым (nhe единый
+        # для всей схемы), у плоских схем совпадает со старой геометрией
+        pitch = 2 * nhe + st.colgap
+        base = dw / 2 + st.hgap + nhe
         # колонка на каждую ветку: средняя — прямо по оси от нижней вершины,
         # соседние — от боковых вершин, дальние — ещё одной линией под 90°
         plan = []  # (ветка, side, tier, tx)
@@ -541,38 +846,28 @@ def layout(nodes, sizes, st=DEFAULT):
             xs = [tx for _b, _s, _t, tx in plan]
             edge([(min(xs), y_b), (max(xs), y_b)], arrow=False)
         for b, side, _t, tx in plan:
-            label, stmts, to_end, link = b
-            prev_bottom = None
-            for si, s in enumerate(stmts):
-                k = "io" if IO_RE.match(s) else "act"
-                w_k, h_k = sizes[k]
-                top = top0 if prev_bottom is None else prev_bottom + st.vgap
-                bottom = top + h_k
-                sh_k = add(k, tx, top + h_k / 2, s)
-                if si == 0:
-                    if side == "axis":
-                        # средний кейс: спуск прямо из нижнего угла ромба
-                        edge([(tx, y_b), (tx, top)])
-                        labels.append(dict(x=st.label_axis_dx,
-                                           y=top - st.label_dy,
-                                           text=label, ha="left"))
-                    elif comb:
-                        # кейс висит на горизонтальной линии угла
-                        edge([(tx, y_b), (tx, top)])
-                        labels.append(dict(
-                            x=tx + (-st.label_dx if side == "L"
-                                    else st.label_dx),
-                            y=top - st.label_dy, text=label,
-                            ha="right" if side == "L" else "left"))
-                    else:
-                        v = vl if side == "L" else vr
-                        edge([v, (tx, cy), (tx, top)])
-                        labels.append(dict(x=(v[0] + tx) / 2, y=cy - st.label_dy,
-                                           text=label, ha="center"))
-                else:
-                    edge([(tx, prev_bottom), (tx, top)])
-                prev_bottom = bottom
-            exits[id(b)] = dict(x=tx, y=prev_bottom, to_end=to_end, side=side)
+            label, items_b, to_end, link = b
+            if side == "axis":
+                # средний кейс: спуск прямо из нижнего угла ромба
+                edge([(tx, y_b), (tx, top0)])
+                labels.append(dict(x=st.label_axis_dx,
+                                   y=top0 - st.label_dy,
+                                   text=label, ha="left"))
+            elif comb:
+                # кейс висит на горизонтальной линии угла
+                edge([(tx, y_b), (tx, top0)])
+                labels.append(dict(
+                    x=tx + (-st.label_dx if side == "L"
+                            else st.label_dx),
+                    y=top0 - st.label_dy, text=label,
+                    ha="right" if side == "L" else "left"))
+            else:
+                v = vl if side == "L" else vr
+                edge([v, (tx, cy), (tx, top0)])
+                labels.append(dict(x=(v[0] + tx) / 2, y=cy - st.label_dy,
+                                   text=label, ha="center"))
+            yend = render_column(items_b, tx, top0)
+            exits[id(b)] = dict(x=tx, y=yend, to_end=to_end, side=side)
 
         # слияние колонок обратно на основную линию
         merge_y = cy + dh / 2
@@ -672,9 +967,9 @@ def split_scheme(nodes, sizes, st=DEFAULT):
         for j, a in enumerate(result[4]):
             if j < 2 or j > len(items) - 3:
                 continue
-            # резать можно перед простым блоком или перед «если»
-            # (ромб с колонками целиком остаётся в предыдущей части)
-            if items[j].kind not in ("act", "io", "if"):
+            # резать можно перед простым блоком, «если» или циклом
+            # (ромб/шестиугольник с колонками целиком остаётся в предыдущей части)
+            if items[j].kind not in ("act", "io", "if", "loop"):
                 continue
             if result[4][j - 1]["ext"] <= limit:
                 cut = j
@@ -731,6 +1026,17 @@ def _draw_shape(ax, sh, s, ox, oy, fs, lw, st):
                               (cx + w / 2, cy), (cx, cy + h / 2)],
                              closed=True, fill=True, facecolor="white",
                              edgecolor="black", lw=lw))
+    elif k == "loop":
+        # шестиугольник «подготовка»: торцы скошены под 45° (на h/2)
+        sl = min(h / 2, w / 2)
+        ax.add_patch(Polygon([(cx - w / 2 + sl, cy - h / 2),
+                              (cx + w / 2 - sl, cy - h / 2),
+                              (cx + w / 2, cy),
+                              (cx + w / 2 - sl, cy + h / 2),
+                              (cx - w / 2 + sl, cy + h / 2),
+                              (cx - w / 2, cy)],
+                             closed=True, fill=True, facecolor="white",
+                             edgecolor="black", lw=lw))
     elif k == "conn":
         ax.add_patch(Circle((cx, cy), CONN_R * s, fill=True, facecolor="white",
                             edgecolor="black", lw=lw))
@@ -751,21 +1057,21 @@ def _draw_shape(ax, sh, s, ox, oy, fs, lw, st):
 
 def _draw_edge(ax, e, s, ox, oy, lw=EDGE_LW):
     pts = [((x - ox) * s, (y - oy) * s) for x, y in e["points"]]
-    # ГОСТ 19.701-90 / СТП БГУИР 3.12.2: поток сверху вниз и слева направо
-    # рисуют без стрелок; стрелка (развал 60°) — только вверх или вправо-влево
-    dx, dy = pts[-1][0] - pts[-2][0], pts[-1][1] - pts[-2][1]
-    head = e.get("arrow", True) and (dy < -0.01 or dx < -0.01)
+    # стрелка на конце каждой линии потока — вход в любой блок
+    # помечен наконечником (развал 60°)
+    head = e.get("arrow", True)
     tail = pts[:-1] if head else pts
     if len(tail) >= 2:
         xs, ys = zip(*tail)
         ax.plot(xs, ys, color="black", lw=lw, solid_capstyle="projecting",
                 solid_joinstyle="miter")
     if head:
+        # развал 60°: открытый (незалитый) наконечник из двух штрихов
         ax.add_patch(FancyArrowPatch(
             pts[-2], pts[-1],
-            arrowstyle="-|>, head_width=0.7, head_length=0.6",
+            arrowstyle="->, head_width=0.7, head_length=0.6",
             mutation_scale=max(6.0, 12.0 * s),
-            color="black", lw=lw, shrinkA=0, shrinkB=0))
+            color="black", lw=lw, fill=False, shrinkA=0, shrinkB=0))
     for dx_, dy_ in e.get("dots", []):  # точка слияния линий потока
         ax.plot((dx_ - ox) * s, (dy_ - oy) * s, "o", color="black",
                 ms=max(2.6, 5.2 * s), zorder=3)
@@ -832,6 +1138,67 @@ def render(text, out_png, page="a4", scale=None, font=FONT, edge_lw=None,
              font=font, edge_lw=edge_lw, dpi=dpi)
         files.append(target)
     return files
+
+
+def uniform_sizes(sizes_list):
+    """Один размер фигур на всю пачку схем: по каждому типу — максимум."""
+    kinds = ("term", "io", "act", "if", "loop", "conn")
+    return {k: (max(s[k][0] for s in sizes_list),
+                max(s[k][1] for s in sizes_list)) for k in kinds}
+
+
+def render_many(inputs, out_for, page="a4", scale=None, font=FONT,
+                edge_lw=None, dpi=DPI, labels="en"):
+    """Несколько схем одним прогоном — фигуры одного размера во всей пачке.
+
+    Каждый файл (.gvn или .c) разбирается отдельно, но размеры фигур
+    берутся общие (по максимуму на тип), и все страницы всех схем
+    рисуются в одном масштабе: в отчёте блоки любой из схем получаются
+    одинаковыми. out_for(вход) -> путь результата; страницы с суффиксами
+    -2, -3... Возвращает (код возврата, список файлов)."""
+    code = 0
+    schemes = []
+    for inp in inputs:
+        try:
+            src = open(inp, encoding="utf-8-sig").read()
+            text = c_to_gvn(src, labels=labels) if inp.endswith(".c") else src
+            schemes.append((inp, parse(text, labels=labels)))
+        except OSError as e:
+            print(f"не удалось открыть: {e}", file=sys.stderr)
+            code = 1
+        except UnicodeDecodeError as e:
+            print(f"{inp}: файл не в UTF-8: {e}", file=sys.stderr)
+            code = 1
+        except ParseError as e:
+            print(f"ошибка: {e}", file=sys.stderr)
+            code = 1
+    files = []
+    if not schemes:
+        return code, files
+    sizes = uniform_sizes([normalize(nodes) for _p, nodes in schemes])
+    laid = []  # (вход, пути страниц, раскладки)
+    for inp, nodes in schemes:
+        parts = [nodes] if page == "auto" else split_scheme(nodes, sizes)
+        targets = ([out_for(inp)]
+                   + [_suffixed(out_for(inp), k + 2)
+                      for k in range(len(parts) - 1)])
+        laid.append((inp, targets,
+                     [layout(part, sizes) for part in parts]))
+    if scale is None:
+        # общий масштаб всех страниц: вписываем самую неудобную из них,
+        # остальные при том же масштабе заведомо помещаются
+        cap = 1.0 if page == "auto" else float("inf")
+        scale = min([min(cap, (A4_W - 2 * PAGE_PAD) / b[3][2],
+                         (A4_H - 2 * PAGE_PAD) / b[3][3])
+                     for _i, _t, ls in laid for b in ls])
+    lw = edge_lw if edge_lw else EDGE_LW
+    for inp, targets, ls in laid:
+        for target, res in zip(targets, ls):
+            draw(*res[:4], target, page=page, scale=scale, font=font,
+                 edge_lw=lw, dpi=dpi)
+            files.append(target)
+            print(target)
+    return code, files
 
 
 # ---------- C -> .gvn ----------
@@ -921,9 +1288,6 @@ def _c_stmt(node):
         return ([] if node.init is None
                 else [("stmt", f"{node.name} = {_c_text(node.init)}")])
     if isinstance(node, A.If):
-        if isinstance(node.iffalse, A.If):
-            raise ParseError("в коде else if — .gvn не вкладывает ромбы "
-                             "друг в друга, разбей условие")
         return [("if", _shorten_calls(_c_text(node.cond)),
                  _c_block(node.iftrue), _c_block(node.iffalse))]
     if isinstance(node, A.Switch):
@@ -945,9 +1309,20 @@ def _c_stmt(node):
                 cases.append((lab, []))
             cases.append((labels[-1], body))
         return [("switch", _c_text(node.cond), cases)]
-    if isinstance(node, (A.While, A.For, A.DoWhile)):
-        raise ParseError("в коде цикл (while/for/do) — циклы пока не "
-                         "поддерживаются")
+    if isinstance(node, A.While):
+        return [("loop", "while " + _shorten_calls(_c_text(node.cond)),
+                 _c_block(node.stmt))]
+    if isinstance(node, A.For):
+        init = _c_text(node.init) if node.init is not None else ""
+        # объявление счётчика в заголовке: тип в схеме не нужен
+        init = re.sub(r"^(?:const\s+)?(?:unsigned\s+|signed\s+)?"
+                      r"(?:int|char|long|short|float|double|size_t)\s+",
+                      "", init)
+        cond = _shorten_calls(_c_text(node.cond)) if node.cond is not None else ""
+        nxt = _c_text(node.next) if node.next is not None else ""
+        return [("loop", f"for {init}; {cond}; {nxt}", _c_block(node.stmt))]
+    if isinstance(node, A.DoWhile):
+        raise ParseError("в коде цикл do-while — перепиши на while")
     if isinstance(node, A.Goto):
         raise ParseError("в коде goto — не поддерживается")
     text = _c_text(node)
@@ -957,18 +1332,6 @@ def _c_stmt(node):
 def _shorten_calls(cond):
     """scanf("%d", &x) -> scanf(...) — форматные строки в условиях не нужны."""
     return re.sub(r'(\w+)\("[^"]*"[^)]*\)', r"\1(...)", cond)
-
-
-def _branch_text(items):
-    """Инструкции ветки -> строка через ';' (плитки колонки)."""
-    parts = []
-    for it in items:
-        if it[0] == "stmt":
-            parts.append(_abbrev_stmt(it[1]))
-        elif it[0] != "skip":
-            raise ParseError("вложенный if/switch внутри ветки — пока не "
-                             "поддерживается, вынеси его на верхний уровень")
-    return "; ".join(parts)
 
 
 def _has_return(items):
@@ -994,9 +1357,10 @@ def _abbrev_stmt(s):
 
 def c_to_gvn(src, labels="en"):
     """Код C -> текст схемы .gvn; грамматику C99 читает pycparser.
-    if/else, switch/case/default, return; объявления переменных
-    выбрасываются, ветка с return уходит в «конец».
-    Циклы (while/for/do) пока не поддерживаются."""
+    if/else (в том числе вложенные ветки и else if), switch/case/default,
+    while/for (шестиугольник «подготовка»); объявления переменных
+    выбрасываются, ветка с return уходит в «конец», верхнеуровневый
+    return не рисуется (терминатор «конец» и так завершает схему)."""
     from pycparser import c_ast, c_parser
     try:
         ast = c_parser.CParser().parse(_c_prepare(src))
@@ -1010,31 +1374,39 @@ def c_to_gvn(src, labels="en"):
     tag_yes, tag_no = LANGS[labels]["yes"], LANGS[labels]["no"]
     lines = ["#gostpadi 1"]
 
-    def emit(items):
+    def emit(items, depth=0):
+        pad = "    " * depth
         for it in items:
             if it[0] == "stmt":
                 text = _abbrev_stmt(it[1])
                 if not text.lower().startswith("return"):
-                    lines.append(text)  # верхнеуровневый return не рисуем
+                    lines.append(pad + text)  # верхнеуровневый return не рисуем
             elif it[0] == "if":
                 _, cond, yes, no = it
-                lines.append("if " + cond)
-                for tag, branch in ((tag_yes, yes), (tag_no, no)):
-                    text = _branch_text(branch)
-                    if text:
-                        lines.append("    " + tag
-                                     + (" -> end: " if _has_return(branch)
-                                        else ": ") + text)
-                if not _branch_text(no) and not _has_return(no):
-                    lines.append("    " + tag_no + ":")
+                lines.append(pad + "if " + cond)
+                emit_branch(tag_yes, yes, depth + 1)
+                emit_branch(tag_no, no, depth + 1)
             elif it[0] == "switch":
-                lines.append("switch (" + it[1] + ")")
+                lines.append(pad + "switch (" + it[1] + ")")
                 for label, case_items in it[2]:
-                    text = _branch_text(case_items)
-                    if text:
-                        lines.append("    " + label
-                                     + (" -> end: " if _has_return(case_items)
-                                        else ": ") + text)
+                    emit_branch(label, case_items, depth + 1)
+            elif it[0] == "loop":
+                _, header, body = it
+                lines.append(pad + header)
+                emit(body, depth + 1)
+
+    def emit_branch(tag, items, depth):
+        # метка ветки, контент — строками на том же уровне (глубже ромба):
+        # не-меточные строки парсер относит к последней ветке
+        ret = _has_return(items)
+        pad = "    " * depth
+        lines.append(pad + tag + (" -> end:" if ret else ":"))
+        for it in items:
+            if it[0] == "stmt":
+                # return внутри ветки рисуется плиткой и уходит в «конец»
+                lines.append(pad + _abbrev_stmt(it[1]))
+            else:
+                emit([it], depth)
 
     emit(_c_items(main.body))
     return "\n".join(lines) + "\n"
@@ -1054,7 +1426,7 @@ def render_file(in_path, out_png, **kw):
     try:
         labels = kw.pop("labels", "en")
         text = c_to_gvn(src, labels=labels) if in_path.endswith(".c") else src
-        files = render(text, out_png, **kw)
+        files = render(text, out_png, labels=labels, **kw)
     except ParseError as e:
         print(f"ошибка: {e}", file=sys.stderr)
         return 1, []
@@ -1184,41 +1556,55 @@ def main(argv=None):
         print("использование: gostpadi схема.gvn | код.c [результат.png] "
               "[ещё.gvn ...] [-o результат.png] [--auto] [--scale=1.0] "
               "[--font=12] [--lw=1.1] [--dpi=200] [--show] [--gvn] "
-              "[--template]", file=sys.stderr)
+              "[--template]\n"
+              "несколько файлов: фигуры и масштаб общие, -o — имя "
+              "результата рядом с каждым входом или папка", file=sys.stderr)
         return 2
     # вторая позиция вида результат.png — это выход, а не вход
     if (len(args) == 2 and output is None
             and re.search(r"\.(png|jpg|jpeg|svg)$", args[1], re.I)):
         output = args[1]
         args = args[:1]
-    if len(args) > 1 and output:
-        print("-o можно указывать только с одним файлом схемы", file=sys.stderr)
-        return 2
 
-    if labels not in ("ru", "en"):
-        print(f"--labels={labels}: поддерживаются ru и en", file=sys.stderr)
-        return 2
     kw = dict(page=page, scale=scale, font=font, edge_lw=lw, dpi=dpi,
               labels=labels)
     code = 0
-    for inp in args:
-        out = output if (output and len(args) == 1) else _default_output(inp)
-        if inp.endswith(".c") and gvn:
-            try:
-                gvn_text = c_to_gvn(open(inp, encoding="utf-8").read())
-                gpath = os.path.splitext(inp)[0] + ".gvn"
-                with open(gpath, "w", encoding="utf-8") as f:
-                    f.write(gvn_text)
-                print(gpath)
-            except ParseError as e:
-                print(f"ошибка кода: {e}", file=sys.stderr)
-                code = 1
-        rc, files = render_file(inp, out, **kw)
-        code = max(code, rc)
-        if show and files:
+    if len(args) > 1:
+        # пачка схем: размеры фигур и масштаб общие — во всей работе
+        # блоки получаются одинакового размера
+        if output and (output.endswith(os.sep) or os.path.isdir(output)):
+            out_for = lambda inp: os.path.join(
+                output, os.path.splitext(os.path.basename(inp))[0] + ".png")
+        elif output:
+            # голое имя файла — положить результат рядом с каждым входом
+            out_for = lambda inp: os.path.join(os.path.dirname(inp) or ".",
+                                               output)
+        else:
+            out_for = _default_output
+        code, files = render_many(args, out_for, **kw)
+        if show:
             for f in files:
                 if not _show_in_terminal(f):
                     print(f"терминал без графики — картинка в файле: {f}")
+        return code
+    out = output if output else _default_output(args[0])
+    inp = args[0]
+    if inp.endswith(".c") and gvn:
+        try:
+            gvn_text = c_to_gvn(open(inp, encoding="utf-8").read())
+            gpath = os.path.splitext(inp)[0] + ".gvn"
+            with open(gpath, "w", encoding="utf-8") as f:
+                f.write(gvn_text)
+            print(gpath)
+        except ParseError as e:
+            print(f"ошибка кода: {e}", file=sys.stderr)
+            code = 1
+    rc, files = render_file(inp, out, **kw)
+    code = max(code, rc)
+    if show and files:
+        for f in files:
+            if not _show_in_terminal(f):
+                print(f"терминал без графики — картинка в файле: {f}")
     return code
 
 
