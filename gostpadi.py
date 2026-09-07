@@ -963,6 +963,8 @@ def layout(nodes, sizes, st=DEFAULT):
                     pend.append(dict(x=e["x"], y=e["y"], cb=col_bottom,
                                      rail=rail))
             else:
+                if e["dead"]:
+                    continue  # return — тупик: в слияние не идёт
                 # слияние — не вход в блок: без наконечника
                 edge([(e["x"], e["y"]), (e["x"], merge_y), (0.0, merge_y)],
                      arrow=False)
