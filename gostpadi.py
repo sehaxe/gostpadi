@@ -395,6 +395,9 @@ def parse(text, st=DEFAULT, labels="en"):
                 elif it_n.kind == "loop" and it_n.body:
                     _no_end_inside(it_n.body)
         for cur_b in branches:
+            for s_n in cur_b[1]:
+                if isinstance(s_n, str) and re.match(r"^return\b", s_n):
+                    cur_b[2] = False  # return — тупик, до «конца» не доходит
             _no_end_inside(cur_b[1])
         if not branches:
             raise ParseError(f"line {lineno}: «{kw}» has no branches")
@@ -451,6 +454,9 @@ def parse(text, st=DEFAULT, labels="en"):
         if re.match(r"^(if|switch)[ (]", stripped):
             nodes.append(decision(stripped, lineno, 0))
             continue
+        if re.match(r"^return\b", stripped):
+            nodes.append(Node("ret", wrap(stripped)))
+            continue
         if re.match(r"^(while|for)[ (]", stripped):
             nodes.append(cycle(stripped, lineno, 0))
             continue
@@ -481,7 +487,7 @@ def measure(st, kind, text):
     ls = text.split("\n")
     tw = max(len(l) for l in ls) * st.char_w
     n = len(ls)
-    if kind == "term":
+    if kind in ("term", "ret"):
         h = max(2 * g, up(n * st.pitch * 0.8 + 16.0))
         return max(up(tw + st.pad_x + 22.0), 2.0 * h), h
     if kind == "conn":
@@ -531,7 +537,8 @@ def normalize(nodes, st=DEFAULT):
         put_node(nd)
     # базовые размеры всегда есть, даже если типа в схеме не было
     # (иначе раскладка падает на отсутствующем ключе)
-    for kind, sample in (("term", "x"), ("io", "x"), ("act", "x"),
+    for kind, sample in (("term", "x"), ("ret", "return 1"),
+                         ("io", "x"), ("act", "x"),
                          ("if", "x"), ("loop", "x"), ("conn", "А")):
         put(kind, sample)
     return sizes
@@ -619,7 +626,8 @@ def layout(nodes, sizes, st=DEFAULT):
 
     def render_column(items, tx, top0):
         """Колонка на абсциссе tx: плитки и вложенные «если»/циклы.
-        Возвращает y низа содержимого (top0, если пусто)."""
+        Возвращает (y низа, тупик): тупик — колонку завершил return,
+        из него линии не выходят, хвост колонки недостижим."""
         prev_bottom = None
         for it in items:
             top = top0 if prev_bottom is None else prev_bottom + st.vgap
@@ -629,10 +637,21 @@ def layout(nodes, sizes, st=DEFAULT):
                 if prev_bottom is not None:
                     edge([(tx, prev_bottom), (tx, top)])
                 if it.kind == "if":
-                    prev_bottom = sub_if(it, tx, top)
+                    y_bot, dead = sub_if(it, tx, top)
                 else:
-                    prev_bottom = sub_loop(it, tx, top)
+                    y_bot, dead = sub_loop(it, tx, top)
+                if dead:
+                    return y_bot, True
+                prev_bottom = y_bot
                 continue
+            if re.match(r"^return\b", it):
+                # return — тупик ветки: скруглённый терминатор,
+                # из него не выходит ни одной линии
+                w_r, h_r = sizes["ret"]
+                if prev_bottom is not None:
+                    edge([(tx, prev_bottom), (tx, top)])
+                add("ret", tx, top + h_r / 2, it)
+                return top + h_r, True
             k = "io" if IO_RE.match(it) else "act"
             w_k, h_k = sizes[k]
             bottom = top + h_k
@@ -640,7 +659,7 @@ def layout(nodes, sizes, st=DEFAULT):
             if prev_bottom is not None:
                 edge([(tx, prev_bottom), (tx, top)])
             prev_bottom = bottom
-        return prev_bottom if prev_bottom is not None else top0
+        return (prev_bottom if prev_bottom is not None else top0), False
 
     def sub_if(nd, tx, top):
         """Вложенный ромб внутри колонки: под-колонки вокруг tx, слияние
@@ -676,6 +695,7 @@ def layout(nodes, sizes, st=DEFAULT):
             xs = [txx for _b, _s, _t, txx in plan]
             edge([(min(xs), y_b), (max(xs), y_b)], arrow=False)
         ybottoms = {}
+        deads = {}
         for b, side, t2, txx in plan:
             label, items_b = b[0], b[1]
             if side == "axis":
@@ -703,19 +723,22 @@ def layout(nodes, sizes, st=DEFAULT):
                     labels.append(dict(x=(v[0] + txx) / 2,
                                        y=cy - st.label_dy,
                                        text=label, ha="center"))
-            ybottoms[id(b)] = render_column(items_b, txx, top2)
+            ybottoms[id(b)], deads[id(b)] = render_column(items_b, txx,
+                                                          top2)
         merge2 = y_b
         for b, _s, _t, _x in plan:
             if b[2]:
                 raise ParseError("«-> конец» внутри вложенной ветки не "
                                  "поддерживается")
-            merge2 = max(merge2, ybottoms[id(b)] + st.mgap)
+            if not deads[id(b)]:
+                merge2 = max(merge2, ybottoms[id(b)] + st.mgap)
         for b, _s, _t, txx in plan:
+            if deads[id(b)]:
+                continue  # return — тупик: в слияние не идёт
             # слияние — не вход в блок: без наконечника
             edge([(txx, ybottoms[id(b)]), (txx, merge2), (tx, merge2)],
                  arrow=False)
 
-        n_merge = len(plan) + len(empty)
         if empty:
             merge2 = max(merge2, y_b + 2 * g)
             bx2 = tx + up(dw / 2 + 2 * g + tiers * pitch2 + sub)
@@ -726,7 +749,10 @@ def layout(nodes, sizes, st=DEFAULT):
                 labels.append(dict(x=tx + dw / 2 + st.label_exit_dx,
                                    y=cy - st.label_dy,
                                    text=lbl, ha="center"))
-        return max(merge2, max(ybottoms.values(), default=y_b))
+        all_dead = bool(plan) and all(deads[id(pb)]
+                                      for pb, _s, _t, _x in plan) \
+            and not empty
+        return max(merge2, max(ybottoms.values(), default=y_b)), all_dead
 
     def sub_loop(nd, tx, top):
         """Вложенный цикл внутри колонки: шестиугольник, тело на оси,
@@ -742,13 +768,15 @@ def layout(nodes, sizes, st=DEFAULT):
                 labels.append(dict(x=tx + st.label_dx,
                                    y=cy + lh / 2 + st.label_dy,
                                    text=nd.yes_label, ha="left"))
-            yend = render_column(nd.body, tx, top0)
+            yend, body_dead = render_column(nd.body, tx, top0)
         else:
-            yend = cy + lh / 2
+            yend, body_dead = cy + lh / 2, False
         merge2 = yend + st.mgap
-        # возврат: низ тела -> левый канал -> левая вершина шестиугольника
-        edge([(tx, yend), (tx - chan, yend), (tx - chan, cy),
-              (tx - lw / 2, cy)])
+        if not body_dead:
+            # возврат: низ тела -> левый канал -> левая вершина
+            # шестиугольника (если тело упёрлось в return — возврата нет)
+            edge([(tx, yend), (tx - chan, yend), (tx - chan, cy),
+                  (tx - lw / 2, cy)])
         # выход в точку слияния — не вход в блок: без наконечника
         edge([(tx + lw / 2, cy), (tx + chan, cy), (tx + chan, merge2),
               (tx, merge2)], arrow=False)
@@ -758,7 +786,7 @@ def layout(nodes, sizes, st=DEFAULT):
             labels.append(dict(x=(tx + lw / 2 + tx + chan) / 2,
                                y=cy - st.label_dy,
                                text=nd.no_label, ha="center"))
-        return merge2
+        return merge2, False
 
     prev, cursor = None, 0.0
     last = len(nodes) - 1
@@ -778,13 +806,15 @@ def layout(nodes, sizes, st=DEFAULT):
                     labels.append(dict(x=st.label_dx,
                                        y=cy + lh / 2 + st.label_dy,
                                        text=nd.yes_label, ha="left"))
-                yend = render_column(nd.body, 0.0, top0)
+                yend, body_dead = render_column(nd.body, 0.0, top0)
             else:
-                yend = cy + lh / 2
+                yend, body_dead = cy + lh / 2, False
             merge_y = yend + st.mgap
-            # возврат слева, выход справа — как у вложенного цикла;
-            # выход в точку слияния — не вход в блок: без наконечника
-            edge([(0.0, yend), (-chan, yend), (-chan, cy), (-lw / 2, cy)])
+            # возврат слева, выход справа; если тело упёрлось в return —
+            # возврата нет; выход в точку слияния — без наконечника
+            if not body_dead:
+                edge([(0.0, yend), (-chan, yend), (-chan, cy),
+                      (-lw / 2, cy)])
             edge([(lw / 2, cy), (chan, cy), (chan, merge_y), (0.0, merge_y)],
                  arrow=False)
 
@@ -796,6 +826,11 @@ def layout(nodes, sizes, st=DEFAULT):
             cursor = merge_y
             anchors.append(dict(sh=sh, ext=cursor))
             continue
+
+        # ---------- return — тупик на основной линии ----------
+        if nd.kind == "ret":
+            simple(nd, prev, cursor)
+            break  # из return линии не выходят — схема завершена
 
         # ---------- простой блок на основной линии ----------
         if nd.kind != "if":
@@ -895,14 +930,16 @@ def layout(nodes, sizes, st=DEFAULT):
                     # дальняя колонка той же стороны: метка на середине линии
                     labels.append(dict(x=(v[0] + tx) / 2, y=cy - st.label_dy,
                                        text=label, ha="center"))
-            yend = render_column(items_b, tx, top0)
-            exits[id(b)] = dict(x=tx, y=yend, to_end=to_end, side=side)
+            yend, dead = render_column(items_b, tx, top0)
+            exits[id(b)] = dict(x=tx, y=yend, to_end=to_end and not dead,
+                                side=side, dead=dead)
 
         # слияние колонок обратно на основную линию
         merge_y = cy + dh / 2
         for b, _s, _t, _x in plan:
-            if not exits[id(b)]["to_end"]:
-                merge_y = max(merge_y, exits[id(b)]["y"] + st.mgap)
+            e_x = exits[id(b)]
+            if not e_x["to_end"] and not e_x["dead"]:
+                merge_y = max(merge_y, e_x["y"] + st.mgap)
         col_bottom = max([e["y"] for e in exits.values()] or [cy + dh / 2])
         for b, side, _t, _x in plan:
             e = exits[id(b)]
@@ -931,7 +968,8 @@ def layout(nodes, sizes, st=DEFAULT):
                      arrow=False)
 
         # линии сливаются на основной оси; продолжение вниз — тоже слияние
-        n_merge = (sum(1 for e in exits.values() if not e["to_end"])
+        n_merge = (sum(1 for e in exits.values()
+                       if not e["to_end"] and not e["dead"])
                    + len(empty))
         has_axis = any(p[1] == "axis" for p in plan)
         # у решения оба выхода — из боковых вершин: пустая ветка
@@ -1040,7 +1078,7 @@ def _draw_shape(ax, sh, s, ox, oy, fs, lw, st):
     cx, cy = X(sh["cx"]), Y(sh["cy"])
     w, h = sh["w"] * s, sh["h"] * s
     k = sh["kind"]
-    if k == "term":
+    if k in ("term", "ret"):
         ax.add_patch(FancyBboxPatch(
             (cx - w / 2, cy - h / 2), w, h,
             boxstyle=f"round,pad=0,rounding_size={min(st.term_round * s, h / 2.4)}",
@@ -1169,7 +1207,7 @@ def render(text, out_png, page="a4", scale=None, font=FONT, edge_lw=None,
 
 def uniform_sizes(sizes_list):
     """Один размер фигур на всю пачку схем: по каждому типу — максимум."""
-    kinds = ("term", "io", "act", "if", "loop", "conn")
+    kinds = sorted(set().union(*(s.keys() for s in sizes_list)))
     return {k: (max(s[k][0] for s in sizes_list),
                 max(s[k][1] for s in sizes_list)) for k in kinds}
 
@@ -1361,12 +1399,6 @@ def _shorten_calls(cond):
     return re.sub(r'(\w+)\("[^"]*"[^)]*\)', r"\1(...)", cond)
 
 
-def _has_return(items):
-    return any(it[0] == "stmt" and it[1].lower().startswith("return")
-               for it in items)
-
-
-
 def _abbrev_stmt(s):
     """Длинные printf("…") сокращаем до printf("Начало фразы...") —
     как принято в учебных схемах; условия и присваивания не трогаем."""
@@ -1386,8 +1418,9 @@ def c_to_gvn(src, labels="en"):
     """Код C -> текст схемы .gvn; грамматику C99 читает pycparser.
     if/else (в том числе вложенные ветки и else if), switch/case/default,
     while/for (шестиугольник «подготовка»); объявления переменных
-    выбрасываются, ветка с return уходит в «конец», верхнеуровневый
-    return не рисуется (терминатор «конец» и так завершает схему)."""
+    выбрасываются; return в ветке — скруглённый тупик («конец» ветки),
+    верхнеуровневый return не рисуется (терминатор «конец» и так
+    завершает схему)."""
     from pycparser import c_ast, c_parser
     try:
         ast = c_parser.CParser().parse(_c_prepare(src))
@@ -1425,12 +1458,11 @@ def c_to_gvn(src, labels="en"):
     def emit_branch(tag, items, depth):
         # метка ветки, контент — строками на том же уровне (глубже ромба):
         # не-меточные строки парсер относит к последней ветке
-        ret = _has_return(items)
         pad = "    " * depth
-        lines.append(pad + tag + (" -> end:" if ret else ":"))
+        lines.append(pad + tag + ":")
         for it in items:
             if it[0] == "stmt":
-                # return внутри ветки рисуется плиткой и уходит в «конец»
+                # return внутри ветки — скруглённый тупик ветки
                 lines.append(pad + _abbrev_stmt(it[1]))
             else:
                 emit([it], depth)
