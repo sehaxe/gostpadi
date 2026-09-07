@@ -707,19 +707,21 @@ def layout(nodes, sizes, st=DEFAULT):
                                  "поддерживается")
             merge2 = max(merge2, ybottoms[id(b)] + st.mgap)
         for b, _s, _t, txx in plan:
-            edge([(txx, ybottoms[id(b)]), (txx, merge2), (tx, merge2)])
+            # слияние — не вход в блок: без наконечника
+            edge([(txx, ybottoms[id(b)]), (txx, merge2), (tx, merge2)],
+                 arrow=False)
+
         n_merge = len(plan) + len(empty)
         if empty:
             merge2 = max(merge2, y_b + 2 * g)
             bx2 = tx + up(dw / 2 + 2 * g + tiers * pitch2 + sub)
             for k_i, lbl in enumerate(empty):
                 edge([vr, (bx2 + k_i * 2 * g, cy),
-                      (bx2 + k_i * 2 * g, merge2), (tx, merge2)])
+                      (bx2 + k_i * 2 * g, merge2), (tx, merge2)],
+                     arrow=False)
                 labels.append(dict(x=tx + dw / 2 + st.label_exit_dx,
                                    y=cy - st.label_dy,
                                    text=lbl, ha="center"))
-        if n_merge and edges:
-            edges[-1].setdefault("dots", []).append((tx, merge2))
         return max(merge2, max(ybottoms.values(), default=y_b))
 
     def sub_loop(nd, tx, top):
@@ -743,15 +745,15 @@ def layout(nodes, sizes, st=DEFAULT):
         # возврат: низ тела -> левый канал -> левая вершина шестиугольника
         edge([(tx, yend), (tx - chan, yend), (tx - chan, cy),
               (tx - lw / 2, cy)])
-        # выход: правая вершина -> правый канал -> обратно на ось
+        # выход в точку слияния — не вход в блок: без наконечника
         edge([(tx + lw / 2, cy), (tx + chan, cy), (tx + chan, merge2),
-              (tx, merge2)])
+              (tx, merge2)], arrow=False)
+        # выход: правая вершина -> правый канал -> обратно на ось
+
         if nd.no_label:
             labels.append(dict(x=(tx + lw / 2 + tx + chan) / 2,
                                y=cy - st.label_dy,
                                text=nd.no_label, ha="center"))
-        if edges:
-            edges[-1].setdefault("dots", []).append((tx, merge2))
         return merge2
 
     prev, cursor = None, 0.0
@@ -776,15 +778,16 @@ def layout(nodes, sizes, st=DEFAULT):
             else:
                 yend = cy + lh / 2
             merge_y = yend + st.mgap
-            # возврат слева, выход справа — как у вложенного цикла
+            # возврат слева, выход справа — как у вложенного цикла;
+            # выход в точку слияния — не вход в блок: без наконечника
             edge([(0.0, yend), (-chan, yend), (-chan, cy), (-lw / 2, cy)])
-            edge([(lw / 2, cy), (chan, cy), (chan, merge_y), (0.0, merge_y)])
+            edge([(lw / 2, cy), (chan, cy), (chan, merge_y), (0.0, merge_y)],
+                 arrow=False)
+
             if nd.no_label:
                 labels.append(dict(x=(lw / 2 + chan) / 2,
                                    y=cy - st.label_dy,
                                    text=nd.no_label, ha="center"))
-            if edges:
-                edges[-1].setdefault("dots", []).append((0.0, merge_y))
             prev = (0.0, merge_y)
             cursor = merge_y
             anchors.append(dict(sh=sh, ext=cursor))
@@ -919,9 +922,11 @@ def layout(nodes, sizes, st=DEFAULT):
                     pend.append(dict(x=e["x"], y=e["y"], cb=col_bottom,
                                      rail=rail))
             else:
-                edge([(e["x"], e["y"]), (e["x"], merge_y), (0.0, merge_y)])
-        # ГОСТ 19.701-90: место слияния линий потока помечается точкой
-        # (входящая линия + продолжение вниз — тоже слияние)
+                # слияние — не вход в блок: без наконечника
+                edge([(e["x"], e["y"]), (e["x"], merge_y), (0.0, merge_y)],
+                     arrow=False)
+
+        # линии сливаются на основной оси; продолжение вниз — тоже слияние
         n_merge = (sum(1 for e in exits.values() if not e["to_end"])
                    + len(empty))
         has_axis = any(p[1] == "axis" for p in plan)
@@ -933,12 +938,10 @@ def layout(nodes, sizes, st=DEFAULT):
         for k, lbl in enumerate(empty):
             bx = (up(dw / 2 + 2 * g + max_tier * pitch + colw)
                   + k * 2 * g)
-            edge([vr, (bx, cy), (bx, merge_y), (0.0, merge_y)])
+            edge([vr, (bx, cy), (bx, merge_y), (0.0, merge_y)], arrow=False)
             labels.append(dict(x=dw / 2 + st.label_exit_dx
                                + k * 2 * g, y=cy - st.label_dy,
                                text=lbl, ha="center"))
-        if n_merge and edges:
-            edges[-1].setdefault("dots", []).append((0.0, merge_y))
         if not n_merge and not empty and not has_axis:
             edge([vb, (0.0, merge_y)], arrow=False)
         prev = (0.0, merge_y)
@@ -1095,9 +1098,6 @@ def _draw_edge(ax, e, s, ox, oy, lw=EDGE_LW):
             arrowstyle="->, head_width=0.7, head_length=0.6",
             mutation_scale=max(6.0, 12.0 * s),
             color="black", lw=lw, fill=False, shrinkA=0, shrinkB=0))
-    for dx_, dy_ in e.get("dots", []):  # точка слияния линий потока
-        ax.plot((dx_ - ox) * s, (dy_ - oy) * s, "o", color="black",
-                ms=max(2.6, 5.2 * s), zorder=3)
 
 
 def draw(shapes, edges, labels, bounds, out_png, page="a4", scale=None,

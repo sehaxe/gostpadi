@@ -108,10 +108,8 @@ def check_layout(name, text):
                 good = False
             if e.get("arrow", True):
                 ok = any(on_border(pts[-1], sh) for sh in shapes)
-                # стрелка может кончаться и в точке слияния (ГОСТ):
-                # либо помеченной точкой, либо на другой линии потока
-                if not ok and e.get("dots"):
-                    ok = True
+                # стрелка может кончаться и на другой линии потока
+                # (слияние без точки)
                 if not ok:
                     for e2 in edges:
                         if e2 is e:
