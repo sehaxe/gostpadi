@@ -134,8 +134,7 @@
     <div class="row">
       <button id="render" disabled>Схема →</button>
       <button id="share" class="btn" title="скопировать ссылку: код и схема вместе">ссылка</button>
-      <span class="hint">перерисовывается сама; <kbd>Ctrl</kbd>+<kbd>Enter</kbd>
-        — сразу</span>
+      <span class="hint">рендер по кнопке или <kbd>Ctrl</kbd>+<kbd>Enter</kbd></span>
     </div>
     <div id="status"><span class="spinner"></span><span class="stage">
       Загружаю Python (Pyodide)… первый раз ~20 секунд, потом из кеша.</span></div>
@@ -349,11 +348,6 @@ function applyResult(m) {
   history.replaceState(null, "", "#c=" + b64urlEncode($("code").value));
 }
 
-function queueRender() {
-  if (renderTimer) clearTimeout(renderTimer);
-  renderTimer = setTimeout(renderNow, 400);
-}
-
 function setCode(text, stem) {
   $("code").value = text;
   if (stem) fileStem = stem;
@@ -384,7 +378,7 @@ $("lw").addEventListener("change", () => {
 
 $("code").addEventListener("input", () => {
   store.set("gostpadi.code", $("code").value);
-  queueRender();
+  if (engineReady) status("Правки не нарисованы — нажми «Схема →»");
 });
 $("code").addEventListener("keydown", e => {
   if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
