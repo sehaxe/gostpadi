@@ -6,7 +6,8 @@ const SRC_URL =
 
 let pyodide = null;
 
-const RENDER = `
+// превью: только PNG (SVG готовим лениво, по клику «Скачать SVG»)
+const RENDER_PNG = `
 import json, base64, os, re
 import gostpadi
 
@@ -19,14 +20,12 @@ try:
 
     stem = "/tmp/" + stem
     pngs = gostpadi.render(src, stem + ".png", labels=labels, edge_lw=lw)
-    svgs = gostpadi.render(src, stem + ".svg", labels=labels, edge_lw=lw)
     sheets = []
-    for png, svg in zip(pngs, svgs):
+    for png in pngs:
         name = os.path.basename(png)[:-4]
         sheets.append({
             "name": name,
             "png": base64.b64encode(open(png, "rb").read()).decode(),
-            "svg": base64.b64encode(open(svg, "rb").read()).decode(),
         })
     out = {"ok": True, "sheets": sheets}
 except gostpadi.ParseError as e:
@@ -35,6 +34,32 @@ except gostpadi.ParseError as e:
            {"msg": e.msg, "line": e.line, "col": e.col, "src": e.src}}
 json.dumps(out)
 `;
+
+// один лист в SVG по запросу (index листа — в сообщении)
+const RENDER_SVG = `
+import json, base64, os, re
+import gostpadi
+
+src = code_text
+if "#include" in src or re.search(r"\\bint\\s+main\\s*\\(", src):
+    src = gostpadi.c_to_gvn(src, labels=labels)
+stem = "/tmp/" + stem
+svgs = gostpadi.render(src, stem + ".svg", labels=labels, edge_lw=lw)
+svg = svgs[index] if 0 <= index < len(svgs) else svgs[-1]
+json.dumps(base64.b64encode(open(svg, "rb").read()).decode())
+`;
+
+function post(m) { self.postMessage(m); }
+const fatal = (e) =>
+  post({ fatal: (e && e.message) ? e.message : String(e) });
+
+function setInputs(m) {
+  pyodide.globals.set("code_text", m.code);
+  pyodide.globals.set("labels", m.labels);
+  pyodide.globals.set("lw", m.lw);
+  pyodide.globals.set("stem", m.stem);
+  pyodide.globals.set("index", m.index | 0);
+}
 
 async function boot() {
   post({ stage: "Загружаю Python (Pyodide)…" });
@@ -58,21 +83,18 @@ async function boot() {
   post({ ready: true });
 }
 
-function post(m) { self.postMessage(m); }
-
-const fatal = (e) =>
-  post({ fatal: (e && e.message) ? e.message : String(e) });
-
 self.onmessage = (e) => {
   const m = e.data;
-  if (!m.render) return;
+  if (!m.render && !m.svgReq) return;
   const t0 = performance.now();
-  pyodide.globals.set("code_text", m.code);
-  pyodide.globals.set("labels", m.labels);
-  pyodide.globals.set("lw", m.lw);
-  pyodide.globals.set("stem", m.stem);
+  setInputs(m);
   try {
-    const res = JSON.parse(pyodide.runPython(RENDER));
+    if (m.svgReq) {
+      post({ svgReady: true, seq: m.seq, index: m.index,
+             b64: JSON.parse(pyodide.runPython(RENDER_SVG)) });
+      return;
+    }
+    const res = JSON.parse(pyodide.runPython(RENDER_PNG));
     res.seq = m.seq;  // страница отбрасывает ответы без seq (устаревшие)
     res.sec = ((performance.now() - t0) / 1000).toFixed(1).replace(".", ",");
     post(res);
