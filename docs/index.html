@@ -55,13 +55,15 @@
   header p { margin: 3px 0 0; font-size: 13px; opacity: .75; }
   header a { color: var(--hdr-link); }
   main { display: grid; grid-template-columns: minmax(320px, 2fr) 3fr;
-         gap: 14px; padding: 14px; max-width: 1500px; margin: 0 auto; }
+         gap: 16px; padding: 16px; max-width: 1500px; margin: 0 auto; }
   @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
   .pane { background: var(--pane); border: 1px solid var(--line);
-          border-radius: 10px; padding: 12px; align-self: start; }
-  .pane h2 { margin: 0; font-size: 14px; text-transform: uppercase;
-             letter-spacing: .6px; color: var(--muted); }
-  textarea { width: 100%; height: 38vh; min-height: 220px; resize: vertical;
+          border-radius: 14px; padding: 16px; align-self: start;
+          box-shadow: 0 1px 3px rgba(0, 0, 0, .07); }
+  .pane h2 { margin: 0; font-size: 13px; text-transform: uppercase;
+             letter-spacing: .8px; color: var(--muted); }
+  textarea { width: 100%; height: 42vh; min-height: 220px; resize: vertical;
+             margin-top: 12px;
              font: 13px/1.45 ui-monospace, Consolas, monospace;
              background: var(--pane); color: var(--ink);
              border: 1px solid var(--line2); border-radius: 8px;
@@ -70,8 +72,8 @@
   textarea:focus, .drop:focus-visible { outline: 2px solid var(--ok);
                                         outline-offset: 1px; }
   .drop { border: 2px dashed var(--drop-line); border-radius: 10px;
-          padding: 22px 14px; text-align: center; color: var(--muted);
-          font-size: 14px; cursor: pointer;
+          padding: 12px; text-align: center; color: var(--muted);
+          font-size: 13px; cursor: pointer; margin-top: 12px;
           transition: background .15s, border-color .15s; }
   .drop:hover { background: var(--hover); }
   .drop.over { border-color: var(--ok); background: var(--ok-soft);
@@ -119,7 +121,11 @@
                     max-height: calc(100vh - 28px); overflow: auto; }
   }
   .preview-head { display: flex; align-items: center; gap: 10px;
-                  margin-bottom: 8px; }
+                  padding-bottom: 10px; margin-bottom: 12px;
+                  border-bottom: 1px solid var(--line); }
+  .opts { display: flex; flex-wrap: wrap; gap: 16px; align-items: center;
+          margin: 12px 0 0; padding: 9px 12px;
+          background: var(--chip); border-radius: 8px; }
   #busy { display: flex; align-items: center; gap: 8px; font-size: 13px;
           color: var(--muted); }
   #busy .spinner { width: 13px; height: 13px; border-width: 2px; }
@@ -159,14 +165,12 @@
   <section class="pane">
     <div class="preview-head"><h2>Код</h2></div>
     <div class="drop" id="drop">
-      <b>Перетащи сюда файл</b> <code>.c</code> или <code>.gvn</code><br>
-      или нажми, чтобы выбрать
-      <span id="dropname"></span>
+      <b>Перетащи файл</b> <code>.c</code> или <code>.gvn</code> —
+      или нажми, чтобы выбрать<span id="dropname"></span>
       <input type="file" id="file" accept=".c,.gvn,.txt" hidden>
     </div>
-    <div class="row">
-      <label class="chk"><input type="checkbox" id="ru"> надписи по-русски
-        (начало/конец, да/нет)</label>
+    <div class="opts">
+      <label class="chk"><input type="checkbox" id="ru"> надписи по-русски</label>
       <label class="chk">линии
         <input type="range" id="lw" min="0.6" max="3" step="0.1" value="1"
                style="vertical-align:middle">
@@ -242,7 +246,6 @@ const EXAMPLES = { c: EXAMPLE_C, gvn: EXAMPLE_GVN };
 
 const $ = id => document.getElementById(id);
 let worker = null, engineReady = false, renderSeq = 0, wantRender = false;
-let renderTimer = null;
 let fileStem = "scheme";
 
 const store = {
@@ -487,7 +490,6 @@ if (hm) {
   $("code").value = (savedCode && savedCode.trim()) ? savedCode : EXAMPLE_C;
 }
 $("ru").checked = store.get("gostpadi.ru") !== "";
-wantRender = !!$("code").value.trim();
 boot();
 </script>
 </body>

@@ -73,6 +73,7 @@ self.onmessage = (e) => {
   pyodide.globals.set("stem", m.stem);
   try {
     const res = JSON.parse(pyodide.runPython(RENDER));
+    res.seq = m.seq;  // страница отбрасывает ответы без seq (устаревшие)
     res.sec = ((performance.now() - t0) / 1000).toFixed(1).replace(".", ",");
     post(res);
   } catch (err) {
