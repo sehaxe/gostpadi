@@ -20,85 +20,127 @@
 <meta name="theme-color" content="#16161a">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='9' y='2' width='14' height='8' rx='4' fill='none' stroke='%2316161a' stroke-width='2.4'/%3E%3Cpath d='M16 10v4M16 14l8 8-8 8-8-8z' fill='none' stroke='%2316161a' stroke-width='2.4'/%3E%3C/svg%3E">
 <style>
-  :root { color-scheme: light; }
+  :root {
+    color-scheme: light dark;
+    --bg: #f4f4ef; --ink: #16161a; --muted: #555; --faint: #777;
+    --pane: #ffffff; --line: #ddd; --line2: #ccc; --soft: #eeeeee;
+    --soft2: #e2e2da; --chip: #f6f6f0; --hover: #fafaf2;
+    --accent: #16161a; --accent-ink: #ffffff; --accent-hover: #2c2c33;
+    --hdr: #16161a; --hdr-ink: #f4f4ef; --hdr-link: #99aadd;
+    --ok: #2a7a2a; --ok-soft: #eef7ee; --drop-line: #b9b9a8;
+    --err-bg: #ffd9d9; --err-ink: #7a1020;
+    --err-sn: #ffffff; --err-sn-ink: #16161a;
+    --mark: #ffe1e1; --caret: #c0182c;
+    --scrim: rgba(10, 10, 12, .82);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #131315; --ink: #e6e6e1; --muted: #a6a6a0; --faint: #8b8b85;
+      --pane: #1c1c1f; --line: #35353a; --line2: #3f3f45; --soft: #2a2a2e;
+      --soft2: #36363b; --chip: #26262a; --hover: #242428;
+      --accent: #e6e6e1; --accent-ink: #16161a; --accent-hover: #ffffff;
+      --hdr: #0c0c0e; --hdr-ink: #e6e6e1; --hdr-link: #8cb8ff;
+      --ok: #7fd07f; --ok-soft: #1d2b1d; --drop-line: #4a4a52;
+      --err-bg: #3a1719; --err-ink: #ffadae;
+      --err-sn: #141416; --err-sn-ink: #e6e6e1;
+      --mark: #45232a; --caret: #ff7a7b;
+      --scrim: rgba(0, 0, 0, .86);
+    }
+  }
   * { box-sizing: border-box; }
   body { margin: 0; font-family: system-ui, -apple-system, sans-serif;
-         background: #f4f4ef; color: #16161a; }
-  header { background: #16161a; color: #f4f4ef; padding: 14px 22px; }
+         background: var(--bg); color: var(--ink); }
+  header { background: var(--hdr); color: var(--hdr-ink); padding: 14px 22px; }
   header h1 { margin: 0; font-size: 20px; letter-spacing: .3px; }
   header p { margin: 3px 0 0; font-size: 13px; opacity: .75; }
-  header a { color: #9ad; }
+  header a { color: var(--hdr-link); }
   main { display: grid; grid-template-columns: minmax(320px, 2fr) 3fr;
          gap: 14px; padding: 14px; max-width: 1500px; margin: 0 auto; }
   @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
-  .pane { background: #fff; border: 1px solid #ddd; border-radius: 10px;
-          padding: 12px; align-self: start; }
+  .pane { background: var(--pane); border: 1px solid var(--line);
+          border-radius: 10px; padding: 12px; align-self: start; }
   .pane h2 { margin: 0; font-size: 14px; text-transform: uppercase;
-             letter-spacing: .6px; color: #666; }
+             letter-spacing: .6px; color: var(--muted); }
   textarea { width: 100%; height: 38vh; min-height: 220px; resize: vertical;
              font: 13px/1.45 ui-monospace, Consolas, monospace;
-             border: 1px solid #ccc; border-radius: 8px; padding: 10px;
+             background: var(--pane); color: var(--ink);
+             border: 1px solid var(--line2); border-radius: 8px;
+             padding: 10px;
              white-space: pre; overflow-wrap: normal; overflow-x: auto; }
-  textarea:focus, .drop:focus-visible { outline: 2px solid #2a7a2a;
+  textarea:focus, .drop:focus-visible { outline: 2px solid var(--ok);
                                         outline-offset: 1px; }
-  .drop { border: 2px dashed #b9b9a8; border-radius: 10px; padding: 22px 14px;
-          text-align: center; color: #666; font-size: 14px; cursor: pointer;
+  .drop { border: 2px dashed var(--drop-line); border-radius: 10px;
+          padding: 22px 14px; text-align: center; color: var(--muted);
+          font-size: 14px; cursor: pointer;
           transition: background .15s, border-color .15s; }
-  .drop:hover { background: #fafaf2; }
-  .drop.over { border-color: #2a7a2a; background: #eef7ee; color: #2a5a2a; }
-  .drop code { background: #f0f0e8; border-radius: 4px; padding: 0 4px; }
+  .drop:hover { background: var(--hover); }
+  .drop.over { border-color: var(--ok); background: var(--ok-soft);
+               color: var(--ok); }
+  .drop code { background: var(--chip); border-radius: 4px; padding: 0 4px; }
   .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
          margin: 10px 0; }
-  button, .btn { background: #16161a; color: #fff; border: 0; border-radius: 8px;
+  button, .btn { background: var(--accent); color: var(--accent-ink);
+                 border: 0; border-radius: 8px;
                  padding: 9px 14px; font-size: 14px; cursor: pointer;
                  text-decoration: none; display: inline-block; }
   button:disabled { opacity: .5; cursor: default; }
-  .btn { background: #eee; color: #16161a; border: 1px solid #ccc; }
-  .btn:hover { background: #e2e2da; }
-  button:not(:disabled):hover { background: #2c2c33; }
-  .ex { background: #eee; color: #16161a; border: 1px solid #ccc;
+  .btn { background: var(--soft); color: var(--ink);
+         border: 1px solid var(--line2); }
+  .btn:hover { background: var(--soft2); }
+  button:not(:disabled):hover { background: var(--accent-hover); }
+  .ex { background: var(--soft); color: var(--ink);
+        border: 1px solid var(--line2);
         border-radius: 999px; padding: 4px 12px; font-size: 13px; }
-  .ex:hover { background: #e2e2da; }
-  kbd { font: 11px ui-monospace, Consolas, monospace; border: 1px solid #ccc;
+  .ex:hover { background: var(--soft2); }
+  kbd { font: 11px ui-monospace, Consolas, monospace;
+        border: 1px solid var(--line2);
         border-bottom-width: 2px; border-radius: 4px; padding: 0 4px;
-        background: #f6f6f0; color: #555; }
+        background: var(--chip); color: var(--muted); }
   #status { display: flex; align-items: center; gap: 10px;
-            padding: 9px 12px; border-radius: 8px; background: #eee;
+            padding: 9px 12px; border-radius: 8px; background: var(--soft);
             font-size: 13px; min-height: 20px; }
-  #status.err { background: #ffd9d9; color: #7a1020;
+  #status.err { background: var(--err-bg); color: var(--err-ink);
                 flex-direction: column; align-items: stretch; }
   #status .snippet { font: 12px/1.5 ui-monospace, Consolas, monospace;
-                     background: #fff; color: #16161a; border-radius: 6px;
+                     background: var(--err-sn); color: var(--err-sn-ink);
+                     border-radius: 6px;
                      padding: 8px 10px; margin: 8px 0 2px; cursor: pointer;
                      overflow-x: auto; white-space: pre; }
-  #status .snippet .bad { background: #ffe1e1; }
-  #status .snippet .caret { color: #c0182c; font-weight: 700; }
-  .spinner { width: 16px; height: 16px; border: 3px solid #bbb;
-             border-top-color: #16161a; border-radius: 50%;
+  #status .snippet .bad { background: var(--mark); }
+  #status .snippet .caret { color: var(--caret); font-weight: 700; }
+  .spinner { width: 16px; height: 16px; border: 3px solid var(--line2);
+             border-top-color: var(--ink); border-radius: 50%;
              animation: spin 0.8s linear infinite; flex: none; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .stage { color: #555; }
+  .stage { color: var(--muted); }
   #preview-wrap { position: relative; min-height: 300px; }
+  @media (min-width: 901px) {
+    #preview-wrap { position: sticky; top: 14px;
+                    max-height: calc(100vh - 28px); overflow: auto; }
+  }
   .preview-head { display: flex; align-items: center; gap: 10px;
                   margin-bottom: 8px; }
   #busy { display: flex; align-items: center; gap: 8px; font-size: 13px;
-          color: #555; }
+          color: var(--muted); }
   #busy .spinner { width: 13px; height: 13px; border-width: 2px; }
-  #images img { max-width: 100%; border: 1px solid #ddd; border-radius: 8px;
-                margin: 8px 0; background: #fff; cursor: zoom-in; }
-  #images img:hover { border-color: #bbb; }
+  /* лист схемы всегда белый — независимо от темы сайта */
+  #images img { max-width: 100%; border: 1px solid var(--line);
+                border-radius: 8px; margin: 8px 0; background: #fff;
+                cursor: zoom-in; }
+  #images img:hover { border-color: var(--line2); }
   .sheet { margin-bottom: 14px; }
-  .sheet h3 { margin: 6px 0; font-size: 13px; color: #444; }
+  .sheet h3 { margin: 6px 0; font-size: 13px; color: var(--muted); }
   .sheet .row { margin: 4px 0 10px; }
-  .hint { font-size: 12px; color: #777; margin: 6px 0 0; }
+  .hint { font-size: 12px; color: var(--faint); margin: 6px 0 0; }
   .empty { text-align: center; padding: 40px 10px; }
-  .empty p { color: #888; font-size: 14px; margin: 14px 0 0; }
+  .empty p { color: var(--faint); font-size: 14px; margin: 14px 0 0; }
   .skeleton { height: 120px; border-radius: 8px; margin: 8px 0;
-              background: linear-gradient(100deg, #eee 40%, #f7f7f0 50%, #eee 60%);
+              background: linear-gradient(100deg, var(--soft) 40%,
+                          var(--soft2) 50%, var(--soft) 60%);
               background-size: 200% 100%; animation: shimmer 1.2s infinite; }
   @keyframes shimmer { to { background-position: -200% 0; } }
   .chk { font-size: 13px; display: flex; gap: 6px; align-items: center; }
-  #lightbox { position: fixed; inset: 0; background: rgba(10, 10, 12, .82);
+  #lightbox { position: fixed; inset: 0; background: var(--scrim);
               display: flex; align-items: center; justify-content: center;
               padding: 20px; cursor: zoom-out; z-index: 10; }
   #lightbox[hidden] { display: none; }
@@ -115,6 +157,7 @@
 </header>
 <main>
   <section class="pane">
+    <div class="preview-head"><h2>Код</h2></div>
     <div class="drop" id="drop">
       <b>Перетащи сюда файл</b> <code>.c</code> или <code>.gvn</code><br>
       или нажми, чтобы выбрать
@@ -152,7 +195,8 @@
       <div class="skeleton" style="width:70%"></div>
       <div class="skeleton" style="width:90%"></div>
       <div class="skeleton" style="width:55%"></div>
-      <p>Схема появится здесь, как только движок догрузится.</p>
+      <p>Напиши код слева и нажми «Схема →» — схема появится здесь,
+         как только движок догрузится.</p>
     </div>
   </section>
 </main>
