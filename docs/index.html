@@ -50,7 +50,14 @@
   #status { display: flex; align-items: center; gap: 10px;
             padding: 9px 12px; border-radius: 8px; background: #eee;
             font-size: 13px; min-height: 20px; }
-  #status.err { background: #ffd9d9; color: #7a1020; }
+  #status.err { background: #ffd9d9; color: #7a1020;
+                flex-direction: column; align-items: stretch; }
+  #status .snippet { font: 12px/1.5 ui-monospace, Consolas, monospace;
+                     background: #fff; color: #16161a; border-radius: 6px;
+                     padding: 8px 10px; margin: 8px 0 2px; cursor: pointer;
+                     overflow-x: auto; white-space: pre; }
+  #status .snippet .bad { background: #ffe1e1; }
+  #status .snippet .caret { color: #c0182c; font-weight: 700; }
   .spinner { width: 16px; height: 16px; border: 3px solid #bbb;
              border-top-color: #16161a; border-radius: 50%;
              animation: spin 0.8s linear infinite; flex: none; }
@@ -194,6 +201,49 @@ function status(html, isErr) {
   el.innerHTML = html;
 }
 
+// ошибка разбора: заголовок со строкой + фрагмент кода с кареткой;
+// клик по фрагменту открывает это место в редакторе
+function showError(err) {
+  const el = $("status");
+  el.className = "err";
+  el.innerHTML = "";
+  const b = document.createElement("b");
+  b.textContent = err.line ? `строка ${err.line}: ${err.msg}`
+                           : `Ошибка: ${err.msg}`;
+  el.appendChild(b);
+  const rows = $("code").value.split("\n");
+  if (!err.line || err.line < 1 || err.line > rows.length) return;
+  const pre = document.createElement("pre");
+  pre.className = "snippet";
+  pre.title = "нажми — покажу место в коде";
+  const to = Math.min(rows.length, err.line + 1);
+  const w = String(to).length;
+  for (let i = Math.max(1, err.line - 1); i <= to; i++) {
+    const row = document.createElement("div");
+    row.textContent = String(i).padStart(w) + " | " + (rows[i - 1] ?? "");
+    if (i === err.line) row.className = "bad";
+    pre.appendChild(row);
+  }
+  if (err.col > 0) {
+    const caret = document.createElement("div");
+    caret.className = "caret";
+    caret.textContent = " ".repeat(w) + " | " + " ".repeat(err.col - 1) + "^";
+    pre.appendChild(caret);
+  }
+  pre.addEventListener("click", () => revealLine(err.line, err.col));
+  el.appendChild(pre);
+}
+
+function revealLine(line, col) {
+  const ta = $("code");
+  const rows = ta.value.split("\n");
+  let off = 0;
+  for (let i = 0; i < line - 1; i++) off += rows[i].length + 1;
+  ta.focus();
+  ta.setSelectionRange(off + Math.max(0, (col || 1) - 1),
+                       off + (rows[line - 1] || "").length);
+}
+
 function spinner(text) {
   status(`<span class="spinner"></span><span class="stage">${text}</span>`);
 }
@@ -213,9 +263,8 @@ async function init() {
     spinner("Загружаю pycparser…");
     await pyodide.loadPackage("pycparser");
     spinner("Загружаю движок gostpadi…");
-    // ?t= — сброс кеша: браузер не должен держать старую версию движка
     let src = null;
-    for (const url of ["../gostpadi.py", SRC_URL + "?t=" + Date.now()]) {
+    for (const url of ["../gostpadi.py", SRC_URL]) {
       try {
         const r = await fetch(url);
         if (r.ok) { src = await r.text(); break; }
@@ -246,28 +295,40 @@ async function renderNow() {
     pyodide.globals.set("labels", labels);
     pyodide.globals.set("lw", lw);
     pyodide.globals.set("stem", fileStem);
-    const sheets = JSON.parse(pyodide.runPython(`
+    const res = JSON.parse(pyodide.runPython(`
 import json, base64, os, re
 import gostpadi
 
-# если это код C — сначала переводим в текст схемы
-src = code_text
-if "#include" in src or re.search(r"\\bint\\s+main\\s*\\(", src):
-    src = gostpadi.c_to_gvn(src, labels=labels)
+out = {}
+try:
+    # если это код C — сначала переводим в текст схемы
+    src = code_text
+    if "#include" in src or re.search(r"\\bint\\s+main\\s*\\(", src):
+        src = gostpadi.c_to_gvn(src, labels=labels)
 
-stem = "/tmp/" + stem
-pngs = gostpadi.render(src, stem + ".png", labels=labels, edge_lw=lw)
-svgs = gostpadi.render(src, stem + ".svg", labels=labels, edge_lw=lw)
-out = []
-for png, svg in zip(pngs, svgs):
-    name = os.path.basename(png)[:-4]
-    out.append({
-        "name": name,
-        "png": base64.b64encode(open(png, "rb").read()).decode(),
-        "svg": base64.b64encode(open(svg, "rb").read()).decode(),
-    })
+    stem = "/tmp/" + stem
+    pngs = gostpadi.render(src, stem + ".png", labels=labels, edge_lw=lw)
+    svgs = gostpadi.render(src, stem + ".svg", labels=labels, edge_lw=lw)
+    sheets = []
+    for png, svg in zip(pngs, svgs):
+        name = os.path.basename(png)[:-4]
+        sheets.append({
+            "name": name,
+            "png": base64.b64encode(open(png, "rb").read()).decode(),
+            "svg": base64.b64encode(open(svg, "rb").read()).decode(),
+        })
+    out = {"ok": True, "sheets": sheets}
+except gostpadi.ParseError as e:
+    # ошибка с местом: движок знает строку, столбец и саму строку кода
+    out = {"ok": False, "error":
+           {"msg": e.msg, "line": e.line, "col": e.col, "src": e.src}}
 json.dumps(out)
 `));
+    if (!res.ok) {
+      showError(res.error);
+      return;
+    }
+    const sheets = res.sheets;
     const box = $("images");
     box.innerHTML = "";
     for (const [i, sh] of sheets.entries()) {

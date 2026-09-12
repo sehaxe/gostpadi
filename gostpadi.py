@@ -187,7 +187,23 @@ output printf("c = %d", c)
 
 
 class ParseError(Exception):
-    pass
+    """Ошибка разбора с местом: line (с 1), col (с 1), src — строка
+    исходника, чтобы показать пользователю, где именно он ошибся."""
+
+    def __init__(self, msg, line=None, col=None, src=None):
+        super().__init__(msg)
+        self.msg = msg
+        self.line = line
+        self.col = col
+        self.src = src
+
+    def locate(self, src_text):
+        """Дописать строку исходника по номеру line (если ещё нет)."""
+        if self.line is not None and self.src is None:
+            ls = src_text.splitlines()
+            if 1 <= self.line <= len(ls):
+                self.src = ls[self.line - 1]
+        return self
 
 
 class Node:
@@ -329,7 +345,8 @@ def parse(text, st=DEFAULT, labels="en"):
                 return items
             lineno, line = take()
             if indent_of((lineno, line)) > indent:
-                raise ParseError(f"line {lineno}: неожиданный отступ")
+                raise ParseError("неожиданный отступ",
+                                 line=lineno, src=line)
             s = line.strip()
             if re.match(r"^(if|switch)[ (]", s):
                 items.append(decision(s, lineno, indent))
@@ -351,7 +368,8 @@ def parse(text, st=DEFAULT, labels="en"):
             if top is None or indent_of(top) < indent + 4:
                 break
             if indent_of(top) > indent + 4:
-                raise ParseError(f"line {top[0]}: неожиданный отступ")
+                raise ParseError("неожиданный отступ",
+                                 line=top[0], src=top[1])
             lineno_b, line_b = take()
             s_b = line_b.strip()
             # метка — «да:», «case 1 -> end:» …: до двоеточия не бывает
@@ -373,8 +391,8 @@ def parse(text, st=DEFAULT, labels="en"):
             else:
                 if cur is None:
                     raise ParseError(
-                        f"line {lineno_b}: branch must look like "
-                        "«label: text»")
+                        "branch must look like «label: text»",
+                        line=lineno_b, src=line_b)
                 if re.match(r"^(if|switch)[ (]", s_b):
                     cur[1].append(decision(s_b, lineno_b, indent + 4))
                 elif re.match(r"^(while|for)[ (]", s_b):
@@ -401,7 +419,8 @@ def parse(text, st=DEFAULT, labels="en"):
                     cur_b[2] = False  # return — тупик, до «конца» не доходит
             _no_end_inside(cur_b[1])
         if not branches:
-            raise ParseError(f"line {lineno}: «{kw}» has no branches")
+            raise ParseError(f"«{kw}» has no branches",
+                             line=lineno, src=line)
         if cond.startswith("switch"):
             # подписи кейсов: значения переключателя («status = 1»),
             # не синтаксис C «case 1»; default остаётся default
@@ -448,10 +467,12 @@ def parse(text, st=DEFAULT, labels="en"):
         stripped = line.strip()
         indent = len(line) - len(line.lstrip())
         if stripped.startswith("@") and indent == 0:
-            raise ParseError(f"line {lineno}: unknown directive «{stripped}»")
+            raise ParseError(f"unknown directive «{stripped}»",
+                             line=lineno, src=line)
         if indent >= 4:
-            raise ParseError(f"line {lineno}: indentation is only allowed "
-                             "inside an «if» block")
+            raise ParseError("indentation is only allowed "
+                             "inside an «if» block",
+                             line=lineno, src=line)
         if re.match(r"^(if|switch)[ (]", stripped):
             nodes.append(decision(stripped, lineno, 0))
             continue
@@ -1285,7 +1306,10 @@ def render_many(inputs, out_for, page="a4", zoom=None, font=FONT,
 
 
 def _strip_c_comments(src):
-    """Убирает /* */ и // из кода C, строковые литералы не трогает."""
+    """Забивает /* */ и // пробелами, строковые литералы не трогает.
+    Комментарий не вырезается, а заменяется пробелами той же длины:
+    номера строк и столбцов ошибок pycparser остаются координатами
+    исходника."""
     out, i, n, in_str = [], 0, len(src), False
     while i < n:
         c = src[i]
@@ -1307,11 +1331,12 @@ def _strip_c_comments(src):
         if c == "/" and src[i + 1:i + 2] in ("/", "*"):
             if src[i + 1] == "/":
                 j = src.find("\n", i)
-                i = n if j < 0 else j
             else:
                 j = src.find("*/", i + 2)
-                i = n if j < 0 else j + 2
-                out.append(" ")
+                j = n if j < 0 else min(j + 2, n)
+            j = n if j < 0 else j
+            out.append(" " * (j - i))
+            i = j
             continue
         out.append(c)
         i += 1
@@ -1319,10 +1344,11 @@ def _strip_c_comments(src):
 
 
 def _c_prepare(src):
-    """pycparser ест чистый C: снять комментарии и строки препроцессора."""
+    """pycparser ест чистый C: снять комментарии и строки препроцессора.
+    Директивы заменяются пустыми строками — нумерация строк сохраняется."""
     src = _strip_c_comments(src)
-    return "\n".join(l for l in src.splitlines()
-                     if not l.lstrip().startswith("#"))
+    return "\n".join("" if l.lstrip().startswith("#") else l
+                     for l in src.splitlines())
 
 
 _RETURN_RE = re.compile(r"^return\b")  # инструкция return (в ветке — тупик)
@@ -1383,7 +1409,8 @@ def _c_stmt(node):
             else:
                 if not cases:
                     raise ParseError(
-                        "в switch инструкция до первой метки case")
+                        "в switch инструкция до первой метки case",
+                        line=getattr(node.coord, "line", None))
                 cases[-1][1].extend(_c_stmt(st))
                 continue
             body = [x for s in st.stmts for x in _c_stmt(s)]
@@ -1404,9 +1431,11 @@ def _c_stmt(node):
         nxt = _c_text(node.next) if node.next is not None else ""
         return [("loop", f"for {init}; {cond}; {nxt}", _c_block(node.stmt))]
     if isinstance(node, A.DoWhile):
-        raise ParseError("в коде цикл do-while — перепиши на while")
+        raise ParseError("в коде цикл do-while — перепиши на while",
+                         line=getattr(node.coord, "line", None))
     if isinstance(node, A.Goto):
-        raise ParseError("в коде goto — не поддерживается")
+        raise ParseError("в коде goto — не поддерживается",
+                         line=getattr(node.coord, "line", None))
     text = _c_text(node)
     return [] if not text else [("stmt", text)]
 
@@ -1441,8 +1470,14 @@ def c_to_gvn(src, labels="en"):
     from pycparser import c_ast, c_parser
     try:
         ast = c_parser.CParser().parse(_c_prepare(src))
-    except c_parser.ParseError as e:  # 2.x: из plyparser, 3.x: отсюда же
-        raise ParseError(f"в коде C: {e}") from None
+    except c_parser.ParseError as e:
+        # pycparser пишет место в тексте («:12:7: …») — вытаскиваем его
+        m = re.search(r"(\d+):(\d+):\s*(.*)$", str(e))
+        if m:
+            raise ParseError(f"в коде C: {m.group(3)}",
+                             line=int(m.group(1)), col=int(m.group(2))
+                             ).locate(src) from None
+        raise ParseError(f"в коде C: {e}").locate(src) from None
     main = next((ext for ext in ast.ext
                  if isinstance(ext, c_ast.FuncDef)
                  and ext.decl.name == "main"), None)
@@ -1484,7 +1519,10 @@ def c_to_gvn(src, labels="en"):
             else:
                 emit([it], depth)
 
-    emit(_c_items(main.body))
+    try:
+        emit(_c_items(main.body))
+    except ParseError as e:  # ошибки в глубине AST: показать строку C
+        raise e.locate(src) from None
     return "\n".join(lines) + "\n"
 
 
@@ -1504,7 +1542,8 @@ def render_file(in_path, out_png, **kw):
         text = c_to_gvn(src, labels=labels) if in_path.endswith(".c") else src
         files = render(text, out_png, labels=labels, **kw)
     except ParseError as e:
-        print(f"ошибка: {e}", file=sys.stderr)
+        where = f"{in_path}:{e.line}: " if e.line else f"{in_path}: "
+        print(f"{where}{e}", file=sys.stderr)
         return 1, []
     except OSError as e:
         print(f"не удалось записать: {e}", file=sys.stderr)
@@ -1673,7 +1712,8 @@ def main(argv=None):
                 f.write(gvn_text)
             print(gpath)
         except ParseError as e:
-            print(f"ошибка кода: {e}", file=sys.stderr)
+            where = f"{inp}:{e.line}: " if e.line else f"{inp}: "
+            print(f"{where}{e}", file=sys.stderr)
             code = 1
     rc, files = render_file(inp, out, **kw)
     code = max(code, rc)
