@@ -396,7 +396,7 @@ def parse(text, st=DEFAULT, labels="en"):
                     _no_end_inside(it_n.body)
         for cur_b in branches:
             for s_n in cur_b[1]:
-                if isinstance(s_n, str) and re.match(r"^return\b", s_n):
+                if isinstance(s_n, str) and _RETURN_RE.match(s_n):
                     cur_b[2] = False  # return — тупик, до «конца» не доходит
             _no_end_inside(cur_b[1])
         if not branches:
@@ -454,7 +454,7 @@ def parse(text, st=DEFAULT, labels="en"):
         if re.match(r"^(if|switch)[ (]", stripped):
             nodes.append(decision(stripped, lineno, 0))
             continue
-        if re.match(r"^return\b", stripped):
+        if _RETURN_RE.match(stripped):
             nodes.append(Node("ret", wrap(stripped)))
             continue
         if re.match(r"^(while|for)[ (]", stripped):
@@ -644,7 +644,7 @@ def layout(nodes, sizes, st=DEFAULT):
                     return y_bot, True
                 prev_bottom = y_bot
                 continue
-            if re.match(r"^return\b", it):
+            if _RETURN_RE.match(it):
                 # return — тупик ветки: скруглённый терминатор,
                 # из него не выходит ни одной линии
                 w_r, h_r = sizes["ret"]
@@ -852,7 +852,7 @@ def layout(nodes, sizes, st=DEFAULT):
                 for i, (letter, src) in enumerate(nd.inbound):
                     cx_ = (sh["cx"] - sh["w"] / 2 - 2 * st.conn_r - st.rail
                            - i * (2 * st.conn_r + st.conn_step))
-                    add("conn", cx_, sh["cy"], f"{letter}\n{src}")
+                    add("conn", cx_, sh["cy"], letter)
                     edge([(cx_ + st.conn_r, sh["cy"]), (stop_l, sh["cy"])])
             continue
 
@@ -1051,8 +1051,8 @@ def split_scheme(nodes, sizes, st=DEFAULT):
         # кружок внизу этого листа -> продолжение на следующем листе;
         # кружок вверху следующего -> лист, откуда пришли (len(parts)
         # после append = номер текущего листа)
-        parts.append(items[:cut] + [Node("conn", f"{letter}\n{len(parts) + 2}")])
-        items = [Node("conn", f"{letter}\n{len(parts)}")] + items[cut:]
+        parts.append(items[:cut] + [Node("conn", letter)])
+        items = [Node("conn", letter)] + items[cut:]
     # ветки «-> конец» в не-последних частях кончаются кружком-соединителем:
     # сам «конец» живёт на последнем листе, туда же ставятся его кружки
     links = []
@@ -1066,7 +1066,7 @@ def split_scheme(nodes, sizes, st=DEFAULT):
                     li += 1
                     # кружок у ветки ссылается на лист с «концом»
                     nd.branches[bi] = (br[0], br[1], True,
-                                       f"{letter}\n{len(parts)}")
+                                       letter)
                     links.append((letter, pi + 1))
     parts[-1][-1].inbound = sorted(links)
     return parts
@@ -1144,24 +1144,26 @@ def _draw_edge(ax, e, s, ox, oy, lw=EDGE_LW):
             color="black", lw=lw, fill=False, shrinkA=0, shrinkB=0))
 
 
-def draw(shapes, edges, labels, bounds, out_png, page="a4", scale=None,
-         font=None, edge_lw=None, dpi=None, st=DEFAULT):
-    """Раскладка -> PNG. page="a4" вписывает в А4 вертикально (165x247 мм),
-    page="auto" оставляет канвас по размеру контента (масштаб 1:1),
-    scale задаёт масштаб вручную, font — базовый кегль, edge_lw — толщина
-    всех линий и рамок (по умолчанию единая EDGE_LW), dpi — плотность."""
-    lw = edge_lw if edge_lw else st.edge_lw
+def draw(shapes, edges, labels, bounds, out_png, scale=None,
+         zoom=None, font=None, edge_lw=None, dpi=None, st=DEFAULT):
+    """Раскладка -> PNG. Страница всегда вписана в А4 вертикально
+    (165x247 мм); scale — принудительный физический масштаб (не больше
+    вписывания, для одинаковых блоков на нескольких страницах), zoom —
+    кратность плотности пикселей; font — кегль, edge_lw — толщина линий,
+    dpi — базовая плотность."""
     font = font if font is not None else st.font
     dpi = dpi if dpi else st.dpi
     dpi = dpi or DPI
     minx, miny, W, H = bounds
+    # физический размер страницы — никогда больше А4; scale допускается
+    # только меньше вписывания (единый масштаб нескольких страниц),
+    # zoom поднимает плотность пикселей, не размер
+    s = min(1.0, (A4_W - 2 * PAGE_PAD) / W, (A4_H - 2 * PAGE_PAD) / H)
     if scale is not None:
-        s = scale
-    elif page == "auto":
-        # оптимально: 1:1, если влезает; сверх А4 — ужимаем, но не режем
-        s = min(1.0, (A4_W - 2 * PAGE_PAD) / W, (A4_H - 2 * PAGE_PAD) / H)
-    else:
-        s = min(1.0, (A4_W - 2 * PAGE_PAD) / W, (A4_H - 2 * PAGE_PAD) / H)
+        s = min(s, scale)
+    # толщина линий и рамок масштабируется вместе с блоками
+    lw = (edge_lw if edge_lw else st.edge_lw) * s
+    dpi = dpi * (zoom or 1.0)
     fig = plt.figure(figsize=(W * s / 72.0, H * s / 72.0),
                      dpi=dpi / max(s, 1e-6))
     ax = fig.add_axes([0, 0, 1, 1])
@@ -1186,25 +1188,38 @@ def _suffixed(path, n):
     return f"{root}-{n}.{ext}" if dot else f"{path}-{n}"
 
 
-def render(text, out_png, page="a4", scale=None, font=FONT, edge_lw=None,
+def render(text, out_png, page="a4", zoom=None, font=FONT, edge_lw=None,
            dpi=DPI, labels="en"):
     """Текст схемы -> PNG (или несколько: результат.png, результат-2.png...).
 
-    page="a4" — вписать в А4 (по умолчанию), page="auto" — канвас по
-    контенту без ужимания, scale — принудительный масштаб, font — кегль,
-    edge_lw — единая толщина линий, dpi — плотность пикселей.
+    Все страницы схемы — в пределах А4 и в одном масштабе: блоки на любом
+    листе получаются одного размера. page="auto" — не ужимать, если и так
+    влезает; zoom — кратность плотности пикселей; font — кегль;
+    edge_lw — единая толщина линий; dpi — базовая плотность.
     Возвращает список записанных файлов.
     """
     nodes = parse(text, labels=labels)
     sizes = normalize(nodes)
     files = []
     parts = [nodes] if page == "auto" else split_scheme(nodes, sizes)
-    for k, part in enumerate(parts):
+    layouts = [layout(part, sizes) for part in parts]
+    fit = pages_fit(layouts, cap=1.0 if page == "auto" else float("inf"))
+    lw = edge_lw if edge_lw else EDGE_LW
+    for k, res in enumerate(layouts):
         target = out_png if k == 0 else _suffixed(out_png, k + 1)
-        draw(*layout(part, sizes)[:4], target, page=page, scale=scale,
-             font=font, edge_lw=edge_lw, dpi=dpi)
+        draw(*res[:4], target, scale=fit, zoom=zoom,
+             font=font, edge_lw=lw, dpi=dpi)
         files.append(target)
     return files
+
+
+def pages_fit(layouts, cap=float("inf")):
+    """Единый физический масштаб для набора страниц: вписываем самую
+    неудобную из них, остальные при том же масштабе заведомо помещаются;
+    блоки на всех страницах получаются одного размера. cap ограничивает
+    сверху (1:1 для режимов без ужимания)."""
+    return min(min(cap, (A4_W - 2 * PAGE_PAD) / b[3][2],
+                   (A4_H - 2 * PAGE_PAD) / b[3][3]) for b in layouts)
 
 
 def uniform_sizes(sizes_list):
@@ -1214,7 +1229,7 @@ def uniform_sizes(sizes_list):
                 max(s[k][1] for s in sizes_list)) for k in kinds}
 
 
-def render_many(inputs, out_for, page="a4", scale=None, font=FONT,
+def render_many(inputs, out_for, page="a4", zoom=None, font=FONT,
                 edge_lw=None, dpi=DPI, labels="en"):
     """Несколько схем одним прогоном — фигуры одного размера во всей пачке.
 
@@ -1251,17 +1266,14 @@ def render_many(inputs, out_for, page="a4", scale=None, font=FONT,
                       for k in range(len(parts) - 1)])
         laid.append((inp, targets,
                      [layout(part, sizes) for part in parts]))
-    if scale is None:
-        # общий масштаб всех страниц: вписываем самую неудобную из них,
-        # остальные при том же масштабе заведомо помещаются
-        cap = 1.0 if page == "auto" else float("inf")
-        scale = min([min(cap, (A4_W - 2 * PAGE_PAD) / b[3][2],
-                         (A4_H - 2 * PAGE_PAD) / b[3][3])
-                     for _i, _t, ls in laid for b in ls])
+    # общий масштаб всех страниц всех схем: вписываем самую неудобную,
+    # блоки во всей пачке получаются одного размера и никогда больше А4
+    fit = pages_fit([res for _i, _t, ls in laid for res in ls],
+                    cap=1.0 if page == "auto" else float("inf"))
     lw = edge_lw if edge_lw else EDGE_LW
     for inp, targets, ls in laid:
         for target, res in zip(targets, ls):
-            draw(*res[:4], target, page=page, scale=scale, font=font,
+            draw(*res[:4], target, scale=fit, zoom=zoom, font=font,
                  edge_lw=lw, dpi=dpi)
             files.append(target)
             print(target)
@@ -1311,6 +1323,8 @@ def _c_prepare(src):
     return "\n".join(l for l in src.splitlines()
                      if not l.lstrip().startswith("#"))
 
+
+_RETURN_RE = re.compile(r"^return\b")  # инструкция return (в ветке — тупик)
 
 _C_PREC = {"||": 1, "&&": 2, "|": 3, "^": 4, "&": 5, "==": 6, "!=": 6,
            "<": 7, ">": 7, "<=": 7, ">=": 7, "<<": 8, ">>": 8,
@@ -1552,7 +1566,7 @@ def main(argv=None):
     if argv is None:
         argv = sys.argv
     args, output = [], None
-    page, scale, font, lw, dpi = "a4", None, FONT, None, DPI
+    page, zoom, font, lw, dpi = "a4", None, FONT, None, DPI
     show, template, gvn = False, False, False
     labels = "en"
     i = 1
@@ -1581,7 +1595,7 @@ def main(argv=None):
         elif a.startswith("--output="):
             output = a[9:]
         elif a.startswith("--scale="):
-            scale = float(a[8:])
+            zoom = float(a[8:])
         elif a.startswith("--font="):
             font = float(a[7:])
         elif a.startswith("--lw="):
@@ -1604,7 +1618,7 @@ def main(argv=None):
     if labels not in ("ru", "en"):
         print(f"--labels={labels}: поддерживаются ru и en", file=sys.stderr)
         return 2
-    for opt_name, val in (("--scale", scale), ("--font", font),
+    for opt_name, val in (("--scale", zoom), ("--font", font),
                           ("--lw", lw), ("--dpi", dpi)):
         if val is not None and val <= 0:
             print(f"{opt_name}={val}: значение должно быть > 0",
@@ -1615,7 +1629,7 @@ def main(argv=None):
         return 0
     if not args:
         print("использование: gostpadi схема.gvn | код.c [результат.png] "
-              "[ещё.gvn ...] [-o результат.png] [--auto] [--scale=1.0] "
+              "[ещё.gvn ...] [-o результат.png] [--auto] [--scale=3] "
               "[--font=12] [--lw=1.1] [--dpi=200] [--show] [--gvn] "
               "[--template]\n"
               "несколько файлов: фигуры и масштаб общие, -o — имя "
@@ -1627,7 +1641,7 @@ def main(argv=None):
         output = args[1]
         args = args[:1]
 
-    kw = dict(page=page, scale=scale, font=font, edge_lw=lw, dpi=dpi,
+    kw = dict(page=page, zoom=zoom, font=font, edge_lw=lw, dpi=dpi,
               labels=labels)
     code = 0
     if len(args) > 1:
