@@ -235,7 +235,13 @@ async function init() {
 
 async function renderNow() {
   if (!engineReady) return;
-  const text = $("code").value;
+  // мессенджеры при копировании ломают код: типографские кавычки,
+  // неразрывные пробелы, длинные тире — приводим обратно к C-шным
+  const text = $("code").value
+    .replace(/[“”„‟«»]/g, '"')
+    .replace(/[‘’‚‛]/g, "'")
+    .replace(/[\u00A0\u202F\u2007]/g, " ")
+    .replace(/[–—―]/g, "-");
   const labels = $("ru").checked ? "ru" : "en";
   const lw = parseFloat($("lw").value);
   spinner("Рисую схему…");
