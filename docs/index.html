@@ -133,6 +133,7 @@
       aria-label="код на C или текст схемы .gvn"></textarea>
     <div class="row">
       <button id="render" disabled>Схема →</button>
+      <button id="share" class="btn" title="скопировать ссылку: код и схема вместе">ссылка</button>
       <span class="hint">перерисовывается сама; <kbd>Ctrl</kbd>+<kbd>Enter</kbd>
         — сразу</span>
     </div>
@@ -158,7 +159,6 @@
 </main>
 <div id="lightbox" hidden><img alt="схема крупно"></div>
 
-<script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
 <script>
 "use strict";
 
@@ -197,11 +197,8 @@ const EXAMPLE_GVN = [
 
 const EXAMPLES = { c: EXAMPLE_C, gvn: EXAMPLE_GVN };
 
-const SRC_URL =
-  "https://raw.githubusercontent.com/sehaxe/gostpadi/main/gostpadi.py";
-
 const $ = id => document.getElementById(id);
-let pyodide = null, engineReady = false, initPromise = null;
+let worker = null, engineReady = false, renderSeq = 0, wantRender = false;
 let renderTimer = null;
 let fileStem = "scheme";
 
@@ -268,134 +265,100 @@ function setBusy(on) {
   $("render").disabled = on || !engineReady;
 }
 
-async function init() {
-  if (initPromise) return initPromise;
-  initPromise = (async () => {
-    spinner("Загружаю Python (Pyodide)…");
-    pyodide = await loadPyodide();
-    spinner("Загружаю matplotlib…");
-    await pyodide.loadPackage("matplotlib");
-    spinner("Загружаю pycparser…");
-    await pyodide.loadPackage("pycparser");
-    spinner("Загружаю движок gostpadi…");
-    let src = null;
-    for (const url of ["../gostpadi.py", SRC_URL]) {
-      try {
-        const r = await fetch(url);
-        if (r.ok) { src = await r.text(); break; }
-      } catch (e) { /* пробуем следующий адрес */ }
-    }
-    if (src === null) throw new Error("не удалось получить gostpadi.py");
-    pyodide.FS.writeFile("/gostpadi.py", src, { encoding: "utf8" });
-    pyodide.runPython("import sys; sys.path.insert(0, '/')");
-    pyodide.runPython("import gostpadi");
-    engineReady = true;
-    setBusy(false);
-    status("Готово: перетащи файл или нажми «Схема →»");
-    if ($("code").value.trim()) renderNow();
-  })();
-  return initPromise;
-}
-
-async function renderNow() {
-  if (!engineReady) return;
-  const text = $("code").value;
-  const labels = $("ru").checked ? "ru" : "en";
-  const lw = parseFloat($("lw").value);
-  spinner("Рисую схему…");
-  setBusy(true);
-  const t0 = performance.now();
-  try {
-    pyodide.globals.set("code_text", text);
-    pyodide.globals.set("labels", labels);
-    pyodide.globals.set("lw", lw);
-    pyodide.globals.set("stem", fileStem);
-    const res = JSON.parse(pyodide.runPython(`
-import json, base64, os, re
-import gostpadi
-
-out = {}
-try:
-    # если это код C — сначала переводим в текст схемы
-    src = code_text
-    if "#include" in src or re.search(r"\\bint\\s+main\\s*\\(", src):
-        src = gostpadi.c_to_gvn(src, labels=labels)
-
-    stem = "/tmp/" + stem
-    pngs = gostpadi.render(src, stem + ".png", labels=labels, edge_lw=lw)
-    svgs = gostpadi.render(src, stem + ".svg", labels=labels, edge_lw=lw)
-    sheets = []
-    for png, svg in zip(pngs, svgs):
-        name = os.path.basename(png)[:-4]
-        sheets.append({
-            "name": name,
-            "png": base64.b64encode(open(png, "rb").read()).decode(),
-            "svg": base64.b64encode(open(svg, "rb").read()).decode(),
-        })
-    out = {"ok": True, "sheets": sheets}
-except gostpadi.ParseError as e:
-    # ошибка с местом: движок знает строку, столбец и саму строку кода
-    out = {"ok": False, "error":
-           {"msg": e.msg, "line": e.line, "col": e.col, "src": e.src}}
-json.dumps(out)
-`));
-    if (!res.ok) {
-      showError(res.error);
+// Pyodide живёт в воркере (docs/engine.js): страница не замирает при рендере
+function boot() {
+  if (worker) return;
+  worker = new Worker("engine.js");
+  worker.onmessage = (e) => {
+    const m = e.data;
+    if (m.stage) { spinner(m.stage); return; }
+    if (m.ready) {
+      engineReady = true;
+      setBusy(false);
+      status("Готово: перетащи файл или нажми «Схема →»");
+      if (wantRender) { wantRender = false; renderNow(); }
       return;
     }
-    const sheets = res.sheets;
-    const box = $("images");
-    box.innerHTML = "";
-    for (const [i, sh] of sheets.entries()) {
-      const sheet = document.createElement("div");
-      sheet.className = "sheet";
-      const h = document.createElement("h3");
-      h.textContent = sheets.length > 1 ? `лист ${i + 1}` : "схема";
-      sheet.appendChild(h);
-      const img = document.createElement("img");
-      img.src = "data:image/png;base64," + sh.png;
-      img.alt = sh.name;
-      img.title = "нажми, чтобы увеличить";
-      sheet.appendChild(img);
-      const row = document.createElement("div");
-      row.className = "row";
-      const a1 = document.createElement("a");
-      a1.href = "data:image/png;base64," + sh.png;
-      a1.download = sh.name + ".png";
-      a1.textContent = "Скачать PNG";
-      a1.className = "btn";
-      const a2 = document.createElement("a");
-      a2.href = "data:image/svg+xml;base64," + sh.svg;
-      a2.download = sh.name + ".svg";
-      a2.textContent = "Скачать SVG";
-      a2.className = "btn";
-      row.append(a1, a2);
-      sheet.appendChild(row);
-      box.appendChild(sheet);
+    if (m.seq !== undefined) { applyResult(m); return; }
+    if (m.fatal !== undefined) {
+      setBusy(false);
+      status("Ошибка: " + m.fatal, true);
     }
-    $("placeholder").hidden = true;
-    const sec = ((performance.now() - t0) / 1000).toFixed(1).replace(".", ",");
-    status(`Готово: листов ${sheets.length} · ${sec} с`);
-  } catch (e) {
-    const msg = (e && e.message) ? e.message : String(e);
-    status("Ошибка: " + msg, true);
-  } finally {
-    setBusy(false);
+  };
+}
+
+// код в ссылке: #c=<base64url> — можно кинуть другу код вместе со схемой
+function b64urlEncode(str) {
+  const bytes = new TextEncoder().encode(str);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function b64urlDecode(s) {
+  s = s.replace(/-/g, "+").replace(/_/g, "/");
+  while (s.length % 4) s += "=";
+  const bin = atob(s);
+  return new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0)));
+}
+
+function renderNow() {
+  if (!engineReady) { wantRender = true; boot(); return; }
+  spinner("Рисую схему…");
+  setBusy(true);
+  worker.postMessage({ render: true, seq: ++renderSeq,
+                       code: $("code").value,
+                       labels: $("ru").checked ? "ru" : "en",
+                       lw: parseFloat($("lw").value), stem: fileStem });
+}
+
+function applyResult(m) {
+  setBusy(false);
+  if (!m.ok) { showError(m.error); return; }
+  const sheets = m.sheets;
+  const box = $("images");
+  box.innerHTML = "";
+  for (const [i, sh] of sheets.entries()) {
+    const sheet = document.createElement("div");
+    sheet.className = "sheet";
+    const h = document.createElement("h3");
+    h.textContent = sheets.length > 1 ? `лист ${i + 1}` : "схема";
+    sheet.appendChild(h);
+    const img = document.createElement("img");
+    img.src = "data:image/png;base64," + sh.png;
+    img.alt = sh.name;
+    img.title = "нажми, чтобы увеличить";
+    sheet.appendChild(img);
+    const row = document.createElement("div");
+    row.className = "row";
+    const a1 = document.createElement("a");
+    a1.href = "data:image/png;base64," + sh.png;
+    a1.download = sh.name + ".png";
+    a1.textContent = "Скачать PNG";
+    a1.className = "btn";
+    const a2 = document.createElement("a");
+    a2.href = "data:image/svg+xml;base64," + sh.svg;
+    a2.download = sh.name + ".svg";
+    a2.textContent = "Скачать SVG";
+    a2.className = "btn";
+    row.append(a1, a2);
+    sheet.appendChild(row);
+    box.appendChild(sheet);
   }
+  $("placeholder").hidden = true;
+  status(`Готово: листов ${sheets.length} · ${m.sec} с`);
+  history.replaceState(null, "", "#c=" + b64urlEncode($("code").value));
 }
 
 function queueRender() {
   if (renderTimer) clearTimeout(renderTimer);
-  renderTimer = setTimeout(() => {
-    if (engineReady) renderNow();
-  }, 400);
+  renderTimer = setTimeout(renderNow, 400);
 }
 
 function setCode(text, stem) {
   $("code").value = text;
   if (stem) fileStem = stem;
   store.set("gostpadi.code", text);
-  if (engineReady) renderNow(); else init();
+  renderNow();
 }
 
 function loadFile(f) {
@@ -405,10 +368,10 @@ function loadFile(f) {
   f.text().then(t => setCode(t, fileStem));
 }
 
-$("render").addEventListener("click", () => { if (engineReady) renderNow(); });
+$("render").addEventListener("click", renderNow);
 $("ru").addEventListener("change", () => {
   store.set("gostpadi.ru", $("ru").checked ? "1" : "");
-  if (engineReady) renderNow();
+  renderNow();
 });
 
 $("lw").addEventListener("input", () => {
@@ -416,7 +379,7 @@ $("lw").addEventListener("input", () => {
 });
 $("lw").addEventListener("change", () => {
   store.set("gostpadi.lw", $("lw").value);
-  if (engineReady) renderNow();
+  renderNow();
 });
 
 $("code").addEventListener("input", () => {
@@ -426,8 +389,19 @@ $("code").addEventListener("input", () => {
 $("code").addEventListener("keydown", e => {
   if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
     e.preventDefault();
-    if (engineReady) renderNow();
+    renderNow();
   }
+});
+
+// ссылка на текущий код со схемой — в буфер обмена
+$("share").addEventListener("click", () => {
+  const url = location.origin + location.pathname +
+              "#c=" + b64urlEncode($("code").value);
+  navigator.clipboard.writeText(url).then(() => {
+    const b = $("share");
+    b.textContent = "скопировано";
+    setTimeout(() => { b.textContent = "ссылка"; }, 1500);
+  }).catch(() => {});
 });
 
 for (const b of document.querySelectorAll(".ex")) {
@@ -465,10 +439,18 @@ document.addEventListener("keydown", e => {
   if (e.key === "Escape" && !lightbox.hidden) lightbox.hidden = true;
 });
 
-const savedCode = store.get("gostpadi.code");
-$("code").value = (savedCode && savedCode.trim()) ? savedCode : EXAMPLE_C;
+// код из ссылки (#c=…) важнее сохранённого в localStorage
+const hm = location.hash.match(/[#&]c=([A-Za-z0-9_-]+)/);
+if (hm) {
+  $("code").value = b64urlDecode(hm[1]);
+  fileStem = "code";
+} else {
+  const savedCode = store.get("gostpadi.code");
+  $("code").value = (savedCode && savedCode.trim()) ? savedCode : EXAMPLE_C;
+}
 $("ru").checked = store.get("gostpadi.ru") !== "";
-init();
+wantRender = !!$("code").value.trim();
+boot();
 </script>
 </body>
 </html>
