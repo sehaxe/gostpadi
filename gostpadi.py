@@ -117,6 +117,7 @@ class Style:
 
     # качество и подписи
     dpi: int = 200                # плотность пикселей
+    max_px_per_pt: float = 3.5    # предел плотности: пунктов схемы -> пиксели
     edge_lw: float = 1.0          # толщина всех линий и рамок (тонкая, 0.35 мм)
     label_dx: float = 14.0        # отступ подписи кейса от линии спуска
     label_dy: float = 12.0        # подпись: над плиткой / под углом ромба
@@ -1163,9 +1164,9 @@ def draw(shapes, edges, labels, bounds, out_png, scale=None,
         s = min(s, scale)
     # толщина линий и рамок масштабируется вместе с блоками
     lw = (edge_lw if edge_lw else st.edge_lw) * s
-    dpi = dpi * (zoom or 1.0)
-    fig = plt.figure(figsize=(W * s / 72.0, H * s / 72.0),
-                     dpi=dpi / max(s, 1e-6))
+    # плотность: базовый dpi * zoom, но не выше разумного предела
+    ppi = min(dpi * (zoom or 1.0), st.max_px_per_pt * 72.0) / max(s, 1e-6)
+    fig = plt.figure(figsize=(W * s / 72.0, H * s / 72.0), dpi=ppi)
     ax = fig.add_axes([0, 0, 1, 1])
     ax.set_xlim(0, W * s)
     ax.set_ylim(H * s, 0)
@@ -1179,7 +1180,7 @@ def draw(shapes, edges, labels, bounds, out_png, scale=None,
         ax.text((l["x"] - minx) * s, (l["y"] - miny) * s, l["text"],
                 fontsize=max(4.5, fs * 0.85), family="DejaVu Sans",
                 weight="bold", ha=l["ha"], va="center", color="black")
-    fig.savefig(out_png, dpi=dpi / max(s, 1e-6), facecolor="white")
+    fig.savefig(out_png, dpi=ppi, facecolor="white")
     plt.close(fig)
 
 
