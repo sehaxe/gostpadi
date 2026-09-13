@@ -44,6 +44,8 @@ jobs:
       id-token: write   # trusted publisher на PyPI (sehaxe/gostpadi, ci.yml)
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # нужны теги: версия собирается hatch-vcs из git describe
 
       - uses: astral-sh/setup-uv@v5
 
