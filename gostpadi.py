@@ -71,7 +71,7 @@ from matplotlib.patches import Circle, FancyArrowPatch, FancyBboxPatch, Polygon,
 
 # ---------- настройки оформления ----------
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 
 
 @dataclass(frozen=True)
@@ -1688,8 +1688,19 @@ def main(argv=None):
         # пачка схем: размеры фигур и масштаб общие — во всей работе
         # блоки получаются одинакового размера
         if output and (output.endswith(os.sep) or os.path.isdir(output)):
-            out_for = lambda inp: os.path.join(
-                output, os.path.splitext(os.path.basename(inp))[0] + ".png")
+            # одинаковые имена входов (проекты из main.c) не перезаписывают
+            # друг друга: добавляем имя папки — 1/main.c -> 1-main.png
+            stems = [os.path.splitext(os.path.basename(a))[0].lower()
+                     for a in args]
+            dup = len(set(stems)) < len(stems)
+
+            def out_for(inp):
+                base = os.path.splitext(os.path.basename(inp))[0]
+                if dup:
+                    parent = os.path.basename(
+                        os.path.dirname(os.path.abspath(inp)))
+                    base = f"{parent}-{base}"
+                return os.path.join(output, base + ".png")
         elif output:
             # голое имя файла — положить результат рядом с каждым входом
             out_for = lambda inp: os.path.join(os.path.dirname(inp) or ".",
