@@ -71,7 +71,7 @@ from matplotlib.patches import Circle, FancyArrowPatch, FancyBboxPatch, Polygon,
 
 # ---------- настройки оформления ----------
 
-__version__ = "1.2.1"
+__version__ = "1.3.0"
 
 
 @dataclass(frozen=True)
@@ -1240,8 +1240,16 @@ def pages_fit(layouts, cap=float("inf")):
     неудобную из них, остальные при том же масштабе заведомо помещаются;
     блоки на всех страницах получаются одного размера. cap ограничивает
     сверху (1:1 для режимов без ужимания)."""
-    return min(min(cap, (A4_W - 2 * PAGE_PAD) / b[3][2],
-                   (A4_H - 2 * PAGE_PAD) / b[3][3]) for b in layouts)
+    # широкая страница вписывается в альбомную ориентацию (ГОСТ 2.105
+    # разрешает альбомные листы для больших схем), высокая — в книжную
+    pad = 2 * PAGE_PAD
+    best = cap
+    for b in layouts:
+        w, h = b[3][2], b[3][3]
+        portrait = min((A4_W - pad) / w, (A4_H - pad) / h)
+        landscape = min((A4_H - pad) / w, (A4_W - pad) / h)
+        best = min(best, max(portrait, landscape))
+    return best
 
 
 def uniform_sizes(sizes_list):
