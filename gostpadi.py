@@ -71,7 +71,7 @@ from matplotlib.patches import Circle, FancyArrowPatch, FancyBboxPatch, Polygon,
 
 # ---------- настройки оформления ----------
 
-__version__ = "1.3.0"
+__version__ = "1.2.2"
 
 
 @dataclass(frozen=True)
@@ -1162,7 +1162,7 @@ def _draw_edge(ax, e, s, ox, oy, lw=EDGE_LW):
         ax.add_patch(FancyArrowPatch(
             pts[-2], pts[-1],
             arrowstyle="->, head_width=0.7, head_length=0.6",
-            mutation_scale=max(6.0, 12.0 * s),
+            mutation_scale=12.0 * s,
             color="black", lw=lw, fill=False, shrinkA=0, shrinkB=0))
 
 
@@ -1199,7 +1199,7 @@ def draw(shapes, edges, labels, bounds, out_png, scale=None,
         _draw_edge(ax, e, s, minx, miny, lw)
     for l in labels:
         ax.text((l["x"] - minx) * s, (l["y"] - miny) * s, l["text"],
-                fontsize=max(4.5, fs * 0.85), family="DejaVu Sans",
+                fontsize=fs * 0.85, family="DejaVu Sans",
                 weight="bold", ha=l["ha"], va="center", color="black")
     fig.savefig(out_png, dpi=ppi, facecolor="white")
     plt.close(fig)
