@@ -6,4 +6,5 @@ pub mod generate;
 pub mod ir;
 pub mod layout;
 pub mod linter;
+pub mod pipeline;
 pub mod style;
