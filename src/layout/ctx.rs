@@ -2,7 +2,7 @@
 //! единых полуширин колонок (nhe), рельсов «-> конец» (max_tier).
 
 use super::types::{Anchor, Edge, Label, Layout, Shape, Sizes};
-use crate::ir::{Node, NodeKind};
+use crate::ir::{Node, NodeKind, Stmt};
 use crate::style::Style;
 
 /// Ветка «-> конец»: ждёт блока «конец» (слияние T-узлом над ним).
@@ -47,9 +47,45 @@ impl<'a> Ctx<'a> {
                 NodeKind::Decision => {
                     let m = scan.branches.iter().filter(|b| !b.stmts.is_empty()).count();
                     max_tier = max_tier.max(m.saturating_sub(1) / 2);
-                    for b in &scan.branches {
-                        if !b.stmts.is_empty() {
-                            nhe = nhe.max(super::column::extent(sizes, st, colw, &b.stmts));
+                    match super::ifnode::cascade_cols(scan) {
+                        Some((k, c)) if k >= 2 => {
+                            // ярусы каскада: рельсы «-> конец» обязаны
+                            // обходить его внешние колонки
+                            max_tier = max_tier.max(c.saturating_sub(1) / 2);
+                            // колонки каскада: да-звенья и хвост; «нет»-ветка
+                            // с вложенным ромбом не рендерится как колонка
+                            // и nhe не раздувает
+                            let mut cur = scan;
+                            loop {
+                                nhe = nhe.max(super::column::extent(
+                                    sizes,
+                                    st,
+                                    colw,
+                                    &cur.branches[0].stmts,
+                                ));
+                                let last = cur.branches.last().unwrap();
+                                match last.stmts.as_slice() {
+                                    [Stmt::Node(d)] if d.kind == NodeKind::Decision => cur = d,
+                                    _ => {
+                                        if !last.stmts.is_empty() {
+                                            nhe = nhe.max(super::column::extent(
+                                                sizes,
+                                                st,
+                                                colw,
+                                                &last.stmts,
+                                            ));
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        _ => {
+                            for b in &scan.branches {
+                                if !b.stmts.is_empty() {
+                                    nhe = nhe.max(super::column::extent(sizes, st, colw, &b.stmts));
+                                }
+                            }
                         }
                     }
                 }

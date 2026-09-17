@@ -63,6 +63,10 @@ const LABEL_DY_RATE: f64 = 1.0; // подпись над точкой: базо�
 const VERTEX_LABEL_DY_RATE: f64 = 11.0 / 12.0;
 const LABEL_GAP_RATE: f64 = 16.0 / 12.0;
 
+/// Модульная сетка 5 мм (b = 2a, ГОСТ 19.701-90) при font = 12 pt.
+/// Все зазоры задаются целыми долями сетки, без литералов вида 14.2.
+const GRID: f64 = 14.17;
+
 impl Style {
     /// Шаблон DEFAULT записан для font = 12 pt, lw = 1.0; произвольные
     /// значения кегля/пера — только через with_metrics, иначе
@@ -81,16 +85,16 @@ impl Style {
         term_pad_v: 16.0,
         term_pad_h: 22.0,
         line_slack: 4.0,
-        grid: 14.17,
-        vgap: 42.5,
-        hgap: 28.3,
-        colgap: 14.2,
-        mgap: 28.3,
-        jog: 14.2,
-        rail: 14.2,
-        rail_step: 28.3,
-        conn_r: 14.2,
-        conn_step: 14.2,
+        grid: GRID,
+        vgap: 3.0 * GRID,
+        hgap: 2.0 * GRID,
+        colgap: GRID,
+        mgap: 2.0 * GRID,
+        jog: GRID,
+        rail: GRID,
+        rail_step: 2.0 * GRID,
+        conn_r: GRID,
+        conn_step: GRID,
         aspect: 1.0,
         a4_w: 468.0,
         a4_h: 700.0,
@@ -99,7 +103,7 @@ impl Style {
         edge_lw: 1.0,
         label_dx: 14.0,
         label_dy: 12.0,
-        label_exit_dx: 28.34,
+        label_exit_dx: 2.0 * GRID,
         label_axis_dx: 14.0,
         vertex_label_dy: 11.0,
         label_gap: 16.0,
@@ -126,6 +130,17 @@ impl Style {
         s.label_dy = font * LABEL_DY_RATE;
         s.vertex_label_dy = font * VERTEX_LABEL_DY_RATE;
         s.label_gap = font * LABEL_GAP_RATE;
+        // зазоры кратны модульной сетке (см. GRID)
+        s.vgap = 3.0 * s.grid;
+        s.hgap = 2.0 * s.grid;
+        s.colgap = s.grid;
+        s.mgap = 2.0 * s.grid;
+        s.jog = s.grid;
+        s.rail = s.grid;
+        s.rail_step = 2.0 * s.grid;
+        s.conn_r = s.grid;
+        s.conn_step = s.grid;
+        s.label_exit_dx = 2.0 * s.grid;
         s
     }
 
@@ -165,6 +180,35 @@ mod tests {
         assert!((s.label_exit_dx - s.grid * 2.0).abs() < 0.01);
         assert_eq!(s.max_chars, 30);
         assert_eq!(s.cond_chars, 22);
+    }
+    /// Все зазоры кратны модульной сетке: возврат литералов (42.5, 28.3,
+    /// 14.2) ломает сеточный инвариант раскладки.
+    #[test]
+    fn gaps_are_grid_multiples() {
+        for (src, s) in [
+            ("default", Style::default()),
+            ("with_metrics", Style::with_metrics(24.0, 2.0)),
+        ] {
+            let g = s.grid;
+            for (name, v, k) in [
+                ("vgap", s.vgap, 3.0),
+                ("hgap", s.hgap, 2.0),
+                ("colgap", s.colgap, 1.0),
+                ("mgap", s.mgap, 2.0),
+                ("jog", s.jog, 1.0),
+                ("rail", s.rail, 1.0),
+                ("rail_step", s.rail_step, 2.0),
+                ("conn_r", s.conn_r, 1.0),
+                ("conn_step", s.conn_step, 1.0),
+                ("label_exit_dx", s.label_exit_dx, 2.0),
+            ] {
+                assert!(
+                    (v - k * g).abs() < 1e-9,
+                    "{src}: {name} = {v}, ожидалось {k} * grid = {}",
+                    k * g
+                );
+            }
+        }
     }
     #[test]
     fn is_io_detects() {

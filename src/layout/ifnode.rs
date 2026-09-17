@@ -1,6 +1,6 @@
 use super::ctx::Ctx;
 use super::types::Label;
-use crate::ir::Node;
+use crate::ir::{Node, NodeKind, Stmt};
 
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum Side {
@@ -35,6 +35,27 @@ pub(super) fn build_plan(
         }
     }
     plan
+}
+
+/// Каскад else-if: последняя ветка содержит ровно один вложенный
+/// Decision (рекурсивно), у каждого звена ровно 2 ветки, первая
+/// непуста, без switch. Возвращает (ромбы, колонки): колонки = ромбы
+/// плюс хвост-else, если тот непуст (иначе рельса). Ромбы < 2 —
+/// обычный if/else, каскадом не рендерится.
+pub(super) fn cascade_cols(nd: &Node) -> Option<(usize, usize)> {
+    let mut k = 0usize;
+    let mut cur = nd;
+    loop {
+        if cur.switch_var.is_some() || cur.branches.len() != 2 || cur.branches[0].stmts.is_empty() {
+            return if k == 0 { None } else { Some((k, k)) };
+        }
+        k += 1;
+        let last = cur.branches.last().unwrap();
+        match last.stmts.as_slice() {
+            [Stmt::Node(d)] if d.kind == NodeKind::Decision => cur = d,
+            _ => return Some((k, k + usize::from(!last.stmts.is_empty()))),
+        }
+    }
 }
 
 impl Ctx<'_> {
@@ -196,14 +217,13 @@ impl Ctx<'_> {
         self.merge_bus(&cols, tx, merge2);
         if !empty.is_empty() {
             merge2 = merge2.max(y_b + 2.0 * self.st.grid);
-            // локальный экстент правых колонок этого вложенного if
-            // (аналогично iftop: рельса живёт только до merge2)
-            let re = plan
+            // рельса зеркальна самой широкой стороне: bx = up(|tx| + nhe)
+            // по всем колонкам, пол dw/2, без +2g — строгая зеркальность
+            let max_ext = plan
                 .iter()
-                .filter(|p| p.1 == Side::R)
-                .map(|p| p.3 - tx + sub)
+                .map(|p| (p.3 - tx).abs() + self.nhe)
                 .fold(dw / 2.0, f64::max);
-            let bx2 = tx + super::geometry::up(re + 2.0 * self.st.grid, self.st.grid);
+            let bx2 = tx + super::geometry::up(max_ext, self.st.grid);
             for (k, lbl) in empty.iter().enumerate() {
                 self.edge(
                     &[

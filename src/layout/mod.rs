@@ -100,20 +100,16 @@ pub fn layout(nodes: &[Node], sizes: &Sizes, st: &Style) -> Layout {
                         c.edge(&[(0.0, my), (0.0, top)], true);
                     }
                     // кружки левее рельс «-> конец»; цепочка друг за другом:
-                    // каждое ребро — к соседнему, стрелка только в «конец»
+                    // каждое ребро — к соседнему, стрелка только в «конец».
+                    // Рельсы бывают и справа: якорь — крайняя ЛЕВАЯ рельса,
+                    // а правее кромки «конца» кружки не ставим.
                     let mut prev_cx = stop_l;
+                    let anchor = left_rail.min(stop_l);
                     for (i, letter) in std::mem::take(&mut c.inbound).iter().enumerate() {
-                        let cx_ = if left_rail.is_finite() {
-                            left_rail
-                                - st.conn_step
-                                - st.conn_r
-                                - i as f64 * (2.0 * st.conn_r + st.conn_step)
-                        } else {
-                            stop_l
-                                - 2.0 * st.conn_r
-                                - st.rail
-                                - i as f64 * (2.0 * st.conn_r + st.conn_step)
-                        };
+                        let cx_ = anchor
+                            - st.conn_step
+                            - st.conn_r
+                            - i as f64 * (2.0 * st.conn_r + st.conn_step);
                         c.add("conn", cx_, sh.cy, letter);
                         let target = if i == 0 { stop_l } else { prev_cx - st.conn_r };
                         c.edge(&[(cx_ + st.conn_r, sh.cy), (target, sh.cy)], i == 0);

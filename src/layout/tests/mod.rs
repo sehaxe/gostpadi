@@ -2,8 +2,24 @@ mod measure;
 mod scheme;
 
 use crate::ir::{Branch, Node, NodeKind, Stmt};
-use crate::layout::{layout, normalize, Layout, Shape};
+use crate::layout::{layout, normalize, Layout, Shape, Sizes};
 use crate::style::Style;
+
+/// nhe как в Ctx::new: max(colw/2, экстенты непустых веток верхнего уровня).
+fn nhe_of(sizes: &Sizes, nodes: &[Node], st: &Style) -> f64 {
+    let colw = sizes["act"].0.max(sizes["io"].0);
+    let mut nhe = colw / 2.0;
+    for nd in nodes {
+        if nd.kind == NodeKind::Decision {
+            for b in &nd.branches {
+                if !b.stmts.is_empty() {
+                    nhe = nhe.max(crate::layout::column::extent(sizes, st, colw, &b.stmts));
+                }
+            }
+        }
+    }
+    nhe
+}
 
 fn node(kind: NodeKind, text: &str) -> Node {
     Node::new(kind, text)
