@@ -34,14 +34,6 @@ impl Ctx<'_> {
         // чтобы рельсы break/возврат не задевали фигуры (исправление 2)
         let chan = up(self.nhe.max(lw / 2.0) + 2.0 * self.st.grid, self.st.grid);
         let top0 = cy1 + lh / 2.0 + self.st.vgap;
-        // подпись «да» на выходе в тело
-        let yes = if nd.lang == "ru" { "да" } else { "yes" };
-        self.labels.push(super::Label {
-            x: tx + self.st.label_dx,
-            y: cy1 + lh / 2.0 + self.st.label_dy,
-            text: yes.into(),
-            ha: "left".into(),
-        });
         let mark = self.breaks.len();
         let (yend, dead) = match &nd.body {
             Some(body) => {
