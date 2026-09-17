@@ -207,6 +207,33 @@ fn arrow_whiskers_geometry() {
 }
 
 #[test]
+fn whisker_len_is_quarter_module_height() {
+    // ГОСТ: усик 0.2..0.25 высоты модуля (a = 2*grid); рендер берёт верх диапазона.
+    let st = Style::default();
+    let l = hand(
+        vec![],
+        vec![Edge {
+            points: vec![(100.0, 47.0), (100.0, 70.0)],
+            arrow: true,
+        }],
+        vec![],
+    );
+    let svg = render_svg(&l, &st);
+    let len = 0.25 * 2.0 * st.grid;
+    let (c, s) = (22.5f64.to_radians().cos(), 22.5f64.to_radians().sin());
+    let f = |v: f64| super::svg::n(v);
+    // линия вниз: ось (0,1), усы в точках tip ± (s, -c)*len
+    let want = format!(
+        "<path d=\"M {} {} L 100 70 M {} {} L 100 70\"",
+        f(100.0 + len * s),
+        f(70.0 - len * c),
+        f(100.0 - len * s),
+        f(70.0 - len * c)
+    );
+    assert!(svg.contains(&want), "whisker path mismatch:\n{svg}");
+}
+
+#[test]
 fn text_escaped_and_centered() {
     let l = hand(
         vec![Shape {

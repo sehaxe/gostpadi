@@ -28,8 +28,9 @@ pub fn render_svg(l: &Layout, st: &Style) -> String {
     let s = 1.0_f64
         .min((st.a4_w - 2.0 * st.page_pad) / w)
         .min((st.a4_h - 2.0 * st.page_pad) / h);
-    // усики стрелок в локальных единицах: масштаб применит g-обёртка
-    let whisker = 0.22 * st.grid;
+    // усики стрелок в локальных единицах: масштаб применит g-обёртка.
+    // ГОСТ: длина усика 0.2..0.25 высоты модуля (a = 2*grid); берём верх диапазона.
+    let whisker = 0.25 * 2.0 * st.grid;
 
     let mut edges = String::new();
     for e in &l.edges {
