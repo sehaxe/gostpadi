@@ -5,3 +5,4 @@ __pycache__/
 .bulba/
 /target/
 .playwright-mcp/
+/gallery/
