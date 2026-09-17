@@ -401,3 +401,105 @@ fn single_entry_without_end_shape_is_ok() {
     );
     assert!(single_entry_ok(&l));
 }
+
+/// Мёртвая осевая колонка (tx = 0, return внизу) обязана учитываться
+/// в merge_y: иначе ствол продолжения (0, merge_y) → следующий блок
+/// протыкает её ret насквозь.
+#[test]
+fn switch_dead_axis_column_counts_into_merge_y() {
+    let st = Style::default();
+    let text = "\
+input scanf(\"%d\", &x)
+if switch (x)
+    1: printf(\"раз\")
+    2 -> end: printf(\"два\"); return 1
+    иначе: printf(\"три\")
+output printf(x)
+";
+    let nodes = crate::frontend::gvn::parse(text, &st, "ru").unwrap();
+    let sizes = normalize(&nodes, &st);
+    let l = layout(&nodes, &sizes, &st);
+    assert_eq!(
+        crossings_ok(&l.shapes, &l.edges),
+        Ok(()),
+        "ствол продолжения не должен протыкать ret мёртвой осевой колонки"
+    );
+    assert!(overlaps_ok(&l.shapes));
+    assert!(single_entry_ok(&l));
+}
+
+/// Пустая ветка без правых колонок (одна колонка слева): рельса «нет»
+/// отходит от вершины ромба ровно на 2g — локальный экстент вместо
+/// глобального запаса «на все колонки всех ромбов схемы».
+#[test]
+fn empty_branch_rail_hugs_diamond() {
+    let st = Style::default();
+    let text = "if x <= 0\n    да: printf(\"bad\"); return 1\n    нет:\ny = x + 1\n";
+    let nodes = crate::frontend::gvn::parse(text, &st, "ru").unwrap();
+    let l = lay(&nodes);
+    let dsh = l.shapes.iter().find(|s| s.kind == "if").unwrap();
+    let vr = (dsh.cx + dsh.w / 2.0, dsh.cy);
+    let rail = l
+        .edges
+        .iter()
+        .find(|e| {
+            !e.arrow && (e.points[0].0 - vr.0).abs() < 1e-9 && (e.points[0].1 - vr.1).abs() < 1e-9
+        })
+        .expect("рельса пустой ветки от правой вершины ромба");
+    let bx = rail.points[1].0;
+    let want = crate::layout::geometry::up(dsh.w / 2.0 + 2.0 * st.grid, st.grid);
+    assert!(
+        (bx - want).abs() < 1e-9,
+        "bx = {bx}, ожидался up(dw/2 + 2g) = {want}"
+    );
+    assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
+    assert!(overlaps_ok(&l.shapes));
+}
+
+/// Пустая ветка при наличии правой колонки: bx = правая кромка крайней
+/// правой колонки (tx + nhe) + 2g, рельса не цепляет собственные колонки.
+#[test]
+fn empty_branch_rail_clears_own_columns() {
+    let st = Style::default();
+    let mut d = node(NodeKind::Decision, "if switch (d)");
+    d.switch_var = Some("d".into());
+    d.branches = vec![
+        br("1", vec![s("a = 1")], false),
+        br("2", vec![s("b = 2")], false),
+        br("3", vec![s("c = 3")], false),
+        br("4", vec![], false),
+    ];
+    let nodes = vec![
+        node(NodeKind::Term, "начало"),
+        d,
+        node(NodeKind::Term, "конец"),
+    ];
+    let sizes = normalize(&nodes, &st);
+    let l = layout(&nodes, &sizes, &st);
+    // nhe — по той же формуле, что в Ctx::new
+    let colw = sizes["act"].0.max(sizes["io"].0);
+    let nhe = nodes[1]
+        .branches
+        .iter()
+        .filter(|b| !b.stmts.is_empty())
+        .map(|b| crate::layout::column::extent(&sizes, &st, colw, &b.stmts))
+        .fold(colw / 2.0, f64::max);
+    let right_tx = l.shapes.iter().map(|s| s.cx).fold(f64::MIN, f64::max);
+    let dsh = l.shapes.iter().find(|s| s.kind == "if").unwrap();
+    let vr = (dsh.cx + dsh.w / 2.0, dsh.cy);
+    let rail = l
+        .edges
+        .iter()
+        .find(|e| {
+            !e.arrow && (e.points[0].0 - vr.0).abs() < 1e-9 && (e.points[0].1 - vr.1).abs() < 1e-9
+        })
+        .expect("рельса пустой ветки от правой вершины ромба");
+    let bx = rail.points[1].0;
+    let want = crate::layout::geometry::up(right_tx + nhe + 2.0 * st.grid, st.grid);
+    assert!(
+        (bx - want).abs() < 1e-9,
+        "bx = {bx}, ожидался up(rightmost_tx + nhe + 2g) = {want}"
+    );
+    assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
+    assert!(overlaps_ok(&l.shapes));
+}

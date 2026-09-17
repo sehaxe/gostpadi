@@ -60,9 +60,13 @@ impl Ctx<'_> {
             exits[bi] = Some((txx, yend, nd.branches[bi].to_end && !dead, dead));
         }
         let mut merge_y = y_b;
-        for &(bi, ..) in &plan {
+        for &(bi, side, ..) in &plan {
             let e = exits[bi].unwrap();
-            if !e.2 && !e.3 {
+            // Колонка на оси (tx = 0) стоит на стволе продолжения: её низ —
+            // живой, мёртвый или «-> конец» — задаёт merge_y, иначе ствол
+            // (0, merge_y) → следующий блок протыкает её содержимое.
+            // Внесъёмные колонки (tx != 0) ствол не трогают.
+            if side == Side::Axis || (!e.2 && !e.3) {
                 merge_y = merge_y.max(e.1 + self.st.mgap);
             }
         }
@@ -133,11 +137,18 @@ impl Ctx<'_> {
         if !empty.is_empty() {
             merge_y = merge_y.max(y_b + 2.0 * self.st.grid);
         }
+        // Рельса пустой ветки спускается только до merge_y этого ромба,
+        // поэтому снаружи достаточно собственных правых колонок; глобальный
+        // запас max_tier*pitch + colw законен только для pend-рельсов
+        // «-> конец», проходящих сквозь всю схему.
+        let right_extent = plan
+            .iter()
+            .filter(|p| p.1 == Side::R)
+            .map(|p| p.3 + self.nhe)
+            .fold(dw / 2.0, f64::max);
         for (k, lbl) in empty.iter().enumerate() {
-            let bx = super::geometry::up(
-                dw / 2.0 + 2.0 * self.st.grid + self.max_tier as f64 * pitch + self.colw,
-                self.st.grid,
-            ) + k as f64 * 2.0 * self.st.grid;
+            let bx = super::geometry::up(right_extent + 2.0 * self.st.grid, self.st.grid)
+                + k as f64 * 2.0 * self.st.grid;
             self.edge(&[vr, (bx, cy), (bx, merge_y), (0.0, merge_y)], false);
             self.labels.push(Label {
                 x: dw / 2.0 + self.st.label_exit_dx + k as f64 * 2.0 * self.st.grid,

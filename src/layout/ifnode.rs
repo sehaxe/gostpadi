@@ -153,7 +153,6 @@ impl Ctx<'_> {
             .iter()
             .map(|&i| self.extent(&nd.branches[i].stmts))
             .fold(self.colw / 2.0, f64::max);
-        let tiers = n.saturating_sub(1) / 2;
         let pitch2 = 2.0 * sub + self.st.colgap;
         let base2 = dw / 2.0 + self.st.hgap + sub;
         let comb = nd.switch_var.is_some() && n >= 2;
@@ -181,8 +180,11 @@ impl Ctx<'_> {
             bottoms.push((bi, y, dead));
         }
         let mut merge2 = y_b;
-        for &(_, y, dead) in &bottoms {
-            if !dead {
+        // Осевая под-колонка (txx == tx) стоит на продолжении колонки:
+        // её низ учитывается даже если колонка мёртвая (return), иначе
+        // спуск продолжения протыкает ret насквозь.
+        for (&(_, side, ..), &(_, y, dead)) in plan.iter().zip(bottoms.iter()) {
+            if side == Side::Axis || !dead {
                 merge2 = merge2.max(y + self.st.mgap);
             }
         }
@@ -194,11 +196,14 @@ impl Ctx<'_> {
         self.merge_bus(&cols, tx, merge2);
         if !empty.is_empty() {
             merge2 = merge2.max(y_b + 2.0 * self.st.grid);
-            let bx2 = tx
-                + super::geometry::up(
-                    dw / 2.0 + 2.0 * self.st.grid + tiers as f64 * pitch2 + sub,
-                    self.st.grid,
-                );
+            // локальный экстент правых колонок этого вложенного if
+            // (аналогично iftop: рельса живёт только до merge2)
+            let re = plan
+                .iter()
+                .filter(|p| p.1 == Side::R)
+                .map(|p| p.3 - tx + sub)
+                .fold(dw / 2.0, f64::max);
+            let bx2 = tx + super::geometry::up(re + 2.0 * self.st.grid, self.st.grid);
             for (k, lbl) in empty.iter().enumerate() {
                 self.edge(
                     &[
