@@ -3,5 +3,14 @@
 version = 4
 
 [[package]]
-name = "flowengine"
-version = "1.2.2"
+name = "gostpadi"
+version = "2.0.0"
+dependencies = [
+ "lang-c",
+]
+
+[[package]]
+name = "lang-c"
+version = "0.15.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "720e6492b795d1f6838eb2e51879ec3073be745a20e52c32a241b80b3c8ed998"

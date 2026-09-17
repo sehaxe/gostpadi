@@ -214,10 +214,10 @@ fn main() {
         }
     };
     let _ = output;
-    let style = flowengine::style::Style::default();
+    let style = gostpadi::style::Style::default();
     // if .c file, try c_to_gvn stub -> would error "not implemented", but for .gvn we parse directly
     let text = if first.ends_with(".c") {
-        match flowengine::frontend::c::c_to_gvn(&src, &labels) {
+        match gostpadi::frontend::c::c_to_gvn(&src, &labels) {
             Ok(gvn) => gvn,
             Err(e) => {
                 eprintln!("ошибка: {}", e);
@@ -227,7 +227,7 @@ fn main() {
     } else {
         src
     };
-    match flowengine::frontend::gvn::parse(&text, &style, &labels) {
+    match gostpadi::frontend::gvn::parse(&text, &style, &labels) {
         Ok(nodes) => {
             println!("parsed: {} nodes", nodes.len());
             process::exit(0);

@@ -1,8 +1,10 @@
 [package]
-name = "flowengine"
-version = "1.2.2"
+name = "gostpadi"
+version = "2.0.0"
 edition = "2021"
-description = "FlowEngine — ГОСТ блок-схемы"
+description = "ГОСТ 19.701 блок-схемы из C/.gvn — Rust движок, wasm-ready"
+repository = "https://github.com/sehaxe/gostpadi"
+license = "MIT"
 
 [[bin]]
 name = "gostpadi"
@@ -12,3 +14,6 @@ path = "src/main.rs"
 lto = true
 panic = "abort"
 strip = true
+
+[dependencies]
+lang-c = "0.15.1"
