@@ -21,6 +21,10 @@ impl ParseError {
         self.line = Some(line);
         self
     }
+    pub fn with_col(mut self, col: usize) -> Self {
+        self.col = Some(col);
+        self
+    }
     pub fn with_src(mut self, src: impl Into<String>) -> Self {
         self.src = Some(src.into());
         self
