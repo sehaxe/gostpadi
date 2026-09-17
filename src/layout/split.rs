@@ -8,6 +8,9 @@ use crate::style::Style;
 /// Межстраничный соединитель: буква + номер листа, где продолжение
 /// (ГОСТ 19.701-90: первая строка — номер листа).
 pub fn split_scheme(mut items: Vec<Node>, sizes: &Sizes, st: &Style) -> Vec<Vec<Node>> {
+    // поиск точки реза ведётся по нижним 88% страницы: ниже листать
+    // бессмысленно, выше — резать слишком рано
+    const CUT_SEARCH_FRAC: f64 = 0.88;
     let mut parts: Vec<Vec<Node>> = Vec::new();
     let mut li = 0usize;
     let n_letters = st.letters.chars().count();
@@ -19,7 +22,7 @@ pub fn split_scheme(mut items: Vec<Node>, sizes: &Sizes, st: &Style) -> Vec<Vec<
             parts.push(items);
             break;
         }
-        let limit = (st.a4_h - 2.0 * st.page_pad) * 0.88;
+        let limit = (st.a4_h - 2.0 * st.page_pad) * CUT_SEARCH_FRAC;
         let mut cut = None;
         for j in 2..items.len().saturating_sub(2) {
             // резать можно перед простым блоком, «если» или циклом

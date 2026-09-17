@@ -38,6 +38,30 @@ pub(super) fn build_plan(
 }
 
 impl Ctx<'_> {
+    /// Слияние колонок на одну шину: вертикальные спуски остаются по
+    /// колонкам, а горизонталь на уровне my рисуется одним отрезком от
+    /// крайней колонки до крайней через target — наложенные хвосты
+    /// отдельных колонок давали ступеньки разной жирности.
+    pub(super) fn merge_bus(&mut self, cols: &[(f64, f64)], target: f64, my: f64) {
+        if cols.is_empty() {
+            return;
+        }
+        if cols.len() == 1 {
+            let (x, y) = cols[0];
+            self.edge(&[(x, y), (x, my), (target, my)], false);
+            return;
+        }
+        let (mut lo, mut hi) = (f64::MAX, f64::MIN);
+        for &(x, _) in cols {
+            lo = lo.min(x);
+            hi = hi.max(x);
+        }
+        for &(x, y) in cols {
+            self.edge(&[(x, y), (x, my)], false);
+        }
+        self.edge(&[(lo.min(target), my), (hi.max(target), my)], false);
+    }
+
     /// Спуск колонки ветки из ромба: ребро входа + метка да/нет/кейса.
     pub(super) fn column_entry(
         &mut self,
@@ -162,13 +186,12 @@ impl Ctx<'_> {
                 merge2 = merge2.max(y + self.st.mgap);
             }
         }
-        for &(bi, y, dead) in &bottoms {
-            if dead {
-                continue; // return — тупик: в слияние не идёт
-            }
-            let txx = plan.iter().find(|p| p.0 == bi).unwrap().3;
-            self.edge(&[(txx, y), (txx, merge2), (tx, merge2)], false);
-        }
+        let cols: Vec<(f64, f64)> = bottoms
+            .iter()
+            .filter(|&&(_, _, dead)| !dead)
+            .map(|&(bi, y, _)| (plan.iter().find(|p| p.0 == bi).unwrap().3, y))
+            .collect();
+        self.merge_bus(&cols, tx, merge2);
         if !empty.is_empty() {
             merge2 = merge2.max(y_b + 2.0 * self.st.grid);
             let bx2 = tx

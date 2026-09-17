@@ -71,11 +71,12 @@ impl Ctx<'_> {
             .map(|&(bi, ..)| exits[bi].unwrap().1)
             .fold(y_b, f64::max);
         let mut link_bottom = y_b;
+        let mut merge_cols: Vec<(f64, f64)> = Vec::new();
         for &(bi, side, _, _) in &plan {
             let e = exits[bi].unwrap();
             if !e.2 {
                 if !e.3 {
-                    self.edge(&[(e.0, e.1), (e.0, merge_y), (0.0, merge_y)], false);
+                    merge_cols.push((e.0, e.1));
                 }
                 continue;
             }
@@ -117,6 +118,9 @@ impl Ctx<'_> {
                 });
             }
         }
+        // шина слияния: один горизонтальный отрезок вместо наложенных
+        // хвостов колонок
+        self.merge_bus(&merge_cols, 0.0, merge_y);
         let n_merge = plan
             .iter()
             .filter(|&&(bi, ..)| {

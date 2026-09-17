@@ -3,6 +3,11 @@ use super::Sizes;
 use crate::ir::{Node, NodeKind, Stmt};
 use crate::style::Style;
 
+/// Межстрочный интервал терминатора: 0.8 шага (текст в капсуле плотнее).
+const TERM_LINE_FACTOR: f64 = 0.8;
+/// Минимальная ширина ромба: 11 модулей сетки (b = 2a, читаемость «да/нет»).
+const IF_MIN_W_GRIDS: f64 = 11.0;
+
 /// (ширина, высота) фигуры по её тексту; порт gostpadi.py measure().
 /// Текст уже перенесён — строки разделяются \n.
 pub fn measure(st: &Style, kind: &str, text: &str) -> (f64, f64) {
@@ -12,27 +17,27 @@ pub fn measure(st: &Style, kind: &str, text: &str) -> (f64, f64) {
     let n = ls.len() as f64;
     match kind {
         "term" | "ret" => {
-            let h = (2.0 * g).max(up(n * st.pitch * 0.8 + 16.0, g));
-            (up(tw + st.pad_x + 22.0, g).max(2.0 * h), h)
+            let h = (2.0 * g).max(up(n * st.pitch * TERM_LINE_FACTOR + st.term_pad_v, g));
+            (up(tw + st.pad_x + st.term_pad_h, g).max(2.0 * h), h)
         }
         "conn" => (2.0 * st.conn_r, 2.0 * st.conn_r),
         "loop" => {
             // размер заголовка цикла; используется ОБЕИМ трапециям
             // loop_begin/loop_end (верх/низ, ГОСТ паттерн 3.4)
-            let h = (2.0 * g).max(up(n * st.pitch + st.pad_y - 4.0, g));
-            let w = up(tw + st.pad_x + 6.0, g) + h;
+            let h = (2.0 * g).max(up(n * st.pitch + st.pad_y - st.line_slack, g));
+            let w = up(tw + st.pad_x + st.text_pad, g) + h;
             (w.max(2.0 * h), h)
         }
         "if" => {
             // текст между рёбрами ромба; боковые стороны под 45°: h = aspect * w
-            let ymax = (n - 1.0) * st.pitch / 2.0 + 6.0;
-            let need = tw + 26.0;
-            let w = up((need + ymax * 2.0 / st.aspect).max(11.0 * g), g);
+            let ymax = (n - 1.0) * st.pitch / 2.0 + st.text_pad;
+            let need = tw + st.cond_pad;
+            let w = up((need + ymax * 2.0 / st.aspect).max(IF_MIN_W_GRIDS * g), g);
             (w, w * st.aspect)
         }
         _ => {
-            let h = (2.0 * g).max(up(n * st.pitch + st.pad_y - 4.0, g));
-            (up(tw + st.pad_x + 6.0, g).max(2.0 * h), h)
+            let h = (2.0 * g).max(up(n * st.pitch + st.pad_y - st.line_slack, g));
+            (up(tw + st.pad_x + st.text_pad, g).max(2.0 * h), h)
         }
     }
 }

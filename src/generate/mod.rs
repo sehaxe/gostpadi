@@ -6,7 +6,7 @@ pub mod shapes;
 pub mod svg;
 pub mod text;
 
-pub use svg::render_svg;
+pub use svg::{fit_scale, render_svg, render_svg_at};
 
 #[cfg(test)]
 mod tests;

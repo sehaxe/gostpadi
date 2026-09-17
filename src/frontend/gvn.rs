@@ -388,6 +388,10 @@ impl<'a> Parser<'a> {
                 }
                 fixed.push(br);
             }
+            // case-алиасы: «3:» с пустым телом перед «4: body» — метка «3, 4»
+            if svar.is_some() {
+                super::merge_case_aliases(&mut fixed);
+            }
             branches = fixed;
         }
 
@@ -671,6 +675,35 @@ mod tests {
         }
         assert_eq!(w.split('\n').count(), 2, "{w:?}");
         assert_eq!(w, format!("{}\nб", "а".repeat(29)));
+    }
+
+    /// case-алиас «3:» с пустым телом перед «4: body» (схема
+    /// 11-switch-alias.gvn): проваливание в C — метки склеиваются,
+    /// пустой ветки и рельсы обхода нет. Обычный if не трогается.
+    #[test]
+    fn switch_case_alias_merges_into_next() {
+        let style = en_style();
+        let text = "if switch (k)\n    1: printf(\"раз\"); break\n    2: printf(\"два\"); break\n    3:\n    4: printf(\"три-четыре\"); break\n    иначе: printf(\"много\"); break\noutput printf(k)";
+        let nodes = parse(text, &style, "en").unwrap();
+        let sw = nodes
+            .iter()
+            .find(|n| n.kind == NodeKind::Decision && n.switch_var.is_some())
+            .unwrap();
+        assert_eq!(sw.branches.len(), 4, "пустая «3» слилась с «4»");
+        assert!(
+            sw.branches.iter().any(|b| b.label == "k = 3, 4"),
+            "метки склеены: {:?}",
+            sw.branches.iter().map(|b| &b.label).collect::<Vec<_>>()
+        );
+        assert!(
+            sw.branches.iter().all(|b| !b.stmts.is_empty()),
+            "empty-веток у switch 0"
+        );
+        // обычный if: пустая «нет» — осмысленная рельса, не merge
+        let ifs = parse("if a > 0\n    да: a = 1\n    нет:\n", &style, "en").unwrap();
+        let d = ifs.iter().find(|n| n.kind == NodeKind::Decision).unwrap();
+        assert_eq!(d.branches[1].label, "нет");
+        assert!(d.branches[1].stmts.is_empty());
     }
 
     /// Порт Python `(?:case\s+)?`: «case» без пробела не метка кейса,

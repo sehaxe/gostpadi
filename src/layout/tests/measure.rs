@@ -32,6 +32,22 @@ fn if_height_tracks_aspect() {
     assert!((h - w * st.aspect).abs() < 1e-9);
 }
 
+/// Кегль 24 удваивает геометрию: measure растёт от font согласованно
+/// (шрифт — база всех метрик фигур).
+#[test]
+fn font_doubles_measure() {
+    let s12 = Style::with_metrics(12.0, 1.0);
+    let s24 = Style::with_metrics(24.0, 1.0);
+    let (w12, h12) = measure(&s12, "act", "x = 1");
+    let (w24, h24) = measure(&s24, "act", "x = 1");
+    let ratio = w24 / w12;
+    assert!(
+        (ratio - 2.0).abs() < 0.5,
+        "ширина при font=24 должна быть ~2x от font=12: {ratio}"
+    );
+    assert!(w24 > w12 && h24 > h12);
+}
+
 #[test]
 fn normalize_all_seven_kinds() {
     let st = Style::default();

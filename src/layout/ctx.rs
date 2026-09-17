@@ -87,9 +87,12 @@ impl<'a> Ctx<'a> {
             k => k,
         };
         let (w, h) = self.sizes[key];
-        // шестиугольные циклы: Δ = min(h/2, w/4) — защита от дурацких пропорций
+        // ГОСТ 19.701: срез углов трапеций цикла под 45°: Δ = h/2,
+        // но не более w/4 (защита от дурацких пропорций)
+        const SKEW_45_H: f64 = 0.5;
+        const SKEW_MAX_W: f64 = 0.25;
         let skew = match kind {
-            "loop_begin" | "loop_end" => (0.5 * h).min(0.25 * w),
+            "loop_begin" | "loop_end" => (SKEW_45_H * h).min(SKEW_MAX_W * w),
             _ => 0.0,
         };
         self.shapes.push(Shape {
@@ -133,7 +136,8 @@ impl<'a> Ctx<'a> {
             ys.extend([sh.cy - sh.h / 2.0, sh.cy + sh.h / 2.0]);
         }
         for l in &self.labels {
-            let half = l.text.chars().count() as f64 * 4.8;
+            // оценка ширины подписи: половина глифа на символ (моноширинный)
+            let half = l.text.chars().count() as f64 * self.st.char_w / 2.0;
             match l.ha.as_str() {
                 "right" => xs.push(l.x - half),
                 "left" => xs.push(l.x + half),

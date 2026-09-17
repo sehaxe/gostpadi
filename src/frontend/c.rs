@@ -362,6 +362,8 @@ impl<'a> Ctx<'a> {
         if branches.is_empty() {
             return Err(self.err("в switch нет веток case", s.span.start));
         }
+        // case 1: case 2: body — «case 1» алиас, метки склеиваются
+        super::merge_case_aliases(&mut branches);
         nd.branches = branches;
         Ok(nd)
     }
@@ -951,10 +953,21 @@ mod tests {
         let nodes = parse_ok(src);
         let sw = &nodes[0];
         let labels: Vec<&str> = sw.branches.iter().map(|b| b.label.as_str()).collect();
-        assert_eq!(labels, vec!["x = 1", "x = 2", "x = 3"]);
-        // case 1 — алиас: пустая ветка, тело у case 2
-        assert!(sw.branches[0].stmts.is_empty());
-        assert_eq!(sw.branches[1].stmts.len(), 2);
+        // case 1 — алиас case 2: метки склеены, пустой ветки нет
+        assert_eq!(labels, vec!["x = 1, 2", "x = 3"]);
+        assert!(sw.branches.iter().all(|b| !b.stmts.is_empty()));
+    }
+
+    /// Последняя пустая ветка (пустой case в конце switch) — не алиас:
+    /// сливаться не с кем, остаётся рельсой обхода.
+    #[test]
+    fn switch_trailing_empty_case_stays() {
+        let src = "int main(void) { switch (x) { case 1: printf(\"low\"); break; case 2: ; } }";
+        let nodes = parse_ok(src);
+        let sw = &nodes[0];
+        let labels: Vec<&str> = sw.branches.iter().map(|b| b.label.as_str()).collect();
+        assert_eq!(labels, vec!["x = 1", "x = 2"]);
+        assert!(sw.branches[1].stmts.is_empty());
     }
 
     #[test]

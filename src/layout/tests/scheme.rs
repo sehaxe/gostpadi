@@ -36,13 +36,14 @@ fn if_branches_merge_before_continue() {
     let l = lay(&nodes);
     // вход в схему + 2 входа в колонки веток + 1 продолжение после слияния
     assert_eq!(l.edges.iter().filter(|e| e.arrow).count(), 4);
-    // обе колонки сливаются T-стыком (без стрелок) на одной высоте
+    // обе колонки сливаются T-стыком (без стрелок) на одной высоте:
+    // спуски и шина заканчиваются на одном y ниже ромба
     let merges: Vec<f64> = l
         .edges
         .iter()
         .filter(|e| !e.arrow)
         .filter_map(|e| e.points.last())
-        .filter(|&&p| p.0 == 0.0 && p.1 > l.shapes[1].cy)
+        .filter(|&&p| p.1 > l.shapes[1].cy)
         .map(|&p| p.1)
         .collect();
     assert!(merges.len() >= 2 && merges.iter().all(|&y| (y - merges[0]).abs() < 1e-9));
@@ -258,6 +259,106 @@ fn pend_flush_when_loop_is_last() {
     // полная ломаная: ветка, спуск, внешний рельс, возврат на магистраль
     assert_eq!(rails[0].points.len(), 5, "{:?}", rails[0].points);
     assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
+}
+
+/// Фикс «жирной линии слияния»: горизонталь на уровне merge_y — ровно
+/// один сегмент (шина от крайней колонки до крайней), а не наложенные
+/// хвосты каждой колонки (ступеньки разной жирности на рендере).
+#[test]
+fn switch_merge_draws_single_bus() {
+    let mut d = node(NodeKind::Decision, "if switch (d)");
+    d.switch_var = Some("d".into());
+    d.branches = vec![
+        br("1", vec![s("a = 1")], false),
+        br("2", vec![s("b = 2")], false),
+        br("3", vec![s("c = 3")], false),
+    ];
+    let nodes = vec![
+        node(NodeKind::Term, "начало"),
+        d,
+        node(NodeKind::Term, "конец"),
+    ];
+    let st = Style::default();
+    let l = lay(&nodes);
+    let my = l
+        .shapes
+        .iter()
+        .filter(|sh| sh.kind == "act")
+        .map(|sh| sh.cy + sh.h / 2.0)
+        .fold(f64::MIN, f64::max)
+        + st.mgap;
+    let at_bus = |e: &crate::layout::Edge| {
+        e.points
+            .windows(2)
+            .any(|w| (w[0].1 - w[1].1).abs() < 1e-9 && (w[0].1 - my).abs() < 1e-9)
+    };
+    assert_eq!(
+        l.edges.iter().filter(|e| at_bus(e)).count(),
+        1,
+        "ровно один горизонтальный сегмент на merge_y"
+    );
+    let bus = l.edges.iter().find(|e| at_bus(e)).unwrap();
+    let mut xs: Vec<f64> = bus
+        .points
+        .windows(2)
+        .filter(|w| (w[0].1 - my).abs() < 1e-9)
+        .flat_map(|w| [w[0].0, w[1].0])
+        .collect();
+    xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert!(
+        *xs.first().unwrap() < -1.0 && *xs.last().unwrap() > 1.0,
+        "шина проходит через 0, накрывая обе стороны: {xs:?}"
+    );
+    // три вертикальных спуска (без стрелок) заканчиваются на шине
+    let drops = l
+        .edges
+        .iter()
+        .filter(|e| {
+            !e.arrow
+                && e.points.len() >= 2
+                && e.points.iter().all(|p| (p.0 - e.points[0].0).abs() < 1e-9)
+                && (e.points.last().unwrap().1 - my).abs() < 1e-9
+        })
+        .count();
+    assert_eq!(drops, 3, "спуск по каждой колонке отдельно");
+    assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
+    assert!(single_entry_ok(&l));
+}
+
+/// Короткая ветка НЕ получает пад: контент всех колонок начинается на
+/// одной высоте top0 (компактно), слияние — шина от нижней точки.
+#[test]
+fn short_branch_starts_at_same_top() {
+    let mut d = node(NodeKind::Decision, "if a > 0");
+    d.branches = vec![
+        br("да", vec![s("a = 1"), s("a = 2")], false),
+        br("нет", vec![s("b = 3")], false),
+    ];
+    let nodes = vec![
+        node(NodeKind::Term, "начало"),
+        d,
+        node(NodeKind::Term, "конец"),
+    ];
+    let l = lay(&nodes);
+    let top = |s: &Shape| s.cy - s.h / 2.0;
+    let a1 = l
+        .shapes
+        .iter()
+        .find(|s| s.lines == vec!["a = 1".to_string()])
+        .unwrap();
+    let b3 = l
+        .shapes
+        .iter()
+        .find(|s| s.lines == vec!["b = 3".to_string()])
+        .unwrap();
+    assert!(
+        (top(a1) - top(b3)).abs() < 0.01,
+        "верх контента обеих колонок на одной высоте: {} vs {}",
+        top(a1),
+        top(b3)
+    );
+    assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
+    assert!(single_entry_ok(&l));
 }
 
 /// Пустой срез не должен паниковать на nodes.len() - 1.

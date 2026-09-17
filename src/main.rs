@@ -7,7 +7,6 @@ use gostpadi::error::ParseError;
 use gostpadi::ir::Node;
 use gostpadi::layout::{crossings_ok, layout, normalize, overlaps_ok, single_entry_ok};
 use gostpadi::pipeline::{self, Options};
-use gostpadi::style::Style;
 
 use std::io::Write;
 
@@ -44,13 +43,15 @@ const HELP: &str = "gostpadi 2.0.0 — блок-схемы по ГОСТ 19.701 
 ФЛАГИ:
     -o <путь>       выход: файл.svg (один вход) или папка/ (пачка)
     --labels=ru|en  язык надписей (по умолчанию en)
+    --font=N        кегль текста в pt (по умолчанию 12), растит всю геометрию
+    --lw=N          толщина линий и усиков стрелок (по умолчанию 1.0)
     --check         только проверить, не рисовать
     --template      заготовка .gvn на stdout
     -h, --help      эта справка
     -V, --version   версия
 ";
 
-const USAGE: &str = "использование: gostpadi схема.gvn [ещё.gvn|код.c ...] [-o out.svg|папка/] [--labels=ru|en] [--check] [--template] [-h] [-V]";
+const USAGE: &str = "использование: gostpadi схема.gvn [ещё.gvn|код.c ...] [-o out.svg|папка/] [--labels=ru|en] [--font=N] [--lw=N] [--check] [--template] [-h] [-V]";
 
 /// Базовый путь результата входа: ".../stem.svg" (суффиксы листов добавит
 /// page_path). Папкой считается -o с косой чертой или существующая папка;
@@ -104,6 +105,18 @@ fn die_parse(path: &str, e: &ParseError) -> ! {
     process::exit(1)
 }
 
+/// --font=N / --lw=N: число > 0, иначе usage-ошибка (exit 2).
+fn num_flag(arg: &str, name: &str) -> f64 {
+    let v = arg[name.len() + 1..].trim();
+    match v.parse::<f64>() {
+        Ok(n) if n.is_finite() && n > 0.0 => n,
+        _ => {
+            eprintln!("{arg}: {name} требует положительное число");
+            process::exit(2);
+        }
+    }
+}
+
 fn main() {
     // args_os: не-UTF8 аргумент не должен паниковать
     let argv: Vec<String> = env::args_os()
@@ -112,6 +125,8 @@ fn main() {
     let mut inputs: Vec<String> = Vec::new();
     let mut output: Option<String> = None;
     let mut labels = "en".to_string();
+    let mut font: Option<f64> = None;
+    let mut lw: Option<f64> = None;
     let mut check = false;
     let mut template = false;
 
@@ -145,6 +160,12 @@ fn main() {
                     process::exit(2);
                 }
                 labels = v;
+            }
+            _ if a.starts_with("--font=") => {
+                font = Some(num_flag(&a, "--font"));
+            }
+            _ if a.starts_with("--lw=") => {
+                lw = Some(num_flag(&a, "--lw"));
             }
             _ if a.starts_with('-') && a != "-" => {
                 eprintln!("{USAGE}");
@@ -182,8 +203,8 @@ fn main() {
         }
     }
 
-    let opts = Options { labels };
-    let st = Style::default();
+    let opts = Options { labels, font, lw };
+    let st = opts.style();
 
     if check {
         let schemes = match pipeline::parse_batch(&sources, &opts) {
@@ -258,7 +279,10 @@ fn main() {
         .any(|s| stems.iter().filter(|t| *t == s).count() > 1);
 
     let mut failed = parse_failed;
-    for ((_, pages), inp) in pipeline::render_batch(schemes).into_iter().zip(&inputs) {
+    for ((_, pages), inp) in pipeline::render_batch(schemes, &st)
+        .into_iter()
+        .zip(&inputs)
+    {
         let base = base_for(inp, output.as_deref(), folder, inputs.len() > 1, dup);
         for (k, svg) in pages.iter().enumerate() {
             let target = page_path(&base, k);

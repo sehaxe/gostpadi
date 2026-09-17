@@ -8,6 +8,9 @@ use super::{
 use crate::layout::Layout;
 use crate::style::Style;
 
+/// ГОСТ: длина усика 0.2..0.25 высоты модуля (a = 2*grid); берём верх диапазона.
+const WHISKER_FRAC: f64 = 0.25;
+
 /// Число без хвостовых нулей: 14.170 -> "14.17", 1.000 -> "1".
 pub(crate) fn n(v: f64) -> String {
     let mut s = format!("{v:.3}")
@@ -20,17 +23,28 @@ pub(crate) fn n(v: f64) -> String {
     s
 }
 
+/// Масштаб вписывания раскладки в А4 (не больше 1: мелкие схемы
+/// рисуются 1:1, крупные сжимаются).
+pub fn fit_scale(bounds: (f64, f64, f64, f64), st: &Style) -> f64 {
+    let (_, _, w, h) = bounds;
+    1.0_f64
+        .min((st.a4_w - 2.0 * st.page_pad) / w)
+        .min((st.a4_h - 2.0 * st.page_pad) / h)
+}
+
 /// Раскладка + стиль -> SVG. Всё рисуется в координатах раскладки,
 /// единый масштаб применяется одним `<g transform>`: линии под
 /// фигурами, фигуры под подписями.
 pub fn render_svg(l: &Layout, st: &Style) -> String {
+    render_svg_at(l, st, fit_scale(l.bounds, st))
+}
+
+/// То же с внешним масштабом: пачка схем рисуется одним общим s,
+/// чтобы фигуры во всех файлах пачки были одного визуального размера.
+pub fn render_svg_at(l: &Layout, st: &Style, s: f64) -> String {
     let (minx, miny, w, h) = l.bounds;
-    let s = 1.0_f64
-        .min((st.a4_w - 2.0 * st.page_pad) / w)
-        .min((st.a4_h - 2.0 * st.page_pad) / h);
     // усики стрелок в локальных единицах: масштаб применит g-обёртка.
-    // ГОСТ: длина усика 0.2..0.25 высоты модуля (a = 2*grid); берём верх диапазона.
-    let whisker = 0.25 * 2.0 * st.grid;
+    let whisker = WHISKER_FRAC * 2.0 * st.grid;
 
     let mut edges = String::new();
     for e in &l.edges {
