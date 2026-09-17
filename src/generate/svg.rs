@@ -65,6 +65,7 @@ pub fn render_svg_at(l: &Layout, st: &Style, s: f64) -> String {
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
             "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}pt\" height=\"{h}pt\" ",
             "viewBox=\"0 0 {w} {h}\">\n",
+            "<rect x=\"0\" y=\"0\" width=\"{w}\" height=\"{h}\" fill=\"#ffffff\"/>\n",
             "<g transform=\"translate({tx} {ty}) scale({s})\">{body}</g>\n</svg>\n"
         ),
         w = n(w * s),

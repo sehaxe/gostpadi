@@ -204,3 +204,88 @@ fn broken_pipe_exits_zero() {
     let status = child.wait().unwrap();
     assert_eq!(status.code(), Some(0), "паника на BrokenPipe даёт 101");
 }
+
+fn render_svg(d: &std::path::Path, name: &str, extra: &[&str]) -> String {
+    let src = d.join(format!("{name}.gvn"));
+    fs::write(&src, OK_GVN).unwrap();
+    let out_path = d.join(format!("{name}.svg"));
+    let mut args = vec![src.to_str().unwrap(), "-o", out_path.to_str().unwrap()];
+    args.extend_from_slice(extra);
+    let out = run(&args);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    fs::read_to_string(&out_path).unwrap()
+}
+
+fn rect_widths(svg: &str) -> Vec<f64> {
+    let mut out: Vec<f64> = svg
+        .split("<rect")
+        // skip(2): мусор до первого <rect и белая подложка страницы
+        .skip(2)
+        .filter_map(|p| {
+            p.split("width=\"")
+                .nth(1)
+                .and_then(|s| s.split('"').next())
+                .and_then(|v| v.parse::<f64>().ok())
+        })
+        .collect();
+    out.sort_by(|a, b| b.partial_cmp(a).unwrap());
+    out
+}
+
+/// --font=16: в SVG font-size="16", фигуры крупнее, чем при дефолте 12.
+#[test]
+fn font_flag_grows_svg() {
+    let d = tmp("font16");
+    let svg16 = render_svg(&d, "f16", &["--font=16"]);
+    assert!(
+        svg16.contains("font-size=\"16\""),
+        "нет font-size=\"16\": {:?}",
+        svg16.matches("font-size").take(3).collect::<Vec<_>>()
+    );
+    let svg12 = render_svg(&d, "f12", &[]);
+    assert!(svg12.contains("font-size=\"12\""));
+    assert!(
+        rect_widths(&svg16)[0] > rect_widths(&svg12)[0],
+        "rect при font=16 крупнее: {} vs {}",
+        rect_widths(&svg16)[0],
+        rect_widths(&svg12)[0]
+    );
+}
+
+/// --lw=2.5: толщина пера 2.5 и на линиях, и на усиках стрелок.
+#[test]
+fn lw_flag_sets_stroke_width() {
+    let d = tmp("lw25");
+    let svg = render_svg(&d, "lw", &["--lw=2.5"]);
+    assert!(svg.contains("stroke-width=\"2.5\""), "{svg}");
+    // усики — path с тем же пером
+    assert!(svg.contains("<path"), "нет усиков");
+    let paths_lw: Vec<&str> = svg
+        .split("<path")
+        .skip(1)
+        .filter_map(|p| {
+            p.split("stroke-width=\"")
+                .nth(1)
+                .and_then(|s| s.split('"').next())
+        })
+        .collect();
+    assert!(paths_lw.iter().all(|&w| w == "2.5"), "{paths_lw:?}");
+}
+
+/// --font=0 и --lw=-1 — usage-ошибка с сообщением, exit 2.
+#[test]
+fn invalid_font_lw_exits_two() {
+    let d = tmp("bad-flags");
+    let src = d.join("in.gvn");
+    fs::write(&src, OK_GVN).unwrap();
+    for flag in ["--font=0", "--font=-3", "--lw=-1", "--font=abc"] {
+        let out = run(&[src.to_str().unwrap(), flag]);
+        assert_eq!(out.status.code(), Some(2), "{flag}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!err.is_empty(), "{flag}: нет сообщения");
+    }
+}

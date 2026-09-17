@@ -88,6 +88,21 @@ fn markers_all_kinds() {
     assert!(!svg.contains("bold"));
 }
 
+/// Белая подложка сразу после <svg>: в тёмных просмотрщиках чёрные
+/// линии на прозрачном фоне не видны.
+#[test]
+fn white_background_rect_before_g() {
+    let svg = render_svg(&all_kinds(), &Style::default());
+    let head = &svg[..svg.find("<g").expect("нет <g")];
+    let vb = svg.split("viewBox=\"").nth(1).expect("нет viewBox");
+    let dims: Vec<&str> = vb.split('"').next().unwrap().split_whitespace().collect();
+    let expect = format!(
+        "<rect x=\"0\" y=\"0\" width=\"{}\" height=\"{}\" fill=\"#ffffff\"/>",
+        dims[2], dims[3]
+    );
+    assert!(head.contains(&expect), "нет подложки {expect} в {head}");
+}
+
 #[test]
 fn markers_from_gvn_parse_and_layout() {
     let svg = render_gvn(include_str!("../../examples/hello.gvn"));

@@ -101,7 +101,8 @@ mod tests {
 
     fn rect_dims(svg: &str) -> Vec<(f64, f64)> {
         let mut out = Vec::new();
-        for part in svg.split("<rect").skip(1) {
+        // skip(2): мусор до первого <rect, затем белая подложка страницы
+        for part in svg.split("<rect").skip(2) {
             let w = part
                 .split("width=\"")
                 .nth(1)
@@ -141,8 +142,13 @@ mod tests {
 
     fn rect_widths(svg: &str) -> Vec<f64> {
         let mut out = Vec::new();
-        for part in svg.split("width=\"").skip(1) {
-            if let Some(num) = part.split('"').next() {
+        // skip(2): шапка до <rect и белая подложка страницы
+        for part in svg.split("<rect").skip(2) {
+            if let Some(num) = part
+                .split("width=\"")
+                .nth(1)
+                .and_then(|s| s.split('"').next())
+            {
                 if let Ok(v) = num.parse::<f64>() {
                     out.push(v);
                 }
