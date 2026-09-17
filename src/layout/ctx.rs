@@ -87,12 +87,18 @@ impl<'a> Ctx<'a> {
             k => k,
         };
         let (w, h) = self.sizes[key];
+        // шестиугольные циклы: Δ = min(h/2, w/4) — защита от дурацких пропорций
+        let skew = match kind {
+            "loop_begin" | "loop_end" => (0.5 * h).min(0.25 * w),
+            _ => 0.0,
+        };
         self.shapes.push(Shape {
             kind: kind.into(),
             cx,
             cy,
             w,
             h,
+            skew,
             lines: text.split('\n').map(str::to_string).collect(),
         });
         self.shapes.len() - 1

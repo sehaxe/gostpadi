@@ -51,22 +51,27 @@ fn if_branches_merge_before_continue() {
 }
 
 #[test]
-fn loop_is_two_trapezoids() {
+fn loop_is_two_hexagons() {
     let nodes = vec![
         node(NodeKind::Term, "начало"),
         loop_node("while i < 5", vec![s("i = i + 1")]),
         node(NodeKind::Term, "конец"),
     ];
+    let st = Style::default();
+    let (lw, lh) = measure(&st, "loop", "while i < 5");
     let l = lay(&nodes);
-    assert!(l.shapes.iter().any(|sh| sh.kind == "loop_begin"));
+    let want = (0.5 * lh).min(0.25 * lw);
+    let lb = l.shapes.iter().find(|sh| sh.kind == "loop_begin").unwrap();
+    assert_eq!(lb.lines, vec!["while i < 5".to_string()]);
+    assert!(lb.skew > 0.0, "срез верхних углов у loop_begin");
+    assert_eq!(lb.skew, want, "Δ = min(0.5*h, 0.25*w)");
     let le = l.shapes.iter().find(|sh| sh.kind == "loop_end").unwrap();
     assert_eq!(
         le.lines,
         vec!["1".to_string()],
-        "номер цикла на нижней трапеции"
+        "номер цикла на нижнем шестиугольнике"
     );
-    let lb = l.shapes.iter().find(|sh| sh.kind == "loop_begin").unwrap();
-    assert_eq!(lb.lines, vec!["while i < 5".to_string()]);
+    assert_eq!(le.skew, want, "loop_end — зеркальный срез той же величины");
     assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
     assert!(overlaps_ok(&l.shapes));
     assert!(single_entry_ok(&l));

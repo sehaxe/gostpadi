@@ -7,6 +7,10 @@ pub struct Shape {
     pub cy: f64,
     pub w: f64,
     pub h: f64,
+    /// Срез углов, отступ от края по X. 0.0 — обычная фигура;
+    /// для loop_begin срезаны верхние углы, для loop_end — нижние
+    /// (направление определяет генератор по kind).
+    pub skew: f64,
     pub lines: Vec<String>,
 }
 
