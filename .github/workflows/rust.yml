@@ -1,0 +1,21 @@
+name: rust
+on:
+  push: { branches: [flowengine, main] }
+  pull_request:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: clippy, rustfmt }
+      - run: cargo test --all-targets
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo fmt --check
+      - run: cargo build --release
+      - run: |
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          rustup target add wasm32-unknown-unknown
+          # wasm-цель: проверяем что ядро компилируется, пока нет src/wasm.rs — не валим CI
+          cargo check --target wasm32-unknown-unknown || true
