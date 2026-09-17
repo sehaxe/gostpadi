@@ -104,7 +104,17 @@ fn emit_nodes(nodes: &[Node], depth: usize, out: &mut String) {
         }
         for br in &n.branches {
             pad(out, depth + 1);
-            out.push_str(br.label.trim());
+            // switch: в IR метка уже с префиксом «svar = » — в текст .gvn
+            // пишем сырое значение, иначе gvn::parse навесит префикс дважды
+            let label = match &n.switch_var {
+                Some(sv) => br
+                    .label
+                    .strip_prefix(sv.as_str())
+                    .and_then(|r| r.strip_prefix(" = "))
+                    .unwrap_or(&br.label),
+                None => br.label.as_str(),
+            };
+            out.push_str(label.trim());
             out.push_str(":\n");
             emit_stmts(&br.stmts, depth + 1, out);
         }
@@ -504,8 +514,9 @@ fn strip_comments(src: &str) -> String {
                     n
                 }
             };
-            for _ in i..j {
-                out.push(' ');
+            for k in i..j {
+                // \n сохраняем: иначе номера строк ошибок съезжают
+                out.push(if chars[k] == '\n' { '\n' } else { ' ' });
             }
             i = j;
             continue;
@@ -796,6 +807,39 @@ mod tests {
             .filter(|l| l.trim().starts_with("printf("))
             .count();
         assert_eq!(io, 6, "{}", gvn);
+    }
+
+    /// Префикс «svar = » навешивает только gvn::parse: c_to_gvn пишет
+    /// сырые значения, иначе раундтрип даёт «month / 3 = month / 3 = 1».
+    #[test]
+    fn roundtrip_switch_labels_single_prefix() {
+        let src = include_str!("../../examples/main.c");
+        let gvn = c_to_gvn(src, "en").unwrap();
+        assert!(
+            !gvn.contains("month / 3 = month"),
+            "двойной префикс в gvn:\n{gvn}"
+        );
+        let nodes = crate::frontend::gvn::parse(&gvn, &Style::default(), "en").unwrap();
+        let sw = nodes
+            .iter()
+            .find(|n| n.kind == NodeKind::Decision && n.switch_var.is_some())
+            .unwrap();
+        let labels: Vec<&str> = sw.branches.iter().map(|b| b.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            vec!["month / 3 = 1", "month / 3 = 2", "month / 3 = 3", "default"]
+        );
+    }
+
+    /// Многострочный /* */ не должен съедать \n: иначе строки ошибок
+    /// после комментария указывают выше реальных.
+    #[test]
+    fn multiline_comment_keeps_line_numbers() {
+        let src = "int main(void) {\n/* comment\n   spanning\n   lines */ int = 5;\n}";
+        let e = parse_c_to_nodes(src, "en").unwrap_err();
+        assert_eq!(e.line, Some(4), "строка ошибки: {:?}", e.msg);
+        let out = strip_comments(src);
+        assert_eq!(out.matches('\n').count(), src.matches('\n').count());
     }
 
     #[test]

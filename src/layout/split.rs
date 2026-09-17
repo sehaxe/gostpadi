@@ -29,7 +29,11 @@ pub fn split_scheme(mut items: Vec<Node>, sizes: &Sizes, st: &Style) -> Vec<Vec<
             ) {
                 continue;
             }
-            if res.anchors[j - 1].y <= limit {
+            // return на top-level обрывает layout: якорей меньше, чем узлов
+            let Some(a) = res.anchors.get(j.wrapping_sub(1)) else {
+                continue;
+            };
+            if a.y <= limit {
                 cut = Some(j);
             }
         }
@@ -74,4 +78,26 @@ pub fn split_scheme(mut items: Vec<Node>, sizes: &Sizes, st: &Style) -> Vec<Vec<
         parts[last].insert(at, Node::new(NodeKind::Conn, l.to_string()));
     }
     parts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frontend::gvn;
+    use crate::layout::normalize;
+
+    /// return на top-level: layout обрывается, якорей меньше, чем узлов —
+    /// split индексировал anchors[j-1] и паниковал (index out of bounds).
+    #[test]
+    fn split_after_top_level_return_no_panic() {
+        let st = Style::default();
+        let mut text = "a = 111111\n".repeat(14);
+        text.push_str("return 1\n");
+        text.push_str(&"z = 222222\n".repeat(4));
+        let nodes = gvn::parse(&text, &st, "en").unwrap();
+        let sizes = normalize(&nodes, &st);
+        let parts = split_scheme(nodes, &sizes, &st);
+        assert!(!parts.is_empty());
+        assert!(parts.iter().all(|p| !p.is_empty()));
+    }
 }

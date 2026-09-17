@@ -4,9 +4,26 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use gostpadi::error::ParseError;
-use gostpadi::layout::{layout, normalize};
+use gostpadi::ir::Node;
+use gostpadi::layout::{crossings_ok, layout, normalize, overlaps_ok, single_entry_ok};
 use gostpadi::pipeline::{self, Options};
 use gostpadi::style::Style;
+
+use std::io::Write;
+
+/// stdout с тихим выходом при оборванной трубе («gostpadi ... | head»):
+/// std игнорирует SIGPIPE, запись возвращает BrokenPipe — выходим 0.
+fn out(s: &str) {
+    let stdout = std::io::stdout();
+    let mut w = stdout.lock();
+    if let Err(e) = w.write_all(s.as_bytes()) {
+        if e.kind() == std::io::ErrorKind::BrokenPipe {
+            process::exit(0);
+        }
+        eprintln!("ошибка вывода: {e}");
+        process::exit(1);
+    }
+}
 
 const VERSION: &str = "2.0.0";
 
@@ -36,9 +53,10 @@ const HELP: &str = "gostpadi 2.0.0 — блок-схемы по ГОСТ 19.701 
 const USAGE: &str = "использование: gostpadi схема.gvn [ещё.gvn|код.c ...] [-o out.svg|папка/] [--labels=ru|en] [--check] [--template] [-h] [-V]";
 
 /// Базовый путь результата входа: ".../stem.svg" (суффиксы листов добавит
-/// page_path). Папкой считается -o с косой чертой, существующая папка
-/// или пачка входов; у одинаковых stem имя родительской папки — префикс.
-fn base_for(inp: &str, output: Option<&str>, folder: bool, dup: bool) -> PathBuf {
+/// page_path). Папкой считается -o с косой чертой или существующая папка;
+/// пачка с голым именем кладёт результат рядом с каждым входом; у
+/// одинаковых stem имя родительской папки — префикс.
+fn base_for(inp: &str, output: Option<&str>, folder: bool, batch: bool, dup: bool) -> PathBuf {
     let mut stem = Path::new(inp)
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
@@ -50,6 +68,7 @@ fn base_for(inp: &str, output: Option<&str>, folder: bool, dup: bool) -> PathBuf
     }
     match output {
         Some(o) if folder => PathBuf::from(o).join(format!("{stem}.svg")),
+        Some(o) if batch => Path::new(inp).parent().unwrap_or(Path::new("")).join(o),
         Some(o) => PathBuf::from(o),
         None => Path::new(inp).with_file_name(format!("{stem}.svg")),
     }
@@ -65,8 +84,8 @@ fn page_path(base: &Path, k: usize) -> PathBuf {
     PathBuf::from(format!("{stem}-{}.svg", k + 1))
 }
 
-/// «файл:строка: сообщение» — как render_file в gostpadi.py; exit 1.
-fn die_parse(path: &str, e: &ParseError) -> ! {
+/// «файл:строка: сообщение» — как render_file в gostpadi.py.
+fn report_parse(path: &str, e: &ParseError) {
     let loc = match (e.line, e.col) {
         (Some(l), Some(c)) => format!("{path}:{l}:{c}: "),
         (Some(l), None) => format!("{path}:{l}: "),
@@ -78,11 +97,18 @@ fn die_parse(path: &str, e: &ParseError) -> ! {
         .map(|s| format!(" ({})", s.trim()))
         .unwrap_or_default();
     eprintln!("{loc}{}{src}", e.msg);
+}
+
+fn die_parse(path: &str, e: &ParseError) -> ! {
+    report_parse(path, e);
     process::exit(1)
 }
 
 fn main() {
-    let argv: Vec<String> = env::args().collect();
+    // args_os: не-UTF8 аргумент не должен паниковать
+    let argv: Vec<String> = env::args_os()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
     let mut inputs: Vec<String> = Vec::new();
     let mut output: Option<String> = None;
     let mut labels = "en".to_string();
@@ -94,11 +120,11 @@ fn main() {
         let a = argv[i].clone();
         match a.as_str() {
             "-h" | "--help" => {
-                print!("{HELP}");
+                out(HELP);
                 process::exit(0);
             }
             "-V" | "--version" => {
-                println!("gostpadi {VERSION}");
+                out(&format!("gostpadi {VERSION}\n"));
                 process::exit(0);
             }
             "--template" => template = true,
@@ -130,7 +156,7 @@ fn main() {
     }
 
     if template {
-        print!("{TEMPLATE}");
+        out(TEMPLATE);
         process::exit(0);
     }
     if inputs.is_empty() {
@@ -166,23 +192,47 @@ fn main() {
         };
         let multi = schemes.len() > 1;
         for (inp, (_, nodes)) in inputs.iter().zip(&schemes) {
-            layout(nodes, &normalize(nodes, &st), &st);
+            let l = layout(nodes, &normalize(nodes, &st), &st);
+            let bad = |msg: String| -> ! {
+                eprintln!("{inp}: {msg}");
+                process::exit(1);
+            };
+            if let Err(e) = crossings_ok(&l.shapes, &l.edges) {
+                bad(format!("линии заходят на блоки: {e}"));
+            }
+            if !overlaps_ok(&l.shapes) {
+                bad("фигуры перекрываются".into());
+            }
+            if !single_entry_ok(&l) {
+                bad("в «конец» входит не одна стрелка".into());
+            }
             if multi {
-                println!("{inp}: ok: {} blocks", nodes.len());
+                out(&format!("{inp}: ok: {} blocks\n", nodes.len()));
             } else {
-                println!("ok: {} blocks", nodes.len());
+                out(&format!("ok: {} blocks\n", nodes.len()));
             }
         }
         return;
     }
 
-    let schemes = match pipeline::parse_batch(&sources, &opts) {
-        Ok(s) => s,
-        Err((path, e)) => die_parse(&path, &e),
-    };
+    // пачка: сбойный вход не останавливает остальные (порт render_many)
+    let mut schemes: Vec<(String, Vec<Node>)> = Vec::new();
+    let mut parse_failed = false;
+    for src in &sources {
+        match pipeline::parse_batch(std::slice::from_ref(src), &opts) {
+            Ok(mut s) => schemes.append(&mut s),
+            Err((path, e)) => {
+                report_parse(&path, &e);
+                parse_failed = true;
+            }
+        }
+    }
+    if schemes.is_empty() {
+        process::exit(1);
+    }
 
     let folder = match &output {
-        Some(o) => o.ends_with('/') || Path::new(o).is_dir() || inputs.len() > 1,
+        Some(o) => o.ends_with('/') || Path::new(o).is_dir(),
         None => false,
     };
     if folder {
@@ -207,9 +257,9 @@ fn main() {
         .iter()
         .any(|s| stems.iter().filter(|t| *t == s).count() > 1);
 
-    let mut failed = false;
+    let mut failed = parse_failed;
     for ((_, pages), inp) in pipeline::render_batch(schemes).into_iter().zip(&inputs) {
-        let base = base_for(inp, output.as_deref(), folder, dup);
+        let base = base_for(inp, output.as_deref(), folder, inputs.len() > 1, dup);
         for (k, svg) in pages.iter().enumerate() {
             let target = page_path(&base, k);
             if let Err(e) = std::fs::write(&target, svg) {
@@ -217,7 +267,7 @@ fn main() {
                 failed = true;
                 continue;
             }
-            println!("{}", target.display());
+            out(&format!("{}\n", target.display()));
         }
     }
     if failed {

@@ -66,27 +66,45 @@ pub fn overlaps_ok(shapes: &[Shape]) -> bool {
     true
 }
 
-/// Single-Entry: в терминатор «конец» входит ровно одна стрелка.
+/// Single-Entry: в терминатор «конец» входит ровно одна стрелка потока.
 /// Все ветки «-> конец» сливаются T-узлом над ним (ствол с arrow=true).
+/// Легальные дополнительные стрелки — от входящих кружков-соединителей
+/// (горизонталь слева на высоте «конца», рисует layout для conn-узлов).
 pub fn single_entry_ok(l: &Layout) -> bool {
-    let Some(end) = l.shapes.iter().rev().find(|s| s.kind == "term") else {
-        return false;
+    // «конец» — самый нижний терминатор; если его нет (схема оборвалась
+    // return'ом или лист промежуточный) — проверять нечего
+    let Some(end) = l
+        .shapes
+        .iter()
+        .filter(|s| s.kind == "term")
+        .max_by(|a, b| a.cy.partial_cmp(&b.cy).unwrap_or(std::cmp::Ordering::Equal))
+    else {
+        return true;
     };
+    if std::ptr::eq(end, &l.shapes[0]) {
+        return true; // нарисован только «начало»
+    }
     const TOL: f64 = 0.01;
+    let into_end = |e: &Edge| match e.points.last() {
+        Some(&(x, y)) => {
+            e.arrow
+                && (x - end.cx).abs() <= end.w / 2.0 + TOL
+                && (y - end.cy).abs() <= end.h / 2.0 + TOL
+        }
+        None => false,
+    };
+    let inbound_from_conn = |e: &Edge| {
+        let n = e.points.len();
+        n >= 2 && {
+            let (x1, y1) = e.points[n - 2];
+            let (x2, y2) = e.points[n - 1];
+            // горизонталь справа налево по тексту — кружок левее «конца»
+            (y1 - y2).abs() < 1e-9 && x2 > x1
+        }
+    };
     l.edges
         .iter()
-        .filter(|e| {
-            if !e.arrow {
-                return false;
-            }
-            match e.points.last() {
-                Some(&(x, y)) => {
-                    (x - end.cx).abs() <= end.w / 2.0 + TOL
-                        && (y - end.cy).abs() <= end.h / 2.0 + TOL
-                }
-                None => false,
-            }
-        })
+        .filter(|e| into_end(e) && !inbound_from_conn(e))
         .count()
         == 1
 }

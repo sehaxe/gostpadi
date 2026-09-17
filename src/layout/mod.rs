@@ -37,9 +37,11 @@ fn leads_to_end(nodes: &[Node], mut j: usize) -> bool {
 /// Ребро: ломаная из сегментов строго 90°; стрелка ставится в конце,
 /// если arrow. Слияния (T-стыки) рисуются с arrow=false.
 pub fn layout(nodes: &[Node], sizes: &Sizes, st: &Style) -> Layout {
-    debug_assert!(!nodes.is_empty(), "layout: empty scheme");
+    if nodes.is_empty() {
+        return Layout::default();
+    }
     let mut c = Ctx::new(nodes, sizes, st);
-    let last = nodes.len() - 1;
+    let last = nodes.len().saturating_sub(1);
     let mut prev: Option<(f64, f64)> = None;
     let mut cursor = 0.0f64;
     for (idx, nd) in nodes.iter().enumerate() {
@@ -78,6 +80,9 @@ pub fn layout(nodes: &[Node], sizes: &Sizes, st: &Style) -> Layout {
                 if idx == last {
                     let sh = c.shapes[sh_i].clone();
                     let (stop_l, top) = (sh.cx - sh.w / 2.0, sh.cy - sh.h / 2.0);
+                    // кружки ставим левее рельс «-> конец», иначе рельсы
+                    // проходят сквозь них; без рельс — как раньше
+                    let left_rail = c.pend.iter().map(|p| p.rail).fold(f64::INFINITY, f64::min);
                     if pend_here {
                         for p in std::mem::take(&mut c.pend) {
                             c.edge(
@@ -94,16 +99,48 @@ pub fn layout(nodes: &[Node], sizes: &Sizes, st: &Style) -> Layout {
                         // единственная стрелка в «конец»
                         c.edge(&[(0.0, my), (0.0, top)], true);
                     }
+                    // кружки левее рельс «-> конец»; цепочка друг за другом:
+                    // каждое ребро — к соседнему, стрелка только в «конец»
+                    let mut prev_cx = stop_l;
                     for (i, letter) in std::mem::take(&mut c.inbound).iter().enumerate() {
-                        let cx_ = stop_l
-                            - 2.0 * st.conn_r
-                            - st.rail
-                            - i as f64 * (2.0 * st.conn_r + st.conn_step);
+                        let cx_ = if left_rail.is_finite() {
+                            left_rail
+                                - st.conn_step
+                                - st.conn_r
+                                - i as f64 * (2.0 * st.conn_r + st.conn_step)
+                        } else {
+                            stop_l
+                                - 2.0 * st.conn_r
+                                - st.rail
+                                - i as f64 * (2.0 * st.conn_r + st.conn_step)
+                        };
                         c.add("conn", cx_, sh.cy, letter);
-                        c.edge(&[(cx_ + st.conn_r, sh.cy), (stop_l, sh.cy)], true);
+                        let target = if i == 0 { stop_l } else { prev_cx - st.conn_r };
+                        c.edge(&[(cx_ + st.conn_r, sh.cy), (target, sh.cy)], i == 0);
+                        prev_cx = cx_;
                     }
                 }
             }
+        }
+    }
+    // pend-рельсы, не дошедшие до простого блока: последний узел —
+    // цикл, ромб или return. Рельсы вливаются в магистраль под ним
+    // (стрелка в ствол), как под «концом» в простой ветке.
+    if !c.pend.is_empty() {
+        let py = c.pend.iter().map(|p| p.y).fold(cursor, f64::max);
+        cursor = cursor.max(py);
+        let my = cursor;
+        for p in std::mem::take(&mut c.pend) {
+            c.edge(
+                &[
+                    (p.x, p.y),
+                    (p.x, p.cb + st.jog),
+                    (p.rail, p.cb + st.jog),
+                    (p.rail, my),
+                    (0.0, my),
+                ],
+                true,
+            );
         }
     }
     let l = c.finish();

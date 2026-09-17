@@ -35,7 +35,7 @@ pub struct Anchor {
     pub y: f64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Layout {
     pub shapes: Vec<Shape>,
     pub edges: Vec<Edge>,

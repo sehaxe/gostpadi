@@ -5,24 +5,26 @@ use crate::style::Style;
 fn wrap(text: &str, limit: usize) -> String {
     let mut res: Vec<String> = Vec::new();
     for para in text.split('\n') {
-        let mut p = para.to_string();
-        while p.chars().count() > limit {
-            let chars: Vec<char> = p.chars().collect();
-            let prefix: String = chars[..limit].iter().collect();
-            let cut_opt = prefix.rfind(' ');
-            let cut = match cut_opt {
-                Some(pos) if pos > 0 => pos,
-                _ => limit,
-            };
+        // работаем в char-домене: байтовые срезы рвут кириллицу
+        let mut chars: Vec<char> = para.chars().collect();
+        loop {
+            if chars.len() <= limit {
+                break;
+            }
+            let cut = chars[..limit]
+                .iter()
+                .rposition(|&c| c == ' ')
+                .filter(|&p| p > 0)
+                .unwrap_or(limit);
             let left: String = chars[..cut].iter().collect();
             res.push(left.trim_end().to_string());
             let rest: String = chars[cut..].iter().collect();
-            p = rest.trim_start().to_string();
-            if p.is_empty() {
+            chars = rest.trim_start().chars().collect();
+            if chars.is_empty() {
                 break;
             }
         }
-        res.push(p);
+        res.push(chars.iter().collect());
     }
     res.join("\n")
 }
@@ -375,14 +377,12 @@ impl<'a> Parser<'a> {
                 if matches!(low.as_str(), "default" | "else" | "otherwise" | "иначе") {
                     br.label = "default".to_string();
                 } else if let Some(ref sv) = svar {
+                    // порт Python re.fullmatch(r"(?:case\s+)?(.+)"): срезается
+                    // только нижнерегистровое «case» с обязательным пробелом
                     let trimmed = br.label.trim();
-                    let rest = if trimmed.to_lowercase().starts_with("case ") {
-                        trimmed[5..].trim()
-                    } else if trimmed.to_lowercase().starts_with("case") && trimmed.len() > 4 {
-                        // handle "case\t1" ?
-                        trimmed[4..].trim()
-                    } else {
-                        trimmed
+                    let rest = match trimmed.strip_prefix("case") {
+                        Some(r) if r.chars().next().is_some_and(char::is_whitespace) => r.trim(),
+                        _ => trimmed,
                     };
                     br.label = format!("{} = {}", sv, rest);
                 }
@@ -658,6 +658,34 @@ mod tests {
     fn wrap_splits() {
         let w = wrap("a b c d e", 3);
         assert!(w.contains('\n'));
+    }
+
+    /// Кириллица: байтовый rfind(' ') в chars-срезе паниковал
+    /// (byte index 58 при 30 символах) и рвал строки посреди символа.
+    #[test]
+    fn wrap_cyrillic_no_panic() {
+        let s = "а".repeat(29) + " б";
+        let w = wrap(&s, 30);
+        for part in w.split('\n') {
+            assert!(part.chars().count() <= 30, "часть длиннее лимита: {part:?}");
+        }
+        assert_eq!(w.split('\n').count(), 2, "{w:?}");
+        assert_eq!(w, format!("{}\nб", "а".repeat(29)));
+    }
+
+    /// Порт Python `(?:case\s+)?`: «case» без пробела не метка кейса,
+    /// регистр значим — «caseless» и «CASE 7» остаются значениями.
+    #[test]
+    fn switch_labels_case_prefix_exact() {
+        let style = en_style();
+        let text = "if switch (x)\n    caseless: a = 1\n    CASE 7: b = 2\n    case\t8: c = 3\n";
+        let nodes = parse(text, &style, "en").unwrap();
+        let sw = nodes
+            .iter()
+            .find(|n| n.kind == NodeKind::Decision && n.switch_var.is_some())
+            .unwrap();
+        let labels: Vec<&str> = sw.branches.iter().map(|b| b.label.as_str()).collect();
+        assert_eq!(labels, vec!["x = caseless", "x = CASE 7", "x = 8"]);
     }
 
     #[test]

@@ -228,3 +228,75 @@ fn orthogonal_edges() {
         }
     }
 }
+
+/// pend-рельсы при последнем узле-цикле: layout() — публичный API,
+/// «конец» может отсутствовать. Рельсы обязаны дойти до магистрали
+/// под циклом со стрелкой (раньше pend просто терялся).
+#[test]
+fn pend_flush_when_loop_is_last() {
+    let st = Style::default();
+    let text = "if a > 0\n    yes -> end: printf(1)\n    no:\nwhile a < 5\n    a = a + 1\n";
+    let mut nodes = crate::frontend::gvn::parse(text, &st, "en").unwrap();
+    nodes.pop(); // убираем «конец»: последний узел — цикл
+    assert_eq!(nodes.last().unwrap().kind, NodeKind::Loop);
+    let sizes = normalize(&nodes, &st);
+    let l = layout(&nodes, &sizes, &st);
+    let loop_bottom = l
+        .shapes
+        .iter()
+        .filter(|s| s.kind == "loop_end")
+        .map(|s| s.cy + s.h / 2.0)
+        .fold(f64::MIN, f64::max);
+    let rails: Vec<&crate::layout::Edge> = l
+        .edges
+        .iter()
+        .filter(|e| {
+            e.arrow && matches!(e.points.last(), Some(&(x, y)) if x.abs() < 1e-6 && y > loop_bottom)
+        })
+        .collect();
+    assert_eq!(rails.len(), 1, "рельсы «-> конец» не потеряны");
+    // полная ломаная: ветка, спуск, внешний рельс, возврат на магистраль
+    assert_eq!(rails[0].points.len(), 5, "{:?}", rails[0].points);
+    assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
+}
+
+/// Пустой срез не должен паниковать на nodes.len() - 1.
+#[test]
+fn empty_scheme_layout_no_panic() {
+    let st = Style::default();
+    let l = layout(&[], &normalize(&[], &st), &st);
+    assert!(l.shapes.is_empty());
+}
+
+/// Входящие кружки соединителей стреляют стрелками в «конец» — это
+/// легально; единственный не-inbound вход по-прежнему один.
+#[test]
+fn single_entry_allows_inbound_conns() {
+    let st = Style::default();
+    let text = "if a > 0\n    yes -> end: printf(1)\n    no:\nb = 111111\n".repeat(14);
+    let nodes = crate::frontend::gvn::parse(&text, &st, "en").unwrap();
+    let sizes = normalize(&nodes, &st);
+    let parts = split_scheme(nodes, &sizes, &st);
+    assert!(parts.len() >= 2, "схема должна разрезаться на листы");
+    for part in &parts {
+        let l = layout(part, &sizes, &st);
+        assert!(single_entry_ok(&l), "single-entry нарушен на листе");
+    }
+}
+
+/// Схема, оборвавшаяся return'ом: «конец» не нарисован — проверять
+/// нечего, инвариант должен возвращать успех.
+#[test]
+fn single_entry_without_end_shape_is_ok() {
+    let st = Style::default();
+    let text = "a = 1\nreturn 1\nb = 2\n";
+    let nodes = crate::frontend::gvn::parse(text, &st, "en").unwrap();
+    let sizes = normalize(&nodes, &st);
+    let l = layout(&nodes, &sizes, &st);
+    assert_eq!(
+        l.shapes.iter().filter(|s| s.kind == "term").count(),
+        1,
+        "нарисован только «начало»"
+    );
+    assert!(single_entry_ok(&l));
+}
