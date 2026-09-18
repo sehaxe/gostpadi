@@ -80,6 +80,14 @@
              border-radius: 50%; background: transparent;
              color: inherit; opacity: .6; cursor: pointer; }
   .chip .x:hover { opacity: 1; }
+  /* оверлей перетаскивания на всё окно */
+  #dragover { position: fixed; inset: 0; z-index: 20;
+              background: var(--scrim); display: flex; align-items: center;
+              justify-content: center; }
+  #dragover[hidden] { display: none; }
+  #dragover > div { border: 3px dashed var(--ok); border-radius: 16px;
+                    padding: 34px 48px; font-size: 17px; color: var(--ink);
+                    background: var(--pane); text-align: center; }
   textarea { width: 100%; height: 38vh; min-height: 220px; resize: vertical;
              margin-top: 10px;
              font: 13px/1.45 ui-monospace, Consolas, monospace;
@@ -154,11 +162,16 @@
                 border-radius: 8px; margin: 8px 0; background: #fff;
                 cursor: zoom-in; display: block; }
   #images img:hover { border-color: var(--line2); }
-  .sheet { margin-bottom: 14px; }
-  .sheet h3 { margin: 10px 0 4px; font-size: 13px; font-weight: 600;
-              color: var(--muted); overflow-wrap: anywhere; }
-  .sheet:first-child h3 { margin-top: 0; }
-  .sheet .row { margin: 4px 0 10px; }
+  /* секция файла в превью: заголовок прилипает при прокрутке */
+  .filesec { margin-bottom: 10px; }
+  .filesec > h3 { position: sticky; top: -17px; z-index: 1;
+                  margin: -6px -17px 6px; padding: 10px 17px 8px;
+                  font-size: 13px; font-weight: 600; color: var(--muted);
+                  background: var(--pane);
+                  border-bottom: 1px solid var(--line);
+                  overflow-wrap: anywhere; }
+  .filesec .sheet { margin-bottom: 12px; }
+  .filesec .sheet .row { margin: 4px 0 8px; }
   .hint { font-size: 12px; color: var(--faint); margin: 6px 0 0; }
   .empty { text-align: center; padding: 40px 10px; }
   .empty p { color: var(--faint); font-size: 14px; margin: 14px 0 0; }
@@ -238,6 +251,8 @@
     </div>
   </section>
 </main>
+<div id="dragover" hidden><div><b>Отпустите файлы</b> — добавлю к пачке
+  <br><span class="hint">.c — код · .gvn — схема · тип по расширению</span></div></div>
 <div id="lightbox" hidden><img alt="схема крупно"></div>
 
 <script>
@@ -507,12 +522,27 @@ function oneResult(json, item) {
 function applyResult(res, items, ms) {
   const errors = res.errors || [];
   badNames = new Set(errors.map(e => e.name));
+  files.forEach(f => { f.dirty = false; });
   drawChips();
   revokeUrls();
   const box = $("images");
   box.innerHTML = "";
+  // секция на каждый файл: заголовок прилипает, ошибки рядом
+  const sectionOf = {};
+  for (const f of res.files) {
+    const sec = document.createElement("div");
+    sec.className = "filesec";
+    sec.dataset.name = f.name;
+    const h = document.createElement("h3");
+    h.textContent = f.name +
+      (f.sheets.length > 1 ? ` — листов ${f.sheets.length}` : "");
+    sec.appendChild(h);
+    box.appendChild(sec);
+    sectionOf[f.name] = sec;
+  }
   let pages = 0;
   for (const f of res.files) {
+    const sec = sectionOf[f.name];
     f.sheets.forEach((svg, i) => {
       pages++;
       const name = f.name + (f.sheets.length > 1 ? "-" + (i + 1) : "");
@@ -521,15 +551,18 @@ function applyResult(res, items, ms) {
       urls.push(url);
       const sheet = document.createElement("div");
       sheet.className = "sheet";
-      const h = document.createElement("h3");
-      h.textContent = f.sheets.length > 1
-        ? `${f.name} · лист ${i + 1}`
-        : f.name;
-      sheet.appendChild(h);
+      if (f.sheets.length > 1) {
+        const h = document.createElement("h3");
+        h.textContent = `лист ${i + 1}`;
+        sheet.appendChild(h);
+      }
       const img = document.createElement("img");
       img.src = url;
       img.alt = name;
       img.title = "нажми, чтобы увеличить";
+      // явные размеры: браузер не пережёвывает SVG при каждой прокрутке
+      const dims = svgDims(svg);
+      if (dims) { img.width = dims.w; img.height = dims.h; }
       sheet.appendChild(img);
       const row = document.createElement("div");
       row.className = "row";
@@ -550,8 +583,15 @@ function applyResult(res, items, ms) {
       });
       row.append(aSvg, aPng);
       sheet.appendChild(row);
-      box.appendChild(sheet);
+      sec.appendChild(sheet);
     });
+  }
+  // карточки ошибок в свои секции (или в конец, если файл не рисовался)
+  for (const er of errors) {
+    const idx = items.findIndex(it => it.name === er.name);
+    const src = (idx >= 0 ? items[idx] : items[0]).text;
+    const card = errorCard(er, src, idx);
+    (sectionOf[er.name] || box).appendChild(card);
   }
   $("placeholder").hidden = true;
   const sec = ms >= 1000 ? (ms / 1000).toFixed(1).replace(".", ",") + " с"
@@ -561,17 +601,18 @@ function applyResult(res, items, ms) {
     : "";
   status(`Готово: ${pages} ${pages === 1 ? "лист" : "листов"} · ${sec}${errNote}`,
          false);
-  // карточки ошибок в превью: имя файла + место в коде
-  for (const er of errors) {
-    const idx = items.findIndex(it => it.name === er.name);
-    const src = (idx >= 0 ? items[idx] : items[0]).text;
-    box.appendChild(errorCard(er, src, idx));
-  }
   // шеринг-хэш имеет смысл только в черновике: в пачке ссылка
   // перезатирала бы восстановление файлов
   if (!errors.length && cur < 0) {
     history.replaceState(null, "", "#c=" + b64urlEncode($("code").value));
   }
+}
+
+// размер листа из шапки SVG (pt -> px), чтобы <img> знал габариты заранее
+function svgDims(svg) {
+  const m = svg.match(/width="([\d.]+)pt" height="([\d.]+)pt"/);
+  if (!m) return null;
+  return { w: Math.round(+m[1] * 4 / 3), h: Math.round(+m[2] * 4 / 3) };
 }
 
 // карточка ошибки файла: заголовок + фрагмент кода с кареткой; клик
@@ -637,12 +678,22 @@ function syncCur() {
 }
 
 function selectChip(i) {
-  if (i === cur) return;
+  if (i === cur) { scrollToSheet(cur); return; }
   syncCur();
   cur = i;
   $("code").value = files[i].text;
   drawChips();
   persist();
+  scrollToSheet(i);
+}
+
+// превью прокручивается к секции выбранного файла
+function scrollToSheet(i) {
+  const f = files[i];
+  if (!f) return;
+  document
+    .querySelector(`#images .filesec[data-name="${CSS.escape(f.name)}"]`)
+    ?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function removeChip(i) {
@@ -668,7 +719,7 @@ function drawChips() {
     chip.dataset.i = i;
     chip.title = f.name;
     const label = document.createElement("span");
-    label.textContent = f.name;
+    label.textContent = (f.dirty ? "● " : "") + f.name;
     label.addEventListener("click", () => selectChip(i));
     const x = document.createElement("button");
     x.className = "x";
@@ -680,28 +731,42 @@ function drawChips() {
   });
 }
 
-function loadFiles(list) {
-  const picked = [...list].slice(0, 32).map(f => {
+// добавление файлов к пачке (не замена); повторное чтение файла
+// с тем же именем обновляет его; нечитаемые — в статус, пачка не виснет
+async function loadFiles(list) {
+  const added = [];
+  const failed = [];
+  for (const f of [...list].slice(0, 64)) {
     const stem = f.name.replace(/\.[^.]+$/, "")
       .replace(/[^\wа-яё.-]+/gi, "_") || "scheme";
-    return { name: f.name, stem, text: "", c: /\.c$/i.test(f.name) };
-  });
-  let done = 0;
-  for (const [i, f] of [...list].slice(0, 32).entries()) {
-    f.text().then(t => {
-      picked[i].text = t;
-      if (++done === picked.length) {
-        files = picked;
-        cur = 0;
-        $("code").value = files[0].text;
-        $("dropname").textContent =
-          files.length > 1 ? ` · файлов: ${files.length}` : "";
-        drawChips();
-        persist();
-        renderNow();
-      }
-    });
+    try {
+      added.push({
+        name: f.name,
+        stem,
+        text: await f.text(),
+        c: /\.c$/i.test(f.name),
+        dirty: false,
+      });
+    } catch (e) {
+      failed.push(f.name);
+    }
   }
+  if (failed.length) {
+    status("Не удалось прочитать: " + failed.join(", "), true);
+  }
+  if (!added.length) return;
+  const names = new Set(added.map(a => a.name));
+  files = files.filter(f => !names.has(f.name)).concat(added);
+  cur = files.indexOf(added[0]);
+  $("code").value = files[cur].text;
+  $("dropname").textContent =
+    files.length > 1 ? ` · файлов: ${files.length}` : "";
+  badNames = new Set();
+  drawChips();
+  persist();
+  renderNow();
+  // превью — к свежедобавленному файлу (секция появится после рендера)
+  requestAnimationFrame(() => requestAnimationFrame(() => scrollToSheet(cur)));
 }
 
 function persist() {
@@ -751,7 +816,13 @@ $("lw").addEventListener("change", () => {
 });
 
 $("code").addEventListener("input", () => {
-  if (cur < 0) store.set("gostpadi.code", $("code").value);
+  if (cur < 0) {
+    store.set("gostpadi.code", $("code").value);
+  } else if (files[cur]) {
+    files[cur].text = $("code").value;
+    files[cur].dirty = true;
+    drawChips();
+  }
   if (engineReady) status("Правки не нарисованы — нажми «Схема →»");
 });
 $("code").addEventListener("keydown", e => {
@@ -785,16 +856,33 @@ for (const b of document.querySelectorAll(".ex")) {
 const drop = $("drop");
 const fileInput = $("file");
 drop.addEventListener("click", () => fileInput.click());
-drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
-drop.addEventListener("dragleave", () => drop.classList.remove("over"));
-drop.addEventListener("drop", e => {
-  e.preventDefault();
-  drop.classList.remove("over");
-  if (e.dataTransfer.files.length) loadFiles(e.dataTransfer.files);
-});
 fileInput.addEventListener("change", e => {
   if (e.target.files.length) loadFiles(e.target.files);
   fileInput.value = "";
+});
+
+// перетаскивание на всё окно: мимо зоны файл больше не открывает
+// страницу, а попадает в пачку
+let dragDepth = 0;
+addEventListener("dragenter", e => {
+  e.preventDefault();
+  if (e.dataTransfer?.types.includes("Files") && ++dragDepth === 1) {
+    $("dragover").hidden = false;
+  }
+});
+addEventListener("dragover", e => e.preventDefault());
+addEventListener("dragleave", e => {
+  e.preventDefault();
+  if (--dragDepth <= 0) {
+    dragDepth = 0;
+    $("dragover").hidden = true;
+  }
+});
+addEventListener("drop", e => {
+  e.preventDefault();
+  dragDepth = 0;
+  $("dragover").hidden = true;
+  if (e.dataTransfer?.files.length) loadFiles(e.dataTransfer.files);
 });
 
 const lightbox = $("lightbox");
