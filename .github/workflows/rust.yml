@@ -4,10 +4,11 @@ name: rust
     branches: [flowengine, main]
   pull_request:
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   test:
     runs-on: ubuntu-latest
-    # тулчейн спрят: docs/gostpadi.wasm сверяется sha с этой сборкой
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.98.1
@@ -18,17 +19,25 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo fmt --check
       - run: cargo build --release
-      # сайт: docs/gostpadi.wasm обязан быть свежей сборкой движка
-      # (страница грузит его как есть); рассинхрон = ошибка CI
-      - run: |
+      # сайт: docs/gostpadi.wasm — движок для страницы. На main CI сам
+      # пересобирает и коммитит его, если исходники ушли вперёд.
+      - name: Свежий gostpadi.wasm для сайта
+        run: |
           CARGO_PROFILE_RELEASE_OPT_LEVEL=z cargo build --release \
             --lib --target wasm32-unknown-unknown
           test -s target/wasm32-unknown-unknown/release/gostpadi.wasm
-          sha256sum target/wasm32-unknown-unknown/release/gostpadi.wasm \
-            | sed 's| .*/| |' > /tmp/wasm.sha
-          sha256sum docs/gostpadi.wasm | sed 's| .*/| |' > /tmp/docs.sha
-          diff /tmp/wasm.sha /tmp/docs.sha || {
-            echo "::error::docs/gostpadi.wasm устарел — пересобери:"
-            echo "::error::CARGO_PROFILE_RELEASE_OPT_LEVEL=z cargo build --release --lib --target wasm32-unknown-unknown && cp target/wasm32-unknown-unknown/release/gostpadi.wasm docs/"
-            exit 1
-          }
+          if [ "$GITHUB_EVENT_NAME" != "push" ] || [ "$GITHUB_REF_NAME" != "main" ]; then
+            echo "не main — docs/gostpadi.wasm не трогаем"
+            exit 0
+          fi
+          if ! cmp -s target/wasm32-unknown-unknown/release/gostpadi.wasm docs/gostpadi.wasm; then
+            cp target/wasm32-unknown-unknown/release/gostpadi.wasm docs/gostpadi.wasm
+            git config user.name "wasm-bot"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add docs/gostpadi.wasm
+            git commit -m "wasm: пересборка движка для сайта"
+            git push
+            echo "wasm обновлён и запушен"
+          else
+            echo "docs/gostpadi.wasm актуален"
+          fi
