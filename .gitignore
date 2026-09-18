@@ -1,5 +1,3 @@
-__pycache__/
-*.pyc
 *.png
 !docs/*.png
 .bulba/

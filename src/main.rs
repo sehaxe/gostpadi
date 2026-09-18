@@ -26,14 +26,19 @@ fn out(s: &str) {
 /// Версия — единственный источник истины: Cargo.toml.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-const TEMPLATE: &str = "#gostpadi 1\n\
-# One line = one block; top to bottom. Five words: input, output, if, yes/no.\n\
-input scanf(\"%d\", &a)\n\
-c = a * 2\n\
-if c > 10\n\
-    yes: printf(\"many\"); break\n\
-    no: c = 0\n\
-output printf(\"c = %d\", c)\n";
+/// Внимание: `\`-перенос внутри строкового литерала съедает отступы
+/// следующей строки — ветки шаблона обязаны остаться с отступом в 4
+/// пробела, иначе `--template | gostpadi - --check` не сойдётся.
+const TEMPLATE: &str = "\
+#gostpadi 1
+# One line = one block; top to bottom. Five words: input, output, if, yes/no.
+input scanf(\"%d\", &a)
+c = a * 2
+if c > 10
+    yes: printf(\"many\"); break
+    no: c = 0
+output printf(\"c = %d\", c)
+";
 
 const HELP: &str = "gostpadi 2.0.0 — блок-схемы по ГОСТ 19.701 из кода C или .gvn
 

@@ -7,31 +7,10 @@
 Каждая страница — в пределах А4, блоки на всех листах одной работы
 имеют один и тот же размер. Рисовать руками не приходится.
 
-## gostpadi 2 (Rust, ветка flowengine)
-
-Новый движок на Rust, ноль зависимостей: только stdlib, SVG без matplotlib.
-Фигуры и линии по ГОСТ 19.701: циклы — шестиугольниками «как на доске»,
-коридоры обхода для `break`, одна стрелка в «Конец» (все ветки сливаются
-T-узлом), тонкие стрелки с наконечником 45°. Пачка файлов рисуется
-с едиными размерами блоков и общим масштабом страниц.
-
-Сборка:
-
-```bash
-cargo build --release
-```
-
-Использование:
-
-```bash
-./target/release/gostpadi examples/main.c -o main.svg        # один файл
-./target/release/gostpadi 1/*.gvn -o out/                    # пачка в папку
-./target/release/gostpadi scheme.gvn -o s.svg --labels=ru    # надписи Да/Нет
-./target/release/gostpadi scheme.gvn --check                 # только проверка
-```
-
-Статус: экспериментально, API и геометрия могут меняться.
-Python-версия 1.x остаётся основной в `main`.
+Движок — Rust, ноль зависимостей (только stdlib и парсер C), вывод —
+чистый SVG по ГОСТ 19.701-90. Пачка файлов рисуется с едиными размерами
+блоков и общим масштабом страниц. Тот же движок крутится и на сайте:
+[sehaxe.github.io/gostpadi](https://sehaxe.github.io/gostpadi/).
 
 ![схема из кода C](docs/scheme-from-c.png)
 
@@ -40,44 +19,26 @@ Python-версия 1.x остаётся основной в `main`.
 
 ![switch](docs/scheme-switch.png)
 
-Пакет на PyPI: [pypi.org/project/gostpadi](https://pypi.org/project/gostpadi/)
-Онлайн-версия (схема из кода прямо в браузере):
-[sehaxe.github.io/gostpadi](https://sehaxe.github.io/gostpadi/)
-
 ## Установка
 
 ```bash
-pip install gostpadi
+cargo install --git https://github.com/sehaxe/gostpadi
 ```
 
-Нужны [matplotlib](https://matplotlib.org/) и [pycparser](https://github.com/eliben/pycparser) —
-поставятся сами.
-
-Вариант без установки — [uv](https://docs.astral.sh/uv/) запускает утилиту
-прямо с GitHub:
-
-```bash
-uv run https://raw.githubusercontent.com/sehaxe/gostpadi/main/gostpadi.py main.c
-```
+Или готовый бинарник — в [релизах](https://github.com/sehaxe/gostpadi/releases)
+(Linux/macOS/Windows).
 
 ## Использование
 
 ```bash
-gostpadi main.c                 # -> main.png, вписано в А4
-gostpadi main.c --show          # показать схему в терминале
-gostpadi main.c -o scheme.svg   # векторный SVG для Word/LaTeX
-gostpadi main.c --auto          # размер по схеме, без ужимания
-gostpadi main.c --gvn           # сохранить текст схемы (можно править)
-gostpadi 1/main.c 2/main.c 3/main.c 4/main.c -o scheme.png
+gostpadi main.c -o main.svg            # один файл -> main.svg
+gostpadi 1/*.gvn 2/*.c -o out/         # пачка в папку, у каждой свой .svg
+gostpadi scheme.gvn -o s.svg --labels=ru  # надписи «начало/конец», «да/нет»
+gostpadi scheme.gvn --check            # только проверить, не рисовать
 ```
 
-Последний режим — **пачка схем**: каждой входной схеме рисуется свой
-`scheme.png` рядом с ней (или в папке, если `-o папка/`), но размеры фигур
-и масштаб страниц общие — во всей работе блоки всех схем одинаковые,
-как и требуют правила оформления отчёта.
-
-Флаг `--labels=ru` переключает все надписи схемы на русский
-(«начало/конец», «да/нет»).
+Пачка — для отчёта: каждой схеме свой `.svg` (при -o папке), но размеры
+фигур и масштаб страниц общие на всю пачку — блоки всех схем одинаковые.
 
 Понимает: `printf`/`scanf` (сами параллелограммы), присваивания, `if/else`
 (в том числе `else if` и вложенные ветки), `switch/case/default` (кейсы висят
@@ -113,35 +74,22 @@ output printf("done")
 
 | опция | что делает |
 |---|---|
-| `-o ФАЙЛ` | имя результата (`.png` или `.svg`); для пачки — имя рядом с каждым входом или папка |
-| `--show` | нарисовать схему прямо в терминале |
-| `--auto` | канвас по размеру схемы, без ужимания |
-| `--gvn` | сохранить текст схемы |
-| `--scale=N` | кратность плотности пикселей (чёткость; страница всегда в пределах А4) |
-| `--font=N` | кегль (12) |
-| `--lw=N` | толщина всех линий (1.0) |
-| `--dpi=N` | плотность пикселей (200) |
+| `-o ФАЙЛ/ПАПКА` | имя результата (`.svg`); для пачки — папка или имя рядом с каждым входом |
 | `--labels=ru\|en` | язык надписей: «Start/End» и «yes/no» (по умолчанию en) или «начало/конец» и «да/нет» |
-| `--template` | заготовка схемы |
+| `--font=N` | кегль текста в pt (12), растит всю геометрию согласованно |
+| `--lw=N` | толщина линий и усиков стрелок (1.0) |
+| `--check` | только проверка схем (пересечения, наложения, один вход в «конец») |
+| `--template` | заготовка .gvn на stdout |
+| `-h, --help` | справка |
+| `-V, --version` | версия |
 
-## Из Python
-
-```python
-import gostpadi
-
-gostpadi.render(open("main.c").read(), "схема.png")          # из кода C
-gostpadi.render(open("схема.gvn").read(), "результат.png")   # из .gvn
-gostpadi.render(text, "x2.png", page="auto", scale=2.0)      # опции
-```
-
-## Проверка
+## Разработка
 
 ```bash
-uv run --with matplotlib --with pycparser python selftest.py
+cargo test          # 104 теста: парсер, раскладка, рендер, CLI
+cargo clippy --all-targets -- -D warnings
+cargo fmt --check
 ```
-
-Прогоняет все вариации и сверяет геометрию с эталоном
-(`tests/baseline.json`).
 
 ## Лицензия
 

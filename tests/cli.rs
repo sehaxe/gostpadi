@@ -53,6 +53,23 @@ fn template_prints_gvn_stub() {
     assert!(String::from_utf8_lossy(&out.stdout).contains("input scanf"));
 }
 
+/// Шаблон обязан быть рабочей схемой: --template -> файл -> --check = ok.
+/// Ловит съеденные `\`-переносом отступы веток (if без веток).
+#[test]
+fn template_roundtrips_through_check() {
+    let d = tmp("template-roundtrip");
+    let f = d.join("tpl.gvn");
+    let out = run(&["--template"]);
+    fs::write(&f, &out.stdout).unwrap();
+    let chk = run(&["--check", f.to_str().unwrap()]);
+    assert!(
+        chk.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&chk.stderr)
+    );
+    assert!(String::from_utf8_lossy(&chk.stdout).contains("ok: 6 blocks"));
+}
+
 #[test]
 fn no_args_exits_two() {
     let out = run(&[]);
