@@ -1,6 +1,7 @@
 name: rust
 "on":
-  push: { branches: [flowengine, main] }
+  push:
+    branches: [flowengine, main]
   pull_request:
   workflow_dispatch:
 jobs:
@@ -10,7 +11,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.98.1
-        with: { components: clippy, rustfmt, targets: wasm32-unknown-unknown }
+        with:
+          components: clippy, rustfmt
+          targets: wasm32-unknown-unknown
       - run: cargo test --all-targets
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo fmt --check
