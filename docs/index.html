@@ -28,7 +28,7 @@
     --accent: #16161a; --accent-ink: #ffffff; --accent-hover: #2c2c33;
     --hdr: #16161a; --hdr-ink: #f4f4ef; --hdr-link: #99aadd;
     --ok: #2a7a2a; --ok-soft: #eef7ee; --drop-line: #b9b9a8;
-    --err-bg: #ffd9d9; --err-ink: #7a1020;
+    --err-bg: #ffd9d9; --err-ink: #7a1020; --err-line: #c0182c;
     --err-sn: #ffffff; --err-sn-ink: #16161a;
     --mark: #ffe1e1; --caret: #c0182c;
     --scrim: rgba(10, 10, 12, .82);
@@ -41,7 +41,7 @@
       --accent: #e6e6e1; --accent-ink: #16161a; --accent-hover: #ffffff;
       --hdr: #0c0c0e; --hdr-ink: #e6e6e1; --hdr-link: #8cb8ff;
       --ok: #7fd07f; --ok-soft: #1d2b1d; --drop-line: #4a4a52;
-      --err-bg: #3a1719; --err-ink: #ffadae;
+      --err-bg: #3a1719; --err-ink: #ffadae; --err-line: #ff7a7b;
       --err-sn: #141416; --err-sn-ink: #e6e6e1;
       --mark: #45232a; --caret: #ff7a7b;
       --scrim: rgba(0, 0, 0, .86);
@@ -62,8 +62,26 @@
           box-shadow: 0 1px 3px rgba(0, 0, 0, .07); }
   .pane h2 { margin: 0; font-size: 13px; text-transform: uppercase;
              letter-spacing: .8px; color: var(--muted); }
-  textarea { width: 100%; height: 42vh; min-height: 220px; resize: vertical;
-             margin-top: 12px;
+  /* чипсы загруженных файлов */
+  #files { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  #files:empty { display: none; }
+  .chip { display: inline-flex; align-items: center; gap: 6px;
+          max-width: 100%; padding: 3px 6px 3px 12px;
+          font-size: 13px; border-radius: 999px; cursor: pointer;
+          background: var(--chip); border: 1px solid var(--line2);
+          color: var(--muted); }
+  .chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip:hover { background: var(--hover); }
+  .chip.sel { background: var(--accent); border-color: var(--accent);
+              color: var(--accent-ink); }
+  .chip.bad { border-color: var(--err-line); color: var(--err-ink); }
+  .chip.bad.sel { background: var(--err-line); color: #fff; }
+  .chip .x { border: 0; padding: 0 4px; font-size: 14px; line-height: 1;
+             border-radius: 50%; background: transparent;
+             color: inherit; opacity: .6; cursor: pointer; }
+  .chip .x:hover { opacity: 1; }
+  textarea { width: 100%; height: 38vh; min-height: 220px; resize: vertical;
+             margin-top: 10px;
              font: 13px/1.45 ui-monospace, Consolas, monospace;
              background: var(--pane); color: var(--ink);
              border: 1px solid var(--line2); border-radius: 8px;
@@ -102,7 +120,8 @@
             padding: 9px 12px; border-radius: 8px; background: var(--soft);
             font-size: 13px; min-height: 20px; }
   #status.err { background: var(--err-bg); color: var(--err-ink);
-                flex-direction: column; align-items: stretch; }
+                flex-direction: column; align-items: stretch;
+                max-height: 45vh; overflow: auto; }
   #status .snippet { font: 12px/1.5 ui-monospace, Consolas, monospace;
                      background: var(--err-sn); color: var(--err-sn-ink);
                      border-radius: 6px;
@@ -128,14 +147,17 @@
           background: var(--chip); border-radius: 8px; }
   #busy { display: flex; align-items: center; gap: 8px; font-size: 13px;
           color: var(--muted); }
+  #busy[hidden] { display: none; }  /* display:flex перебивает hidden */
   #busy .spinner { width: 13px; height: 13px; border-width: 2px; }
   /* лист схемы всегда белый — независимо от темы сайта */
   #images img { max-width: 100%; border: 1px solid var(--line);
                 border-radius: 8px; margin: 8px 0; background: #fff;
-                cursor: zoom-in; }
+                cursor: zoom-in; display: block; }
   #images img:hover { border-color: var(--line2); }
   .sheet { margin-bottom: 14px; }
-  .sheet h3 { margin: 6px 0; font-size: 13px; color: var(--muted); }
+  .sheet h3 { margin: 10px 0 4px; font-size: 13px; font-weight: 600;
+              color: var(--muted); overflow-wrap: anywhere; }
+  .sheet:first-child h3 { margin-top: 0; }
   .sheet .row { margin: 4px 0 10px; }
   .hint { font-size: 12px; color: var(--faint); margin: 6px 0 0; }
   .empty { text-align: center; padding: 40px 10px; }
@@ -146,6 +168,16 @@
               background-size: 200% 100%; animation: shimmer 1.2s infinite; }
   @keyframes shimmer { to { background-position: -200% 0; } }
   .chk { font-size: 13px; display: flex; gap: 6px; align-items: center; }
+  .errcard { border: 1px solid var(--err-line); border-radius: 8px;
+             background: var(--err-bg); color: var(--err-ink);
+             padding: 10px 12px; margin: 10px 0; font-size: 13px;
+             overflow: auto; }
+  .errcard .snippet { font: 12px/1.5 ui-monospace, Consolas, monospace;
+                      background: var(--err-sn); color: var(--err-sn-ink);
+                      border-radius: 6px; padding: 8px 10px; margin: 8px 0 0;
+                      cursor: pointer; overflow-x: auto; white-space: pre; }
+  .errcard .snippet .bad { background: var(--mark); }
+  .errcard .snippet .caret { color: var(--caret); font-weight: 700; }
   #lightbox { position: fixed; inset: 0; background: var(--scrim);
               display: flex; align-items: center; justify-content: center;
               padding: 20px; cursor: zoom-out; z-index: 10; }
@@ -159,15 +191,17 @@
   <h1>gostpadi</h1>
   <p>блок-схемы из кода на C или файла .gvn — всё считается у тебя в браузере,
      код никуда не отправляется. Движок на Rust, тот же, что и в
-     <a href="https://github.com/sehaxe/gostpadi">CLI</a>.</p>
+     <a href="https://github.com/sehaxe/gostpadi">CLI</a>: кинь несколько
+     файлов — блоки во всех схемах будут одного размера, как в отчёте.</p>
 </header>
 <main>
   <section class="pane">
     <div class="preview-head"><h2>Код</h2></div>
+    <div id="files"></div>
     <div class="drop" id="drop">
-      <b>Перетащи файл</b> <code>.c</code> или <code>.gvn</code> —
-      или нажми, чтобы выбрать<span id="dropname"></span>
-      <input type="file" id="file" accept=".c,.gvn,.txt" hidden>
+      <b>Перетащи файлы</b> <code>.c</code> / <code>.gvn</code> (можно сразу
+      несколько) — или нажми, чтобы выбрать<span id="dropname"></span>
+      <input type="file" id="file" accept=".c,.gvn,.txt" multiple hidden>
     </div>
     <div class="opts">
       <label class="chk"><input type="checkbox" id="ru"> надписи по-русски</label>
@@ -180,14 +214,14 @@
       aria-label="код на C или текст схемы .gvn"></textarea>
     <div class="row">
       <button id="render" disabled>Схема →</button>
-      <button id="share" class="btn" title="скопировать ссылку: код и схема вместе">ссылка</button>
-      <span class="hint">рендер по кнопке или <kbd>Ctrl</kbd>+<kbd>Enter</kbd></span>
+      <button id="share" class="btn" title="скопировать ссылку на текст из редактора">ссылка</button>
+      <span class="hint">рисуются все файлы разом · <kbd>Ctrl</kbd>+<kbd>Enter</kbd></span>
     </div>
     <div id="status"><span class="spinner"></span><span class="stage">
       Загружаю движок…</span></div>
-    <p class="hint">Расширение файла определяет тип: <code>.c</code> — код,
-<code>.gvn</code> — готовая схема. Правь текст прямо здесь — схема
-перерисуется. Нажми на схему, чтобы рассмотреть её целиком.</p>
+    <p class="hint">Тип файла — по расширению: <code>.c</code> — код,
+<code>.gvn</code> — готовая схема. Вставленный без файла текст распознаётся
+сам. Нажми на схему, чтобы рассмотреть её целиком.</p>
   </section>
   <section class="pane" id="preview-wrap">
     <div class="preview-head">
@@ -246,12 +280,17 @@ const EXAMPLES = { c: EXAMPLE_C, gvn: EXAMPLE_GVN };
 
 const $ = id => document.getElementById(id);
 let wasm = null, engineReady = false, wantRender = false;
-let fileStem = "scheme";
 let urls = [];  // blob-URL текущих листов: отзываем при перерисовке
+
+// пачка: {name, stem, text, c}; cur = -1 — черновик без файла
+let files = [];
+let cur = -1;
+let badNames = new Set();  // файлы с ошибками разбора: метки на чипсах
 
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
+  del(k) { try { localStorage.removeItem(k); } catch (e) {} },
 };
 
 function status(html, isErr) {
@@ -272,6 +311,7 @@ function setBusy(on) {
 function revokeUrls() {
   for (const u of urls) URL.revokeObjectURL(u);
   urls = [];
+  $("lightbox").hidden = true;
 }
 
 // ---------- wasm-движок ----------
@@ -283,41 +323,74 @@ async function loadEngine() {
   wasm = instance.exports;
   engineReady = true;
   setBusy(false);
-  status("Готово: перетащи файл или нажми «Схема →»");
-  if (wantRender) { wantRender = false; renderNow(); }
+  status("Готово: перетащи файлы или нажми «Схема →»");
+  renderNow();
 }
 
-// текст -> JSON движка. Все view строго после вызова: память wasm
-// может вырасти и отцепить прежние ArrayBuffer.
-function callEngine(code, isC, ru, lw) {
-  const bytes = new TextEncoder().encode(code);
-  const ip = wasm.gostpadi_alloc(bytes.length);
-  if (ip) new Uint8Array(wasm.memory.buffer, ip, bytes.length).set(bytes);
-  const lp = wasm.gostpadi_alloc(4);
-  const out = wasm.gostpadi_render(ip, bytes.length, isC ? 1 : 0, ru ? 1 : 0,
-                                   lw, 0, lp);
+// вход в память движка; возвращает [ptr, len]
+function wasmInput(bytes) {
+  const p = wasm.gostpadi_alloc(bytes.length);
+  if (p) new Uint8Array(wasm.memory.buffer, p, bytes.length).set(bytes);
+  return [p, bytes.length];
+}
+
+function readOut(out, lp) {
+  // все view строго после вызова: память могла вырасти
   const n = new DataView(wasm.memory.buffer).getUint32(lp, true);
-  const json = out ? new TextDecoder()
-    .decode(new Uint8Array(wasm.memory.buffer, out, n)) : '{"ok":false}';
-  wasm.gostpadi_free(ip, bytes.length);
+  if (!out || !n) return null;
+  return {
+    out,
+    n,
+    json: new TextDecoder().decode(new Uint8Array(wasm.memory.buffer, out, n)),
+  };
+}
+
+function callOne(text, isC, ru, lw) {
+  const [ip, il] = wasmInput(new TextEncoder().encode(text));
+  const lp = wasm.gostpadi_alloc(4);
+  const r = readOut(wasm.gostpadi_render(ip, il, isC ? 1 : 0, ru ? 1 : 0,
+                                        lw, 0, lp), lp);
+  wasm.gostpadi_free(ip, il);
   wasm.gostpadi_free(lp, 4);
-  if (out) wasm.gostpadi_free(out, n);
-  return JSON.parse(json);
+  if (r) wasm.gostpadi_free(r.out, r.n);
+  return JSON.parse(r ? r.json : '{"ok":false}');
+}
+
+function callBatch(items, ru, lw) {
+  const enc = new TextEncoder();
+  const parts = [new Uint8Array(new Uint32Array([items.length]).buffer)];
+  for (const it of items) {
+    const n = enc.encode(it.name), t = enc.encode(it.text);
+    parts.push(new Uint8Array(new Uint32Array([n.length]).buffer), n,
+               new Uint8Array([it.c ? 1 : 0]),
+               new Uint8Array(new Uint32Array([t.length]).buffer), t);
+  }
+  const all = new Uint8Array(parts.reduce((s, p) => s + p.length, 0));
+  let o = 0;
+  for (const p of parts) { all.set(p, o); o += p.length; }
+  const [ip, il] = wasmInput(all);
+  const lp = wasm.gostpadi_alloc(4);
+  const r = readOut(wasm.gostpadi_render_batch(ip, il, ru ? 1 : 0, lw, 0, lp),
+                    lp);
+  wasm.gostpadi_free(ip, il);
+  wasm.gostpadi_free(lp, 4);
+  if (r) wasm.gostpadi_free(r.out, r.n);
+  return JSON.parse(r ? r.json : '{"ok":false}');
 }
 
 // ---------- ошибки разбора ----------
 
 // ошибка с местом: заголовок со строкой + фрагмент кода с кареткой;
 // клик по фрагменту открывает это место в редакторе
-function showError(err) {
+function showError(err, srcText, title) {
   const el = $("status");
   el.className = "err";
   el.innerHTML = "";
   const b = document.createElement("b");
-  b.textContent = err.line ? `строка ${err.line}: ${err.msg}`
-                           : `Ошибка: ${err.msg}`;
+  b.textContent = (title ? title + ": " : "") +
+    (err.line ? `строка ${err.line}: ${err.msg}` : `Ошибка: ${err.msg}`);
   el.appendChild(b);
-  const rows = $("code").value.split("\n");
+  const rows = srcText.split("\n");
   if (!err.line || err.line < 1 || err.line > rows.length) return;
   const pre = document.createElement("pre");
   pre.className = "snippet";
@@ -388,76 +461,261 @@ function downloadPng(svgText, name) {
 
 function renderNow() {
   if (!engineReady) { wantRender = true; return; }
-  const code = $("code").value;
-  if (!code.trim()) { status("Пусто: вставь код или перетащи файл"); return; }
+  syncCur();
+  const items = curItems();
+  const live = items.filter(it => it.text.trim());
+  if (!live.length) {
+    revokeUrls();
+    $("images").innerHTML = "";
+    $("placeholder").hidden = false;
+    status("Пусто: вставь код или перетащи файлы");
+    return;
+  }
   spinner("Рисую схему…");
   setBusy(true);
+  badNames = new Set();
+  // старые листы убираем сразу: рядом со спиннером нечему висеть
+  revokeUrls();
+  $("images").innerHTML = "";
+  $("placeholder").hidden = true;
   requestAnimationFrame(() => {
     const t0 = performance.now();
-    // C-режим: как в CLI — по признакам кода на C
-    const isC = /#include\b|\bint\s+main\s*\(/.test(code);
+    const ru = $("ru").checked, lw = parseFloat($("lw").value);
     let res;
     try {
-      res = callEngine(code, isC, $("ru").checked,
-                       parseFloat($("lw").value));
+      res = live.length === 1
+        ? oneResult(callOne(live[0].text, live[0].c, ru, lw), live[0])
+        : callBatch(live, ru, lw);
     } catch (e) {
       setBusy(false);
       status("Движок упал: " + e, true);
       return;
     }
     setBusy(false);
-    if (!res.ok) { showError(res.error); return; }
-    applySheets(res.sheets, performance.now() - t0);
+    if (!res.ok) { showError(res.error || {}, live[0].text); return; }
+    applyResult(res, live, performance.now() - t0);
   });
 }
 
-function applySheets(sheets, ms) {
+function oneResult(json, item) {
+  // ответ одиночного рендера приводим к виду пачки
+  if (!json.ok) return json;
+  return { ok: true, files: [{ name: item.stem, sheets: json.sheets }],
+           errors: [] };
+}
+
+function applyResult(res, items, ms) {
+  const errors = res.errors || [];
+  badNames = new Set(errors.map(e => e.name));
+  drawChips();
   revokeUrls();
   const box = $("images");
   box.innerHTML = "";
-  sheets.forEach((svg, i) => {
-    const name = fileStem + (sheets.length > 1 ? "-" + (i + 1) : "");
-    const url = URL.createObjectURL(new Blob([svg],
-      { type: "image/svg+xml" }));
-    urls.push(url);
-    const sheet = document.createElement("div");
-    sheet.className = "sheet";
-    if (sheets.length > 1) {  // у одностраничной схемы подпись не нужна:
-      const h = document.createElement("h3");  // заголовок панели уже есть
-      h.textContent = `лист ${i + 1}`;
+  let pages = 0;
+  for (const f of res.files) {
+    f.sheets.forEach((svg, i) => {
+      pages++;
+      const name = f.name + (f.sheets.length > 1 ? "-" + (i + 1) : "");
+      const url = URL.createObjectURL(new Blob([svg],
+        { type: "image/svg+xml" }));
+      urls.push(url);
+      const sheet = document.createElement("div");
+      sheet.className = "sheet";
+      const h = document.createElement("h3");
+      h.textContent = f.sheets.length > 1
+        ? `${f.name} · лист ${i + 1}`
+        : f.name;
       sheet.appendChild(h);
-    }
-    const img = document.createElement("img");
-    img.src = url;
-    img.alt = name;
-    img.title = "нажми, чтобы увеличить";
-    sheet.appendChild(img);
-    const row = document.createElement("div");
-    row.className = "row";
-    const aSvg = document.createElement("a");
-    aSvg.href = url;
-    aSvg.download = name + ".svg";
-    aSvg.textContent = "Скачать SVG";
-    aSvg.className = "btn";
-    const aPng = document.createElement("a");
-    aPng.href = "#";
-    aPng.textContent = "Скачать PNG";
-    aPng.className = "btn";
-    aPng.addEventListener("click", e => {
-      e.preventDefault();
-      aPng.textContent = "готовлю…";
-      downloadPng(svg, name);
-      setTimeout(() => { aPng.textContent = "Скачать PNG"; }, 1500);
+      const img = document.createElement("img");
+      img.src = url;
+      img.alt = name;
+      img.title = "нажми, чтобы увеличить";
+      sheet.appendChild(img);
+      const row = document.createElement("div");
+      row.className = "row";
+      const aSvg = document.createElement("a");
+      aSvg.href = url;
+      aSvg.download = name + ".svg";
+      aSvg.textContent = "SVG";
+      aSvg.className = "btn";
+      const aPng = document.createElement("a");
+      aPng.href = "#";
+      aPng.textContent = "PNG";
+      aPng.className = "btn";
+      aPng.addEventListener("click", e => {
+        e.preventDefault();
+        aPng.textContent = "готовлю…";
+        downloadPng(svg, name);
+        setTimeout(() => { aPng.textContent = "PNG"; }, 1500);
+      });
+      row.append(aSvg, aPng);
+      sheet.appendChild(row);
+      box.appendChild(sheet);
     });
-    row.append(aSvg, aPng);
-    sheet.appendChild(row);
-    box.appendChild(sheet);
-  });
+  }
   $("placeholder").hidden = true;
   const sec = ms >= 1000 ? (ms / 1000).toFixed(1).replace(".", ",") + " с"
                          : Math.round(ms) + " мс";
-  status(`Готово: листов ${sheets.length} · ${sec}`);
-  history.replaceState(null, "", "#c=" + b64urlEncode($("code").value));
+  const errNote = badNames.size
+    ? ` · с ошибками: ${[...badNames].join(", ")}`
+    : "";
+  status(`Готово: ${pages} ${pages === 1 ? "лист" : "листов"} · ${sec}${errNote}`,
+         false);
+  // карточки ошибок в превью: имя файла + место в коде
+  for (const er of errors) {
+    const idx = items.findIndex(it => it.name === er.name);
+    const src = (idx >= 0 ? items[idx] : items[0]).text;
+    box.appendChild(errorCard(er, src, idx));
+  }
+  // шеринг-хэш имеет смысл только в черновике: в пачке ссылка
+  // перезатирала бы восстановление файлов
+  if (!errors.length && cur < 0) {
+    history.replaceState(null, "", "#c=" + b64urlEncode($("code").value));
+  }
+}
+
+// карточка ошибки файла: заголовок + фрагмент кода с кареткой; клик
+// открывает это место в редакторе (с переключением на файл)
+function errorCard(er, srcText, itemIdx) {
+  const card = document.createElement("div");
+  card.className = "errcard";
+  const b = document.createElement("b");
+  b.textContent = er.name + ": " +
+    (er.line ? `строка ${er.line}: ${er.msg}` : er.msg);
+  card.appendChild(b);
+  const rows = srcText.split("\n");
+  if (er.line && er.line >= 1 && er.line <= rows.length) {
+    const pre = document.createElement("pre");
+    pre.className = "snippet";
+    pre.title = "нажми — покажу место в коде";
+    const to = Math.min(rows.length, er.line + 1);
+    const w = String(to).length;
+    for (let i = Math.max(1, er.line - 1); i <= to; i++) {
+      const row = document.createElement("div");
+      row.textContent = String(i).padStart(w) + " | " + (rows[i - 1] ?? "");
+      if (i === er.line) row.className = "bad";
+      pre.appendChild(row);
+    }
+    if (er.col > 0) {
+      const caret = document.createElement("div");
+      caret.className = "caret";
+      caret.textContent =
+        " ".repeat(w) + " | " + " ".repeat(er.col - 1) + "^";
+      pre.appendChild(caret);
+    }
+    pre.addEventListener("click", () => {
+      if (itemIdx >= 0 && cur !== itemIdx && cur >= 0) selectChip(itemIdx);
+      revealLine(er.line, er.col);
+    });
+    card.appendChild(pre);
+  }
+  return card;
+}
+
+// ---------- чипсы файлов ----------
+
+function curItems() {
+  if (cur < 0) {
+    const text = $("code").value;
+    return [{ name: fileStem(), stem: fileStem(), text,
+              c: looksLikeC(text) }];
+  }
+  return files;
+}
+
+function fileStem() {
+  return cur >= 0 && files[cur] ? files[cur].stem : "scheme";
+}
+
+function looksLikeC(text) {
+  return /#include\b|\bint\s+main\s*\(/.test(text);
+}
+
+// синхронизировать редактор с текущим файлом
+function syncCur() {
+  if (cur >= 0 && files[cur]) files[cur].text = $("code").value;
+}
+
+function selectChip(i) {
+  if (i === cur) return;
+  syncCur();
+  cur = i;
+  $("code").value = files[i].text;
+  drawChips();
+  persist();
+}
+
+function removeChip(i) {
+  files.splice(i, 1);
+  if (!files.length) {
+    cur = -1;
+  } else {
+    cur = Math.max(0, Math.min(cur >= i ? cur - 1 : cur, files.length - 1));
+    if (cur >= 0) $("code").value = files[cur].text;
+  }
+  drawChips();
+  persist();
+  renderNow();
+}
+
+function drawChips() {
+  const box = $("files");
+  box.innerHTML = "";
+  files.forEach((f, i) => {
+    const chip = document.createElement("span");
+    chip.className = "chip" + (i === cur ? " sel" : "") +
+      (badNames.has(f.name) ? " bad" : "");
+    chip.dataset.i = i;
+    chip.title = f.name;
+    const label = document.createElement("span");
+    label.textContent = f.name;
+    label.addEventListener("click", () => selectChip(i));
+    const x = document.createElement("button");
+    x.className = "x";
+    x.textContent = "×";
+    x.title = "убрать файл";
+    x.addEventListener("click", e => { e.stopPropagation(); removeChip(i); });
+    chip.append(label, x);
+    box.appendChild(chip);
+  });
+}
+
+function loadFiles(list) {
+  const picked = [...list].slice(0, 32).map(f => {
+    const stem = f.name.replace(/\.[^.]+$/, "")
+      .replace(/[^\wа-яё.-]+/gi, "_") || "scheme";
+    return { name: f.name, stem, text: "", c: /\.c$/i.test(f.name) };
+  });
+  let done = 0;
+  for (const [i, f] of [...list].slice(0, 32).entries()) {
+    f.text().then(t => {
+      picked[i].text = t;
+      if (++done === picked.length) {
+        files = picked;
+        cur = 0;
+        $("code").value = files[0].text;
+        $("dropname").textContent =
+          files.length > 1 ? ` · файлов: ${files.length}` : "";
+        drawChips();
+        persist();
+        renderNow();
+      }
+    });
+  }
+}
+
+function persist() {
+  if (files.length) {
+    store.set("gostpadi.batch", JSON.stringify({ files, cur }));
+    store.del("gostpadi.code");
+    // устаревший #c из черновика не должен переживать пачку
+    if (location.hash) {
+      history.replaceState(null, "", location.pathname + location.search);
+    }
+  } else {
+    store.del("gostpadi.batch");
+    store.set("gostpadi.code", $("code").value);
+  }
 }
 
 // ---------- ссылка-шеринг ----------
@@ -478,23 +736,9 @@ function b64urlDecode(s) {
 
 // ---------- страница ----------
 
-function setCode(text, stem) {
-  $("code").value = text;
-  if (stem) fileStem = stem;
-  store.set("gostpadi.code", text);
-  renderNow();
-}
-
-function loadFile(f) {
-  fileStem = f.name.replace(/\.[^.]+$/, "").replace(/[^\wа-яё.-]+/gi, "_")
-              || "scheme";
-  $("dropname").textContent = ` · выбран: ${f.name}`;
-  f.text().then(t => setCode(t, fileStem));
-}
-
 $("render").addEventListener("click", renderNow);
 $("ru").addEventListener("change", () => {
-  store.set("gostpadi.ru", $("ru").checked ? "1" : "");
+  store.set("gostpadi.ru", $("ru").checked ? "1" : "0");
   renderNow();
 });
 
@@ -507,7 +751,7 @@ $("lw").addEventListener("change", () => {
 });
 
 $("code").addEventListener("input", () => {
-  store.set("gostpadi.code", $("code").value);
+  if (cur < 0) store.set("gostpadi.code", $("code").value);
   if (engineReady) status("Правки не нарисованы — нажми «Схема →»");
 });
 $("code").addEventListener("keydown", e => {
@@ -517,7 +761,7 @@ $("code").addEventListener("keydown", e => {
   }
 });
 
-// ссылка на текущий код со схемой — в буфер обмена
+// ссылка на текст из редактора — в буфер обмена
 $("share").addEventListener("click", () => {
   const url = location.origin + location.pathname +
               "#c=" + b64urlEncode($("code").value);
@@ -530,8 +774,11 @@ $("share").addEventListener("click", () => {
 
 for (const b of document.querySelectorAll(".ex")) {
   b.addEventListener("click", () => {
-    $("dropname").textContent = "";
-    setCode(EXAMPLES[b.dataset.ex], "scheme");
+    files = [];
+    cur = -1;
+    drawChips();
+    store.del("gostpadi.batch");
+    setCode(EXAMPLES[b.dataset.ex]);
   });
 }
 
@@ -543,12 +790,10 @@ drop.addEventListener("dragleave", () => drop.classList.remove("over"));
 drop.addEventListener("drop", e => {
   e.preventDefault();
   drop.classList.remove("over");
-  const f = e.dataTransfer.files[0];
-  if (f) loadFile(f);
+  if (e.dataTransfer.files.length) loadFiles(e.dataTransfer.files);
 });
 fileInput.addEventListener("change", e => {
-  const f = e.target.files[0];
-  if (f) loadFile(f);
+  if (e.target.files.length) loadFiles(e.target.files);
   fileInput.value = "";
 });
 
@@ -563,20 +808,43 @@ document.addEventListener("keydown", e => {
   if (e.key === "Escape" && !lightbox.hidden) lightbox.hidden = true;
 });
 
-// код из ссылки (#c=…) важнее сохранённого в localStorage
-const hm = location.hash.match(/[#&]c=([A-Za-z0-9_-]+)/);
-if (hm) {
-  $("code").value = b64urlDecode(hm[1]);
-  fileStem = "code";
-} else {
-  const savedCode = store.get("gostpadi.code");
-  $("code").value = (savedCode && savedCode.trim()) ? savedCode : EXAMPLE_C;
+function setCode(text) {
+  $("code").value = text;
+  store.set("gostpadi.code", text);
+  renderNow();
 }
-$("ru").checked = store.get("gostpadi.ru") !== "";
+
+// черновик: код из ссылки (#c=…) важнее сохранённого; пачка из
+// localStorage важнее черновика, ссылка важнее всего
+const hm = location.hash.match(/[#&]c=([A-Za-z0-9_-]+)/);
+let restored = false;
+if (hm) {
+  // чужая ссылка: показываем её код, сохранённую пачку не трогаем,
+  // но и не рисуем поверх
+  $("code").value = b64urlDecode(hm[1]);
+} else {
+  try {
+    const saved = JSON.parse(store.get("gostpadi.batch") || "null");
+    if (Array.isArray(saved?.files) && saved.files.length) {
+      files = saved.files;
+      cur = Math.min(Math.max(saved.cur | 0, 0), files.length - 1);
+      $("code").value = files[cur].text;
+      drawChips();
+      restored = true;
+    }
+  } catch (e) { /* битый кеш — начнём с примера */ }
+  if (!restored) {
+    const savedCode = store.get("gostpadi.code");
+    $("code").value = (savedCode && savedCode.trim()) ? savedCode : EXAMPLE_C;
+  }
+}
+// русские надписи — по умолчанию; «0» в хранилище выключает
+$("ru").checked = store.get("gostpadi.ru") !== "0";
 if (store.get("gostpadi.lw")) {
   $("lw").value = store.get("gostpadi.lw");
-  $("lw-val").textContent = $("lw").value.replace(".", ",");
 }
+$("lw-val").textContent = $("lw").value.replace(".", ",");
+
 loadEngine().catch(e => {
   setBusy(false);
   status("Движок не загрузился: " + e.message, true);

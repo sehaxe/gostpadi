@@ -5,6 +5,40 @@
 
 use crate::pipeline::{self, Options};
 
+/// Чтение u32 little-endian из буфера с проверкой границ.
+fn rd_u32(b: &[u8], off: &mut usize) -> Option<u32> {
+    let v = b.get(*off..*off + 4)?;
+    *off += 4;
+    Some(u32::from_le_bytes([v[0], v[1], v[2], v[3]]))
+}
+
+/// Чтение байтового блока длиной из буфера.
+fn rd_block<'a>(b: &'a [u8], off: &mut usize, len: usize) -> Option<&'a [u8]> {
+    let v = b.get(*off..*off + len)?;
+    *off += len;
+    Some(v)
+}
+
+/// Разбор пачки: u32 count, затем для каждого входа u32 name_len,
+/// имя, u8 is_c, u32 data_len, текст. None — битый пакет.
+fn unpack(b: &[u8]) -> Option<Vec<(String, String, bool)>> {
+    let mut off = 0usize;
+    let count = rd_u32(b, &mut off)? as usize;
+    if count > 4096 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        let nl = rd_u32(b, &mut off)? as usize;
+        let name = String::from_utf8(rd_block(b, &mut off, nl)?.to_vec()).ok()?;
+        let is_c = *rd_block(b, &mut off, 1)?.first()? != 0;
+        let dl = rd_u32(b, &mut off)? as usize;
+        let text = String::from_utf8(rd_block(b, &mut off, dl)?.to_vec()).ok()?;
+        out.push((name, text, is_c));
+    }
+    Some(out)
+}
+
 /// JSON-строка в буфер: кавычки, слэш и управляющие символы.
 fn json_str(out: &mut String, s: &str) {
     out.push('"');
@@ -110,6 +144,96 @@ pub extern "C" fn gostpadi_alloc(len: usize) -> *mut u8 {
     let mut v = Vec::<u8>::with_capacity(len);
     let p = v.as_mut_ptr();
     std::mem::forget(v);
+    p
+}
+
+/// Пачка файлов: единые размеры блоков и общий масштаб на все входы —
+/// как `gostpadi 1/*.gvn -o out/` в CLI. Вход — упакованный unpack();
+/// выход — JSON {"ok":true,"files":[{name,sheets}]}, сбойные входы
+/// перечислены в "errors", остальные рисуются.
+#[no_mangle]
+pub extern "C" fn gostpadi_render_batch(
+    ptr: *const u8,
+    len: usize,
+    ru: u8,
+    lw: f64,
+    font: f64,
+    out_len: *mut usize,
+) -> *mut u8 {
+    if ptr.is_null() || out_len.is_null() {
+        return std::ptr::null_mut();
+    }
+    let bytes = if len == 0 {
+        &[][..]
+    } else {
+        unsafe { std::slice::from_raw_parts(ptr, len) }
+    };
+    let inputs = match unpack(bytes) {
+        Some(v) if !v.is_empty() => v,
+        _ => return std::ptr::null_mut(),
+    };
+    let opts = Options {
+        labels: if ru != 0 { "ru" } else { "en" }.into(),
+        font: (font > 0.0).then_some(font),
+        lw: (lw > 0.0).then_some(lw),
+    };
+    let st = opts.style();
+    // сбойные входы не останавливают остальные (порт CLI-пачки)
+    let mut ok: Vec<(String, Vec<crate::ir::Node>)> = Vec::new();
+    let mut errors: Vec<(String, crate::error::ParseError)> = Vec::new();
+    for (name, text, is_c) in &inputs {
+        match pipeline::parse_batch(
+            std::slice::from_ref(&(name.clone(), text.clone(), *is_c)),
+            &opts,
+        ) {
+            Ok(mut s) => ok.append(&mut s),
+            Err((_, e)) => errors.push((name.clone(), e)),
+        }
+    }
+    let rendered = pipeline::render_batch(ok, &st);
+    let mut out = String::with_capacity(4096);
+    out.push_str("{\"ok\":true,\"files\":[");
+    for (i, (name, pages)) in rendered.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str("{\"name\":");
+        json_str(&mut out, name);
+        out.push_str(",\"sheets\":[");
+        for (k, p) in pages.iter().enumerate() {
+            if k > 0 {
+                out.push(',');
+            }
+            json_str(&mut out, p);
+        }
+        out.push_str("]}");
+    }
+    out.push_str("],\"errors\":[");
+    for (i, (name, e)) in errors.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str("{\"name\":");
+        json_str(&mut out, name);
+        out.push_str(",\"msg\":");
+        json_str(&mut out, &e.msg);
+        out.push_str(",\"line\":");
+        out.push_str(&e.line.map_or("null".into(), |l| l.to_string()));
+        out.push_str(",\"col\":");
+        out.push_str(&e.col.map_or("null".into(), |c| c.to_string()));
+        out.push_str(",\"src\":");
+        match &e.src {
+            Some(s) => json_str(&mut out, s),
+            None => out.push_str("null"),
+        }
+        out.push('}');
+    }
+    out.push_str("]}");
+    let boxed = out.into_bytes().into_boxed_slice();
+    let p = boxed.as_ptr() as *mut u8;
+    let n = boxed.len();
+    std::mem::forget(boxed);
+    unsafe { *out_len = n };
     p
 }
 
