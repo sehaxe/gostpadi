@@ -1,4 +1,4 @@
-#![forbid(unsafe_code)]
+#![cfg_attr(not(target_arch = "wasm32"), forbid(unsafe_code))]
 #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
 pub mod error;
 pub mod frontend;
@@ -8,3 +8,5 @@ pub mod layout;
 pub mod linter;
 pub mod pipeline;
 pub mod style;
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;

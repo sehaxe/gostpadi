@@ -14,8 +14,18 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo fmt --check
       - run: cargo build --release
+      # сайт: docs/gostpadi.wasm обязан быть свежей сборкой движка
+      # (страница грузит его как есть); рассинхрон = ошибка CI
       - run: |
-          sudo apt-get update && sudo apt-get install -y musl-tools
           rustup target add wasm32-unknown-unknown
-          # wasm-цель: проверяем что ядро компилируется, пока нет src/wasm.rs — не валим CI
-          cargo check --target wasm32-unknown-unknown || true
+          CARGO_PROFILE_RELEASE_OPT_LEVEL=z cargo build --release \
+            --target wasm32-unknown-unknown
+          test -s target/wasm32-unknown-unknown/release/gostpadi.wasm
+          sha256sum target/wasm32-unknown-unknown/release/gostpadi.wasm \
+            | sed 's| .*/| |' > /tmp/wasm.sha
+          sha256sum docs/gostpadi.wasm | sed 's| .*/| |' > /tmp/docs.sha
+          diff /tmp/wasm.sha /tmp/docs.sha || {
+            echo "::error::docs/gostpadi.wasm устарел — пересобери:"
+            echo "::error::CARGO_PROFILE_RELEASE_OPT_LEVEL=z cargo build --release --target wasm32-unknown-unknown && cp target/wasm32-unknown-unknown/release/gostpadi.wasm docs/"
+            exit 1
+          }

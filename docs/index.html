@@ -158,7 +158,7 @@
 <header>
   <h1>gostpadi</h1>
   <p>блок-схемы из кода на C или файла .gvn — всё считается у тебя в браузере,
-     код никуда не отправляется. Движок тот же, что и в
+     код никуда не отправляется. Движок на Rust, тот же, что и в
      <a href="https://github.com/sehaxe/gostpadi">CLI</a>.</p>
 </header>
 <main>
@@ -184,7 +184,7 @@
       <span class="hint">рендер по кнопке или <kbd>Ctrl</kbd>+<kbd>Enter</kbd></span>
     </div>
     <div id="status"><span class="spinner"></span><span class="stage">
-      Загружаю Python (Pyodide)… первый раз ~20 секунд, потом из кеша.</span></div>
+      Загружаю движок…</span></div>
     <p class="hint">Расширение файла определяет тип: <code>.c</code> — код,
 <code>.gvn</code> — готовая схема. Правь текст прямо здесь — схема
 перерисуется. Нажми на схему, чтобы рассмотреть её целиком.</p>
@@ -245,8 +245,9 @@ const EXAMPLE_GVN = [
 const EXAMPLES = { c: EXAMPLE_C, gvn: EXAMPLE_GVN };
 
 const $ = id => document.getElementById(id);
-let worker = null, engineReady = false, renderSeq = 0, wantRender = false;
+let wasm = null, engineReady = false, wantRender = false;
 let fileStem = "scheme";
+let urls = [];  // blob-URL текущих листов: отзываем при перерисовке
 
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
@@ -259,7 +260,54 @@ function status(html, isErr) {
   el.innerHTML = html;
 }
 
-// ошибка разбора: заголовок со строкой + фрагмент кода с кареткой;
+function spinner(text) {
+  status(`<span class="spinner"></span><span class="stage">${text}</span>`);
+}
+
+function setBusy(on) {
+  $("busy").hidden = !on;
+  $("render").disabled = on || !engineReady;
+}
+
+function revokeUrls() {
+  for (const u of urls) URL.revokeObjectURL(u);
+  urls = [];
+}
+
+// ---------- wasm-движок ----------
+
+async function loadEngine() {
+  const r = await fetch("gostpadi.wasm");
+  if (!r.ok) throw new Error("gostpadi.wasm: HTTP " + r.status);
+  const { instance } = await WebAssembly.instantiate(await r.arrayBuffer(), {});
+  wasm = instance.exports;
+  engineReady = true;
+  setBusy(false);
+  status("Готово: перетащи файл или нажми «Схема →»");
+  if (wantRender) { wantRender = false; renderNow(); }
+}
+
+// текст -> JSON движка. Все view строго после вызова: память wasm
+// может вырасти и отцепить прежние ArrayBuffer.
+function callEngine(code, isC, ru, lw) {
+  const bytes = new TextEncoder().encode(code);
+  const ip = wasm.gostpadi_alloc(bytes.length);
+  if (ip) new Uint8Array(wasm.memory.buffer, ip, bytes.length).set(bytes);
+  const lp = wasm.gostpadi_alloc(4);
+  const out = wasm.gostpadi_render(ip, bytes.length, isC ? 1 : 0, ru ? 1 : 0,
+                                   lw, 0, lp);
+  const n = new DataView(wasm.memory.buffer).getUint32(lp, true);
+  const json = out ? new TextDecoder()
+    .decode(new Uint8Array(wasm.memory.buffer, out, n)) : '{"ok":false}';
+  wasm.gostpadi_free(ip, bytes.length);
+  wasm.gostpadi_free(lp, 4);
+  if (out) wasm.gostpadi_free(out, n);
+  return JSON.parse(json);
+}
+
+// ---------- ошибки разбора ----------
+
+// ошибка с местом: заголовок со строкой + фрагмент кода с кареткой;
 // клик по фрагменту открывает это место в редакторе
 function showError(err) {
   const el = $("status");
@@ -302,61 +350,117 @@ function revealLine(line, col) {
                        off + (rows[line - 1] || "").length);
 }
 
-function spinner(text) {
-  status(`<span class="spinner"></span><span class="stage">${text}</span>`);
+// ---------- рендер ----------
+
+function save(url, name) {
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
 }
 
-function setBusy(on) {
-  if (on) busySince = Date.now(); else busySince = 0;
-  $("busy").hidden = !on;
-  $("render").disabled = on || !engineReady;
+// SVG -> PNG через canvas: x2 для чёткости, белый фон
+function downloadPng(svgText, name) {
+  const url = URL.createObjectURL(new Blob([svgText],
+    { type: "image/svg+xml" }));
+  const img = new Image();
+  img.onload = () => {
+    const s = 2;
+    const c = document.createElement("canvas");
+    c.width = Math.max(1, Math.round(img.width * s));
+    c.height = Math.max(1, Math.round(img.height * s));
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, c.width, c.height);
+    ctx.drawImage(img, 0, 0, c.width, c.height);
+    c.toBlob(b => {
+      if (b) save(URL.createObjectURL(b), name + ".png");
+      else status("не удалось собрать PNG", true);
+    }, "image/png");
+    URL.revokeObjectURL(url);
+  };
+  img.onerror = () => {
+    status("не удалось растеризовать SVG для PNG", true);
+    URL.revokeObjectURL(url);
+  };
+  img.src = url;
 }
 
-// Pyodide живёт в воркере (docs/engine.js): страница не замирает при рендере
-let busySince = 0;
-
-function resetWorker() {
-  if (worker) worker.terminate();
-  worker = null;
-  engineReady = false;
-}
-
-function boot() {
-  if (worker) return;
-  worker = new Worker("engine.js");
-  worker.onmessage = (e) => {
-    const m = e.data;
-    if (m.stage) { spinner(m.stage); return; }
-    if (m.ready) {
-      engineReady = true;
+function renderNow() {
+  if (!engineReady) { wantRender = true; return; }
+  const code = $("code").value;
+  if (!code.trim()) { status("Пусто: вставь код или перетащи файл"); return; }
+  spinner("Рисую схему…");
+  setBusy(true);
+  requestAnimationFrame(() => {
+    const t0 = performance.now();
+    // C-режим: как в CLI — по признакам кода на C
+    const isC = /#include\b|\bint\s+main\s*\(/.test(code);
+    let res;
+    try {
+      res = callEngine(code, isC, $("ru").checked,
+                       parseFloat($("lw").value));
+    } catch (e) {
       setBusy(false);
-      status("Готово: перетащи файл или нажми «Схема →»");
-      if (wantRender) { wantRender = false; renderNow(); }
+      status("Движок упал: " + e, true);
       return;
     }
-    if (m.svgReady) { onSvgReady(m); return; }
-    if (m.seq !== undefined) { applyResult(m); return; }
-    if (m.fatal !== undefined) {
-      setBusy(false);
-      status("Ошибка: " + m.fatal, true);
-    }
-  };
-  worker.onerror = () => {
-    resetWorker();
     setBusy(false);
-    status("Движок упал — нажми «Схема →», он перезапустится", true);
-  };
+    if (!res.ok) { showError(res.error); return; }
+    applySheets(res.sheets, performance.now() - t0);
+  });
 }
 
-// если воркер умер, не ответив (например, память на телефоне) — оживляем
-setInterval(() => {
-  if (busySince && Date.now() - busySince > 120000) {
-    busySince = 0;
-    resetWorker();
-    setBusy(false);
-    status("Движок не ответил — нажми «Схема →» ещё раз", true);
-  }
-}, 5000);
+function applySheets(sheets, ms) {
+  revokeUrls();
+  const box = $("images");
+  box.innerHTML = "";
+  sheets.forEach((svg, i) => {
+    const name = fileStem + (sheets.length > 1 ? "-" + (i + 1) : "");
+    const url = URL.createObjectURL(new Blob([svg],
+      { type: "image/svg+xml" }));
+    urls.push(url);
+    const sheet = document.createElement("div");
+    sheet.className = "sheet";
+    if (sheets.length > 1) {  // у одностраничной схемы подпись не нужна:
+      const h = document.createElement("h3");  // заголовок панели уже есть
+      h.textContent = `лист ${i + 1}`;
+      sheet.appendChild(h);
+    }
+    const img = document.createElement("img");
+    img.src = url;
+    img.alt = name;
+    img.title = "нажми, чтобы увеличить";
+    sheet.appendChild(img);
+    const row = document.createElement("div");
+    row.className = "row";
+    const aSvg = document.createElement("a");
+    aSvg.href = url;
+    aSvg.download = name + ".svg";
+    aSvg.textContent = "Скачать SVG";
+    aSvg.className = "btn";
+    const aPng = document.createElement("a");
+    aPng.href = "#";
+    aPng.textContent = "Скачать PNG";
+    aPng.className = "btn";
+    aPng.addEventListener("click", e => {
+      e.preventDefault();
+      aPng.textContent = "готовлю…";
+      downloadPng(svg, name);
+      setTimeout(() => { aPng.textContent = "Скачать PNG"; }, 1500);
+    });
+    row.append(aSvg, aPng);
+    sheet.appendChild(row);
+    box.appendChild(sheet);
+  });
+  $("placeholder").hidden = true;
+  const sec = ms >= 1000 ? (ms / 1000).toFixed(1).replace(".", ",") + " с"
+                         : Math.round(ms) + " мс";
+  status(`Готово: листов ${sheets.length} · ${sec}`);
+  history.replaceState(null, "", "#c=" + b64urlEncode($("code").value));
+}
+
+// ---------- ссылка-шеринг ----------
 
 // код в ссылке: #c=<base64url> — можно кинуть другу код вместе со схемой
 function b64urlEncode(str) {
@@ -372,77 +476,7 @@ function b64urlDecode(s) {
   return new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0)));
 }
 
-function renderNow() {
-  if (!engineReady) { wantRender = true; boot(); return; }
-  spinner("Рисую схему…");
-  setBusy(true);
-  worker.postMessage({ render: true, seq: ++renderSeq,
-                       code: $("code").value,
-                       labels: $("ru").checked ? "ru" : "en",
-                       lw: parseFloat($("lw").value), stem: fileStem });
-}
-
-let sheetsNow = [];
-
-function applyResult(m) {
-  setBusy(false);
-  if (!m.ok) { showError(m.error); return; }
-  sheetsNow = m.sheets;
-  const box = $("images");
-  box.innerHTML = "";
-  for (const [i, sh] of sheetsNow.entries()) {
-    const sheet = document.createElement("div");
-    sheet.className = "sheet";
-    if (sheetsNow.length > 1) {  // у одностраничной схемы подпись не нужна:
-      const h = document.createElement("h3");  // заголовок панели уже есть
-      h.textContent = `лист ${i + 1}`;
-      sheet.appendChild(h);
-    }
-    const img = document.createElement("img");
-    img.src = "data:image/png;base64," + sh.png;
-    img.alt = sh.name;
-    img.title = "нажми, чтобы увеличить";
-    sheet.appendChild(img);
-    const row = document.createElement("div");
-    row.className = "row";
-    const a1 = document.createElement("a");
-    a1.href = "data:image/png;base64," + sh.png;
-    a1.download = sh.name + ".png";
-    a1.textContent = "Скачать PNG";
-    a1.className = "btn";
-    const a2 = document.createElement("a");
-    a2.download = sh.name + ".svg";
-    a2.textContent = "Скачать SVG";
-    a2.className = "btn";
-    a2.addEventListener("click", (e) => {
-      if (sh.svgData) {           // svg уже готов — качаем
-        a2.href = "data:image/svg+xml;base64," + sh.svgData;
-        return;
-      }
-      if (!engineReady) { e.preventDefault(); return; }
-      e.preventDefault();         // svg готовим лениво, только по клику
-      a2.textContent = "готовлю…";
-      worker.postMessage({ svgReq: true, seq: ++renderSeq, index: i,
-                           code: $("code").value,
-                           labels: $("ru").checked ? "ru" : "en",
-                           lw: parseFloat($("lw").value), stem: fileStem });
-    });
-    row.append(a1, a2);
-    sheet.appendChild(row);
-    box.appendChild(sheet);
-  }
-  $("placeholder").hidden = true;
-  status(`Готово: листов ${sheetsNow.length} · ${m.sec} с`);
-  history.replaceState(null, "", "#c=" + b64urlEncode($("code").value));
-}
-
-function onSvgReady(m) {
-  if (m.seq !== renderSeq || !sheetsNow[m.index]) return;  // схема уже другая
-  const sh = sheetsNow[m.index];
-  sh.svgData = m.b64;
-  const a = document.querySelectorAll("#images .sheet .btn")[m.index * 2 + 1];
-  if (a) { a.href = "data:image/svg+xml;base64," + sh.svgData; a.click(); }
-}
+// ---------- страница ----------
 
 function setCode(text, stem) {
   $("code").value = text;
@@ -539,7 +573,14 @@ if (hm) {
   $("code").value = (savedCode && savedCode.trim()) ? savedCode : EXAMPLE_C;
 }
 $("ru").checked = store.get("gostpadi.ru") !== "";
-boot();
+if (store.get("gostpadi.lw")) {
+  $("lw").value = store.get("gostpadi.lw");
+  $("lw-val").textContent = $("lw").value.replace(".", ",");
+}
+loadEngine().catch(e => {
+  setBusy(false);
+  status("Движок не загрузился: " + e.message, true);
+});
 </script>
 </body>
 </html>

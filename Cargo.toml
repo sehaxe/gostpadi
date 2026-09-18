@@ -6,6 +6,12 @@ description = "ГОСТ 19.701 блок-схемы из C/.gvn — Rust движ
 repository = "https://github.com/sehaxe/gostpadi"
 license = "MIT"
 
+[lib]
+name = "gostpadi"
+path = "src/lib.rs"
+# cdylib — только ради wasm-моста (src/wasm.rs); нативно используется rlib
+crate-type = ["rlib", "cdylib"]
+
 [[bin]]
 name = "gostpadi"
 path = "src/main.rs"
