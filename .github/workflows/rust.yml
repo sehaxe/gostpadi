@@ -1,15 +1,16 @@
 name: rust
-on:
+"on":
   push: { branches: [flowengine, main] }
   pull_request:
   workflow_dispatch:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # тулчейн спрят: docs/gostpadi.wasm сверяется sha с этой сборкой
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with: { components: clippy, rustfmt }
+      - uses: dtolnay/rust-toolchain@1.98.1
+        with: { components: clippy, rustfmt, targets: wasm32-unknown-unknown }
       - run: cargo test --all-targets
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo fmt --check
@@ -17,15 +18,14 @@ jobs:
       # сайт: docs/gostpadi.wasm обязан быть свежей сборкой движка
       # (страница грузит его как есть); рассинхрон = ошибка CI
       - run: |
-          rustup target add wasm32-unknown-unknown
           CARGO_PROFILE_RELEASE_OPT_LEVEL=z cargo build --release \
-            --target wasm32-unknown-unknown
+            --lib --target wasm32-unknown-unknown
           test -s target/wasm32-unknown-unknown/release/gostpadi.wasm
           sha256sum target/wasm32-unknown-unknown/release/gostpadi.wasm \
             | sed 's| .*/| |' > /tmp/wasm.sha
           sha256sum docs/gostpadi.wasm | sed 's| .*/| |' > /tmp/docs.sha
           diff /tmp/wasm.sha /tmp/docs.sha || {
             echo "::error::docs/gostpadi.wasm устарел — пересобери:"
-            echo "::error::CARGO_PROFILE_RELEASE_OPT_LEVEL=z cargo build --release --target wasm32-unknown-unknown && cp target/wasm32-unknown-unknown/release/gostpadi.wasm docs/"
+            echo "::error::CARGO_PROFILE_RELEASE_OPT_LEVEL=z cargo build --release --lib --target wasm32-unknown-unknown && cp target/wasm32-unknown-unknown/release/gostpadi.wasm docs/"
             exit 1
           }

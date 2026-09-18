@@ -1,5 +1,5 @@
 name: release
-on:
+"on":
   push: { tags: ["v*"] }
 permissions: { contents: write }
 jobs:
@@ -15,7 +15,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.98.1
         with: { targets: ${{ matrix.target }} }
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
