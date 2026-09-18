@@ -1,4 +1,3 @@
-#![allow(clippy::all, clippy::pedantic, clippy::nursery)]
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -24,7 +23,8 @@ fn out(s: &str) {
     }
 }
 
-const VERSION: &str = "2.0.0";
+/// Версия — единственный источник истины: Cargo.toml.
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const TEMPLATE: &str = "#gostpadi 1\n\
 # One line = one block; top to bottom. Five words: input, output, if, yes/no.\n\
