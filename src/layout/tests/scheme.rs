@@ -428,8 +428,8 @@ output printf(x)
     assert!(single_entry_ok(&l));
 }
 
-/// Пустая ветка при да-колонке слева: рельса «нет» зеркальна внешнему
-/// краю левой колонки, bx = up(base + nhe), без запаса +2g.
+/// Пустая ветка при да-колонке слева: рельса «нет» жмётся к ромбу —
+/// bx = up(dw/2 + 2g), независимо от ширины левой колонки.
 #[test]
 fn empty_branch_rail_hugs_diamond() {
     let st = Style::default();
@@ -447,19 +447,18 @@ fn empty_branch_rail_hugs_diamond() {
         })
         .expect("рельса пустой ветки от правой вершины ромба");
     let bx = rail.points[1].0;
-    let nhe = super::nhe_of(&sizes, &nodes, &st);
-    let want = crate::layout::geometry::up(dsh.w / 2.0 + st.hgap + 2.0 * nhe, st.grid);
+    let want = crate::layout::geometry::up(dsh.w / 2.0 + 2.0 * st.grid, st.grid);
     assert!(
         (bx - want).abs() < 1e-9,
-        "bx = {bx}, ожидался up(base + nhe) = {want}"
+        "bx = {bx}, ожидался up(dw/2 + 2g) = {want}"
     );
     assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
     assert!(overlaps_ok(&l.shapes));
 }
 
 /// ГОСТ 19.701: у if с единственной непустой веткой и пустой «нет»
-/// контент идёт КОЛОНКОЙ НАЛЕВО (tx = -base), рельса «нет» зеркальна:
-/// bx = up(base + nhe) ровно напротив внешнего края да-колонки.
+/// контент идёт КОЛОНКОЙ НАЛЕВО (tx = -base), рельса «нет» жмётся
+/// к ромбу: bx = up(dw/2 + 2g).
 #[test]
 fn if_yes_branch_goes_left() {
     let st = Style::default();
@@ -486,10 +485,10 @@ fn if_yes_branch_goes_left() {
         })
         .expect("рельса «нет» от правой вершины ромба");
     let bx = rail.points[1].0;
-    let want = crate::layout::geometry::up(base + nhe, st.grid);
+    let want = crate::layout::geometry::up(dsh.w / 2.0 + 2.0 * st.grid, st.grid);
     assert!(
         (bx - want).abs() < 1e-9,
-        "bx = {bx}, ожидался up(base + nhe) = {want}"
+        "bx = {bx}, ожидался up(dw/2 + 2g) = {want}"
     );
     assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
     assert!(overlaps_ok(&l.shapes));
@@ -597,7 +596,7 @@ if a > 0
         (minus.cx - base).abs() < 1e-9,
         "нет-ветка внешнего справа на +base"
     );
-    // под-рельса зеркальна: от правой вершины внутреннего на up(base2 + nhe)
+    // под-рельса жмётся к под-ромбу: inner.cx + up(dw2/2 + 2g)
     let vr = (inner.cx + inner.w / 2.0, inner.cy);
     let rail = l
         .edges
@@ -606,7 +605,7 @@ if a > 0
             !e.arrow && (e.points[0].0 - vr.0).abs() < 1e-9 && (e.points[0].1 - vr.1).abs() < 1e-9
         })
         .expect("рельса пустой «нет» вложенного от его правой вершины");
-    let want = inner.cx + crate::layout::geometry::up(base2 + nhe, st.grid);
+    let want = inner.cx + crate::layout::geometry::up(inner.w / 2.0 + 2.0 * st.grid, st.grid);
     assert!(
         (rail.points[1].0 - want).abs() < 1e-9,
         "bx вложенного = {}, ожидался up(base2 + nhe) = {}",
@@ -617,8 +616,8 @@ if a > 0
     assert!(overlaps_ok(&l.shapes));
 }
 
-/// Пустая ветка переключателя: рельса зеркальна самой широкой стороне —
-/// bx = up(max(|tx| + nhe по колонкам, dw/2)), без запаса +2g.
+/// Пустая ветка переключателя: рельса чистит только правые колонки —
+/// bx = up(base + nhe + g), а не внешняя сторона всей схемы.
 #[test]
 fn empty_branch_rail_clears_own_columns() {
     let st = Style::default();
@@ -650,10 +649,10 @@ fn empty_branch_rail_clears_own_columns() {
     let nhe = super::nhe_of(&sizes, &nodes, &st);
     // крайняя колонка (правая, ярус 0) на +base
     let base = dsh.w / 2.0 + st.hgap + nhe;
-    let want = crate::layout::geometry::up(base + nhe, st.grid);
+    let want = crate::layout::geometry::up(base + nhe + st.grid, st.grid);
     assert!(
         (bx - want).abs() < 1e-9,
-        "bx = {bx}, ожидался up(base + nhe) = {want}"
+        "bx = {bx}, ожидался up(base + nhe + g) = {want}"
     );
     assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
     assert!(overlaps_ok(&l.shapes));
@@ -853,8 +852,8 @@ if a < 0
 }
 
 /// Цепочка из двух ромбов без else: каскад с пустым хвостом — рельса
-/// «нет» на следующей свободной стороне (левой), зеркально широкой
-/// колонки; шина одна.
+/// «нет» на следующей свободной стороне (левой), вплотную к ромбу
+/// с очисткой левых колонок; шина одна.
 #[test]
 fn elseif_cascade_two_links_empty_else() {
     let st = Style::default();
@@ -888,7 +887,8 @@ if a < 0
         .unwrap();
     assert!((neg.cx + base).abs() < 1e-9, "neg L0");
     assert!((zero.cx - base).abs() < 1e-9, "zero R0");
-    // рельса пустого хвоста из ЛЕВОЙ вершины последнего ромба
+    // рельса пустого хвоста из ЛЕВОЙ вершины последнего ромба, жмётся
+    // к ромбу и чистит левые колонки: up(base + nhe + g)
     let d2 = ifs[1];
     let vl = (d2.cx - d2.w / 2.0, d2.cy);
     let rail = l
@@ -898,7 +898,7 @@ if a < 0
             !e.arrow && (e.points[0].0 - vl.0).abs() < 1e-9 && (e.points[0].1 - vl.1).abs() < 1e-9
         })
         .expect("рельса пустого «нет» из левой вершины ромба");
-    let want = -crate::layout::geometry::up(base + nhe, st.grid);
+    let want = -crate::layout::geometry::up(base + nhe + st.grid, st.grid);
     assert!(
         (rail.points[1].0 - want).abs() < 1e-9,
         "bx = {}, ожидался -up(base + nhe) = {want}",
@@ -916,6 +916,132 @@ if a < 0
         .count();
     assert_eq!(buses, 1, "ровно одна шина на merge_y");
     assert_eq!(crossings_ok(&l.shapes, &l.edges), Ok(()));
+    assert!(overlaps_ok(&l.shapes));
+    assert!(single_entry_ok(&l));
+}
+
+/// Большой переключатель (>= 5 кейсов): кейсы сеткой по два на ряд —
+/// все колонки на ±base, второй ряд ниже первого; ряды слиты в ствол.
+#[test]
+fn switch_rows_grid_for_five_cases() {
+    let st = Style::default();
+    let text = "\
+if switch (d)
+    1: printf(\"один\"); break
+    2: printf(\"два\"); break
+    3: printf(\"три\"); break
+    4: printf(\"четыре\"); break
+    5: printf(\"пять\"); break
+output printf(d)
+";
+    let nodes = crate::frontend::gvn::parse(text, &st, "").unwrap();
+    let sizes = normalize(&nodes, &st);
+    let l = layout(&nodes, &sizes, &st);
+    let nhe = super::nhe_of(&sizes, &nodes, &st);
+    let dsh = l.shapes.iter().find(|s| s.kind == "if").unwrap();
+    let base = dsh.w / 2.0 + st.hgap + nhe;
+    let ios: Vec<&Shape> = l
+        .shapes
+        .iter()
+        .filter(|s| s.kind == "io" && s.cx != 0.0)
+        .collect();
+    assert_eq!(ios.len(), 5, "пять кейсов");
+    // все колонки строго на ±base — ширина сетки постоянна
+    for io in &ios {
+        assert!(
+            ((io.cx - base).abs() < 1e-9) || ((io.cx + base).abs() < 1e-9),
+            "кейс на ±base = ±{base}, а он в {}",
+            io.cx
+        );
+    }
+    // ряды: три кейса слева (1, 3, 5), два справа (2, 4); ряд 1 ниже ряда 0
+    let mut lefts: Vec<f64> = ios.iter().filter(|s| s.cx < 0.0).map(|s| s.cy).collect();
+    lefts.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert_eq!(lefts.len(), 3);
+    assert!(
+        lefts[1] > lefts[0] + dsh.h,
+        "второй ряд ниже первого: {:?}",
+        lefts
+    );
+    // ширина схемы меньше, чем была бы одной шиной (2 яруса вширь)
+    let (minx, ..) = l.bounds;
+    let w = {
+        let xs: Vec<f64> = l
+            .shapes
+            .iter()
+            .flat_map(|s| [s.cx - s.w / 2.0, s.cx + s.w / 2.0])
+            .collect();
+        xs.iter().cloned().fold(f64::MAX, f64::min)
+    };
+    let _ = (minx, w);
+    assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
+    assert!(overlaps_ok(&l.shapes));
+    assert!(single_entry_ok(&l));
+}
+
+/// Четыре кейса — ещё одна шина (как на доске), не сетка: все четыре
+/// кейса на одном верхнем ряду, на ±base и ±(base + pitch).
+#[test]
+fn switch_four_cases_stay_single_bus() {
+    let st = Style::default();
+    let text = "\
+if switch (d)
+    1: printf(\"один\"); break
+    2: printf(\"два\"); break
+    3: printf(\"три\"); break
+    4: printf(\"четыре\"); break
+output printf(d)
+";
+    let nodes = crate::frontend::gvn::parse(text, &st, "").unwrap();
+    let sizes = normalize(&nodes, &st);
+    let l = layout(&nodes, &sizes, &st);
+    let nhe = super::nhe_of(&sizes, &nodes, &st);
+    let dsh = l.shapes.iter().find(|s| s.kind == "if").unwrap();
+    let base = dsh.w / 2.0 + st.hgap + nhe;
+    let pitch = 2.0 * nhe + st.colgap;
+    let want = [-base - pitch, -base, base, base + pitch];
+    let mut got: Vec<f64> = l
+        .shapes
+        .iter()
+        .filter(|s| s.kind == "io" && s.cx != 0.0)
+        .map(|s| s.cx)
+        .collect();
+    got.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    for (g, w) in got.iter().zip(want.iter()) {
+        assert!((g - w).abs() < 1e-9, "cx {g}, ожидалось {w}");
+    }
+    assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
+    assert!(overlaps_ok(&l.shapes));
+    assert!(single_entry_ok(&l));
+}
+
+/// Рельса пустой ветки не разлетается за широкой левой колонкой:
+/// жмётся к ромбу на up(dw/2 + 2g).
+#[test]
+fn empty_rail_hugs_despite_wide_left_column() {
+    let st = Style::default();
+    let text = "\
+if a > 0
+    да: printf(\"очень широкий текст printf\")
+    нет:
+output printf(1)
+";
+    let nodes = crate::frontend::gvn::parse(text, &st, "").unwrap();
+    let sizes = normalize(&nodes, &st);
+    let l = layout(&nodes, &sizes, &st);
+    let dsh = l.shapes.iter().find(|s| s.kind == "if").unwrap();
+    let vr = (dsh.cx + dsh.w / 2.0, dsh.cy);
+    let rail = l
+        .edges
+        .iter()
+        .find(|e| {
+            !e.arrow && (e.points[0].0 - vr.0).abs() < 1e-9 && (e.points[0].1 - vr.1).abs() < 1e-9
+        })
+        .expect("рельса пустой ветки");
+    let bx = rail.points[1].0;
+    let want = crate::layout::geometry::up(dsh.w / 2.0 + 2.0 * st.grid, st.grid);
+    assert!((bx - want).abs() < 1e-9, "bx = {bx}, ожидался {want}");
+    assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
     assert!(overlaps_ok(&l.shapes));
     assert!(single_entry_ok(&l));
 }

@@ -217,13 +217,14 @@ impl Ctx<'_> {
         self.merge_bus(&cols, tx, merge2);
         if !empty.is_empty() {
             merge2 = merge2.max(y_b + 2.0 * self.st.grid);
-            // рельса зеркальна самой широкой стороне: bx = up(|tx| + nhe)
-            // по всем колонкам, пол dw/2, без +2g — строгая зеркальность
-            let max_ext = plan
+            // рельса жмётся к под-ромбу: пол — вершина + 2g, дальше —
+            // только правые под-колонки (зеркальный разлёт давал крюк)
+            let clear = plan
                 .iter()
-                .map(|p| (p.3 - tx).abs() + self.nhe)
-                .fold(dw / 2.0, f64::max);
-            let bx2 = tx + super::geometry::up(max_ext, self.st.grid);
+                .filter(|p| p.1 == Side::R)
+                .map(|p| (p.3 - tx) + self.nhe + self.st.grid)
+                .fold(dw / 2.0 + 2.0 * self.st.grid, f64::max);
+            let bx2 = tx + super::geometry::up(clear, self.st.grid);
             for (k, lbl) in empty.iter().enumerate() {
                 self.edge(
                     &[
