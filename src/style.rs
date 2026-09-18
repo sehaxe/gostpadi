@@ -1,7 +1,6 @@
 #[derive(Debug, Clone)]
 pub struct Style {
     pub font: f64,
-    pub font_stack: &'static [&'static str],
     pub char_w: f64,
     pub pad_x: f64,
     pub pad_y: f64,
@@ -43,7 +42,6 @@ pub struct Style {
     pub io_words: &'static [&'static str],
 }
 
-const FONT_STACK: &[&str] = &["DejaVu Sans Mono", "Noto Sans CJK TC", "DejaVu Sans"];
 const IO_WORDS: &[&str] = &[
     "printf", "scanf", "scan", "print", "println", "puts", "putchar", "echo", "getchar", "gets",
     "cin", "cout", "read", "write",
@@ -73,7 +71,6 @@ impl Style {
     /// производные метрики разъедутся с font.
     pub const DEFAULT: Style = Style {
         font: 12.0,
-        font_stack: FONT_STACK,
         char_w: 7.32,
         pad_x: 18.0,
         pad_y: 14.04,

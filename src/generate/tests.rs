@@ -205,11 +205,30 @@ fn single_group_wrapper() {
 }
 
 #[test]
+fn number_format_trims_and_signs() {
+    let f = |v: f64| {
+        let mut t = String::new();
+        super::svg::put(&mut t, v);
+        t
+    };
+    assert_eq!(f(14.17), "14.17");
+    assert_eq!(f(1.0), "1");
+    assert_eq!(f(0.0), "0");
+    assert_eq!(f(-0.0), "0", "-0.0 не должен оставлять минус");
+    assert_eq!(f(-9.0), "-9");
+    assert_eq!(f(100.0), "100");
+    assert_eq!(f(21.255), "21.255");
+}
+
+#[test]
 fn arrow_whiskers_geometry() {
     // горизонтальная линия вправо: усы симметричны относительно оси
-    let p = super::arrow::arrow_path((100.0, 50.0), (0.0, 50.0), 10.0);
     let (c, s) = (22.5f64.to_radians().cos(), 22.5f64.to_radians().sin());
-    let f = |v: f64| super::svg::n(v);
+    let f = |v: f64| {
+        let mut t = String::new();
+        super::svg::put(&mut t, v);
+        t
+    };
     let want = format!(
         "M {} {} L 100 50 M {} {} L 100 50",
         f(100.0 - 10.0 * c),
@@ -217,8 +236,23 @@ fn arrow_whiskers_geometry() {
         f(100.0 - 10.0 * c),
         f(50.0 + 10.0 * s)
     );
+    let mut p = String::new();
+    assert!(super::arrow::arrow_path(
+        &mut p,
+        (100.0, 50.0),
+        (0.0, 50.0),
+        10.0
+    ));
     assert_eq!(p, want);
-    assert_eq!(super::arrow::arrow_path((5.0, 5.0), (5.0, 5.0), 10.0), "");
+    // вырожденный отрезок: усов нет
+    let mut deg = String::new();
+    assert!(!super::arrow::arrow_path(
+        &mut deg,
+        (5.0, 5.0),
+        (5.0, 5.0),
+        10.0
+    ));
+    assert!(deg.is_empty());
 }
 
 #[test]
@@ -236,7 +270,11 @@ fn whisker_len_is_quarter_module_height() {
     let svg = render_svg(&l, &st);
     let len = 0.25 * 2.0 * st.grid;
     let (c, s) = (22.5f64.to_radians().cos(), 22.5f64.to_radians().sin());
-    let f = |v: f64| super::svg::n(v);
+    let f = |v: f64| {
+        let mut t = String::new();
+        super::svg::put(&mut t, v);
+        t
+    };
     // линия вниз: ось (0,1), усы в точках tip ± (s, -c)*len
     let want = format!(
         "<path d=\"M {} {} L 100 70 M {} {} L 100 70\"",
