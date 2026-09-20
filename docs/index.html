@@ -871,8 +871,30 @@ function updateMode() {
 }
 
 /* добавление файлов: повторное имя обновляет, нечитаемые — в статус */
+function uniqName(base, taken) {
+  if (!taken.has(base)) return base;
+  let i = 2;
+  while (taken.has(base.replace(/(\.[^.]*)?$/, `-${i}$1`))) i++;
+  return base.replace(/(\.[^.]*)?$/, `-${i}$1`);
+}
+
 async function loadFiles(list) {
   const added = [], failed = [];
+  // черновик не выбрасываем: вставленный код становится файлом пачки
+  if (cur < 0) {
+    const text = $("code").value;
+    if (text.trim()) {
+      const taken = new Set([...files.map(f => f.name)]);
+      const name = uniqName(looksLikeC(text) ? "черновик.c" : "черновик", taken);
+      added.push({
+        name,
+        stem: name.replace(/\.[^.]+$/, ""),
+        text,
+        c: looksLikeC(text),
+        dirty: false,
+      });
+    }
+  }
   for (const f of [...list].slice(0, 64)) {
     const stem = f.name.replace(/\.[^.]+$/, "")
       .replace(/[^\wа-яё.-]+/gi, "_") || "scheme";
