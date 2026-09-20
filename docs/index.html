@@ -937,36 +937,37 @@ async function loadFiles(list) {
       });
     }
   }
+  const taken = new Set(files.map(f => f.name));
+  const skipped = [];
   for (const f of [...list].slice(0, 64)) {
-    const stem = f.name.replace(/\.[^.]+$/, "")
-      .replace(/[^\wа-яё.-]+/gi, "_") || "scheme";
     try {
+      const text = await f.text();
+      let name = f.name;
+      // то же имя — не повод затирать: другой код получает соседнее имя
+      // (main.c из другой папки → main-2.c), тот же код — пропускаем
+      const same = files.find(x => x.name === name) ||
+                   added.find(x => x.name === name);
+      if (same) {
+        if (same.text === text) { skipped.push(name); continue; }
+        name = uniqName(name, taken);
+      }
+      taken.add(name);
       added.push({
-        name: f.name, stem, text: await f.text(),
-        c: /\.c$/i.test(f.name), dirty: false,
+        name,
+        stem: name.replace(/\.[^.]+$/, "")
+          .replace(/[^\wа-яё.-]+/gi, "_") || "scheme",
+        text,
+        c: /\.c$/i.test(name),
+        dirty: false,
       });
     } catch (e) { failed.push(f.name); }
   }
   if (failed.length) status("не удалось прочитать: " + failed.join(", "), true);
-  if (!added.length) return;
-  // повторная загрузка обновляет файл, но если в открытом есть правки —
-  // они дороже: новая версия получает соседнее имя
-  const names = new Set(added.map(a => a.name));
-  const bumped = [];
-  files = files.filter(f => {
-    if (!names.has(f.name)) return true;
-    if (!f.dirty) return false;
-    const src = added.find(a => a.name === f.name);
-    src.name = uniqName(src.name, names);
-    src.stem = src.name.replace(/\.[^.]+$/, "");
-    bumped.push(src.name);
-    return true;
-  }).concat(added);
-  if (bumped.length) {
-    toast(`у «${bumped.join(", ")}» были правки — сохранил обе версии`);
-    names.clear();
-    added.forEach(a => names.add(a.name));
+  if (!added.length) {
+    if (skipped.length) status("такой файл уже есть: " + skipped.join(", "));
+    return;
   }
+  files = files.concat(added);
   cur = files.indexOf(added[0]);
   $("code").value = files[cur].text;
   badNames = new Set();
