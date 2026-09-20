@@ -662,24 +662,20 @@ function drawSheets() {
   if (!sheets.length) { ph.hidden = false; return; }
   ph.hidden = true;
   // показываем листы АКТИВНОГО файла друг под другом; чужие — по вкладкам
-  const activeName = cur >= 0 && files[cur] ? files[cur].name : "scheme";
-  let own = sheets.filter(s => s.file === activeName);
-  if (!own.length) own = [sheets[0]];
-  own.forEach((s, i) => {
-    const card = document.createElement("div");
-    card.className = "sheet";
-    card.style.left = (i * 24) + "px";
-    card.style.top = (i * 24) + "px";
-    card.style.width = s.w + "px";
-    card.style.height = s.h + "px";
-    const holder = document.createElement("div");
-    holder.innerHTML = s.svg;
-    const svg = holder.firstElementChild;
-    svg.style.width = "100%"; svg.style.height = "100%";
-    card.appendChild(svg);
-    card.addEventListener("dblclick", () => setZoom(null));
-    stage.appendChild(card);
-  });
+  // один активный лист: остальные — по вкладкам над панелью
+  const s = sheets[Math.min(activeSheet, sheets.length - 1)] || sheets[0];
+  if (!s) { ph.hidden = false; return; }
+  const card = document.createElement("div");
+  card.className = "sheet";
+  card.style.width = s.w + "px";
+  card.style.height = s.h + "px";
+  const holder = document.createElement("div");
+  holder.innerHTML = s.svg;
+  const svg = holder.firstElementChild;
+  svg.style.width = "100%"; svg.style.height = "100%";
+  card.appendChild(svg);
+  card.addEventListener("dblclick", () => setZoom(null));
+  stage.appendChild(card);
   applyZoom();
 }
 
