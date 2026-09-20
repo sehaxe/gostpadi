@@ -96,6 +96,26 @@ fn nested_loop_numbering() {
     assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
 }
 
+/// На шестиугольнике «подготовка» видно, какой это цикл: while/for.
+#[test]
+fn loop_begin_shows_keyword() {
+    let st = Style::default();
+    let text = "while i < 5\n    a = 1\nfor i = 0; i < 10; i++\n    b = 2\noutput printf(1)\n";
+    let nodes = crate::frontend::gvn::parse(text, &st, "").unwrap();
+    let l = lay(&nodes);
+    let begins: Vec<String> = l
+        .shapes
+        .iter()
+        .filter(|sh| sh.kind == "loop_begin")
+        .flat_map(|sh| sh.lines.clone())
+        .collect();
+    assert!(begins.iter().any(|t| t == "while i < 5"), "{begins:?}");
+    assert!(
+        begins.iter().any(|t| t == "for i = 0; i < 10; i++"),
+        "{begins:?}"
+    );
+}
+
 #[test]
 fn break_goes_left_rail_below_loop() {
     let nodes = vec![

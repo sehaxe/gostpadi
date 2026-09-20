@@ -68,6 +68,16 @@ impl From<TileKind> for NodeKind {
 }
 
 impl Node {
+    /// Текст блока «подготовка»: ключевое слово цикла + условие,
+    /// чтобы на схеме было видно, какой это цикл.
+    pub fn loop_label(&self) -> String {
+        match self.loop_kind {
+            Some(LoopKind::While) => format!("while {}", self.text),
+            Some(LoopKind::For) => format!("for {}", self.text),
+            None => self.text.clone(),
+        }
+    }
+
     pub fn new(kind: NodeKind, text: impl Into<String>) -> Self {
         Self {
             kind,

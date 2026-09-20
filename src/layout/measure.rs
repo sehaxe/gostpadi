@@ -66,7 +66,11 @@ fn put_items(sizes: &mut Sizes, st: &Style, items: &[Stmt]) {
 }
 
 fn put_node(sizes: &mut Sizes, st: &Style, nd: &Node) {
-    put(sizes, st, kind_name(&nd.kind), &nd.text);
+    if nd.kind == NodeKind::Loop {
+        put(sizes, st, "loop", &nd.loop_label());
+    } else {
+        put(sizes, st, kind_name(&nd.kind), &nd.text);
+    }
     for br in &nd.branches {
         put_items(sizes, st, &br.stmts);
     }

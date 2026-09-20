@@ -28,7 +28,7 @@ impl Ctx<'_> {
     pub(super) fn sub_loop(&mut self, nd: &Node, tx: f64, top: f64) -> (f64, ColEnd) {
         let (lw, lh) = self.sizes["loop"];
         let cy1 = top + lh / 2.0;
-        self.add("loop_begin", tx, cy1, &nd.text);
+        self.add("loop_begin", tx, cy1, &nd.loop_label());
         self.loop_depth += 1;
         let num = self.loop_depth;
         // коридор: шире половины трапеции и любого вложенного содержимого,
