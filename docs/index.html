@@ -311,13 +311,7 @@
 <main class="studio" id="app">
   <nav id="side" class="pane" aria-label="файлы">
     <div class="pane-title">Файлы<span class="spacer"></span>
-      <span class="menu-wrap">
-        <button id="add" class="btn icon" title="добавить файлы" aria-haspopup="menu">+</button>
-        <span id="addmenu" class="menu" hidden role="menu">
-          <button data-act="open" role="menuitem">Открыть файлы…</button>
-          <button data-act="new" role="menuitem">Новый файл</button>
-        </span>
-      </span>
+      <button id="add" class="btn icon" title="добавить файлы">+</button>
     </div>
     <ul id="filelist"></ul>
     <div class="side-hint">Перетащи файл с кодом куда угодно на странице или нажми «+». Блоки во всех схемах пачки будут одного размера.</div>
@@ -955,8 +949,24 @@ async function loadFiles(list) {
   }
   if (failed.length) status("не удалось прочитать: " + failed.join(", "), true);
   if (!added.length) return;
+  // повторная загрузка обновляет файл, но если в открытом есть правки —
+  // они дороже: новая версия получает соседнее имя
   const names = new Set(added.map(a => a.name));
-  files = files.filter(f => !names.has(f.name)).concat(added);
+  const bumped = [];
+  files = files.filter(f => {
+    if (!names.has(f.name)) return true;
+    if (!f.dirty) return false;
+    const src = added.find(a => a.name === f.name);
+    src.name = uniqName(src.name, names);
+    src.stem = src.name.replace(/\.[^.]+$/, "");
+    bumped.push(src.name);
+    return true;
+  }).concat(added);
+  if (bumped.length) {
+    toast(`у «${bumped.join(", ")}» были правки — сохранил обе версии`);
+    names.clear();
+    added.forEach(a => names.add(a.name));
+  }
   cur = files.indexOf(added[0]);
   $("code").value = files[cur].text;
   badNames = new Set();
@@ -1175,37 +1185,9 @@ $("vt-editor").addEventListener("click", () => setPane("editor", !paneOn("editor
   syncChips();
 })();
 
-/* меню «+» */
-const addmenu = $("addmenu");
-function closeMenu() { addmenu.hidden = true; }
-$("add").addEventListener("click", e => {
-  e.stopPropagation();
-  addmenu.hidden = !addmenu.hidden;
-});
-addmenu.addEventListener("click", e => {
-  e.stopPropagation();
-  const act = e.target.dataset.act;
-  if (!act) return;
-  closeMenu();
-  if (act === "open") $("file").click();
-  if (act === "new") createFile();
-});
-addEventListener("click", e => { if (!addmenu.hidden && !addmenu.contains(e.target)) closeMenu(); });
-addEventListener("keydown", e => { if (e.key === "Escape") closeMenu(); });
-
-/* новый пустой файл в пачке */
-function createFile() {
-  syncCur();
-  const taken = new Set(files.map(f => f.name));
-  const name = uniqName("файл1.c", taken);
-  files.push({ name, stem: name.replace(/\.[^.]+$/, ""), text: "", c: true, dirty: false });
-  cur = files.length - 1;
-  $("code").value = "";
-  updateMode();
-  drawFileList();
-  persist();
-  $("code").focus();
-}
+/* «+» — сразу выбор файла; каждый выбранный/брошенный файл
+   становится отдельной записью пачки */
+$("add").addEventListener("click", () => $("file").click());
 
 /* ============================== старт ============================== */
 
