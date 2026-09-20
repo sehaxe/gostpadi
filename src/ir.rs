@@ -23,9 +23,27 @@ pub struct Branch {
     pub link: Option<char>,
 }
 
+/// Тип обычной плитки: процесс или ввод-вывод (ГОСТ 19.701).
+/// Решается один раз — при строительстве IR во frontend'е.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TileKind {
+    Act,
+    Io,
+}
+
 #[derive(Debug, Clone)]
 pub enum Stmt {
-    Text(String),
+    /// обычная плитка-оператор
+    Tile {
+        kind: TileKind,
+        text: String,
+    },
+    /// выход из внутреннего цикла или switch: рельса или растворение
+    Break,
+    /// следующая итерация внутреннего цикла
+    Continue,
+    /// тупик-плитка return с исходным текстом
+    Return(String),
     Node(Box<Node>),
 }
 
@@ -38,6 +56,15 @@ pub struct Node {
     pub loop_kind: Option<LoopKind>,
     pub lang: String,
     pub switch_var: Option<String>,
+}
+
+impl From<TileKind> for NodeKind {
+    fn from(k: TileKind) -> Self {
+        match k {
+            TileKind::Io => NodeKind::Io,
+            TileKind::Act => NodeKind::Act,
+        }
+    }
 }
 
 impl Node {

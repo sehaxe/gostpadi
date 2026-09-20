@@ -1,6 +1,6 @@
 use super::geometry::up;
 use super::Sizes;
-use crate::ir::{Node, NodeKind, Stmt};
+use crate::ir::{Node, NodeKind, Stmt, TileKind};
 use crate::style::Style;
 
 /// Межстрочный интервал терминатора: 0.8 шага (текст в капсуле плотнее).
@@ -53,10 +53,14 @@ fn put_items(sizes: &mut Sizes, st: &Style, items: &[Stmt]) {
     for it in items {
         match it {
             Stmt::Node(nd) => put_node(sizes, st, nd),
-            Stmt::Text(t) => {
-                let kind = if st.is_io(t) { "io" } else { "act" };
-                put(sizes, st, kind, t);
+            Stmt::Tile { kind, text } => {
+                let name = match kind {
+                    TileKind::Io => "io",
+                    TileKind::Act => "act",
+                };
+                put(sizes, st, name, text);
             }
+            _ => {}
         }
     }
 }

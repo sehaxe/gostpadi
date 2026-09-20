@@ -1,21 +1,16 @@
-use super::ctx::{BreakAt, Ctx};
+use super::ctx::{BreakAt, ColEnd, Ctx};
 use super::measure::kind_name;
 use super::types::Sizes;
-use crate::ir::{Branch, NodeKind, Stmt};
+use crate::ir::{Branch, NodeKind, Stmt, TileKind};
 use crate::style::Style;
 
-/// Инструкция return — тупик ветки (порт gostpadi.py `^return\b`).
-pub(super) fn is_return(t: &str) -> bool {
-    match t.trim_start().strip_prefix("return") {
-        None => false,
-        Some(rest) => {
-            rest.is_empty()
-                || rest
-                    .chars()
-                    .next()
-                    .is_some_and(|c| !c.is_alphanumeric() && c != '_')
-        }
-    }
+/// Колонка состоит только из break/continue: входить в неё со стрелкой
+/// нечего — поток уйдёт рельсой или растворится в слиянии кейса.
+pub(super) fn rail_only(items: &[Stmt]) -> bool {
+    !items.is_empty()
+        && items
+            .iter()
+            .all(|s| matches!(s, Stmt::Break | Stmt::Continue))
 }
 
 /// Полуширина содержимого колонки вокруг её оси: плитки, вложенные
@@ -57,9 +52,9 @@ impl Ctx<'_> {
     }
 
     /// Колонка на абсциссе tx: плитки и вложенные «если»/циклы.
-    /// Возвращает (y низа, тупик): тупик — колонку завершил return,
-    /// из него линии не выходят, хвост колонки недостижим.
-    pub(super) fn render_column(&mut self, items: &[Stmt], tx: f64, top0: f64) -> (f64, bool) {
+    /// Возвращает (y низа, чем закончена): тупик return закрывает
+    /// колонку, рельса break/continue уводит поток к scope-владельцу.
+    pub(super) fn render_column(&mut self, items: &[Stmt], tx: f64, top0: f64) -> (f64, ColEnd) {
         let mut prev_bottom: Option<f64> = None;
         for it in items {
             let top = match prev_bottom {
@@ -71,45 +66,80 @@ impl Ctx<'_> {
                     if let Some(pb) = prev_bottom {
                         self.edge(&[(tx, pb), (tx, top)], true);
                     }
-                    let (y_bot, dead) = if nd.kind == NodeKind::Decision {
+                    let (y_bot, end) = if nd.kind == NodeKind::Decision {
                         self.sub_if(nd, tx, top)
                     } else {
                         self.sub_loop(nd, tx, top)
                     };
-                    if dead {
-                        return (y_bot, true);
+                    if end != ColEnd::Flow {
+                        // тупик или рельса: следующие инструкции колонки
+                        // недостижимы, слияние колонки не рисуется
+                        return (y_bot, end);
                     }
                     prev_bottom = Some(y_bot);
                 }
-                Stmt::Text(t) => {
-                    if is_return(t) {
-                        let (_, h_r) = self.sizes["ret"];
-                        if let Some(pb) = prev_bottom {
-                            self.edge(&[(tx, pb), (tx, top)], true);
-                        }
-                        self.add("ret", tx, top + h_r / 2.0, t);
-                        return (top + h_r, true);
-                    }
-                    // break: рельса влево мимо loop_end, T-стык ниже цикла
-                    if self.loop_depth > 0 && t.trim() == "break" {
-                        self.breaks.push(BreakAt {
-                            tx,
-                            y: prev_bottom.unwrap_or(top0),
-                        });
-                        continue;
-                    }
-                    let k = if self.st.is_io(t) { "io" } else { "act" };
-                    let (_, h_k) = self.sizes[k];
-                    let bottom = top + h_k;
-                    self.add(k, tx, top + h_k / 2.0, t);
+                Stmt::Return(t) => {
+                    let (_, h_r) = self.sizes["ret"];
                     if let Some(pb) = prev_bottom {
                         self.edge(&[(tx, pb), (tx, top)], true);
                     }
-                    prev_bottom = Some(bottom);
+                    self.add("ret", tx, top + h_r / 2.0, t);
+                    return (top + h_r, ColEnd::Return);
+                }
+                Stmt::Break | Stmt::Continue => {
+                    let is_break = matches!(it, Stmt::Break);
+                    let scoped = self.loop_depth > 0 || self.switch_depth > 0;
+                    if scoped {
+                        // break напрямую в кейс-колонке switch —
+                        // растворяется: слияние кейса само доводит поток
+                        // до шины switch (в C break покидает только
+                        // switch, а не цикл вокруг)
+                        if is_break && self.switch_depth > 0 && self.case_direct {
+                            return (prev_bottom.unwrap_or(top0), ColEnd::Flow);
+                        }
+                        let exit = BreakAt {
+                            tx,
+                            y: prev_bottom.unwrap_or(top0),
+                        };
+                        if is_break {
+                            self.breaks.push(exit);
+                        } else {
+                            self.continues.push(exit);
+                        }
+                        return (prev_bottom.unwrap_or(top0), ColEnd::Rail);
+                    }
+                    // вне цикла и switch — прежняя плитка
+                    let text = if is_break { "break" } else { "continue" };
+                    self.draw_tile(text, TileKind::Act, tx, top, &mut prev_bottom);
+                }
+                Stmt::Tile { kind, text } => {
+                    self.draw_tile(text, *kind, tx, top, &mut prev_bottom);
                 }
             }
         }
-        (prev_bottom.unwrap_or(top0), false)
+        (prev_bottom.unwrap_or(top0), ColEnd::Flow)
+    }
+
+    /// Обычная плитка на колонке.
+    fn draw_tile(
+        &mut self,
+        text: &str,
+        kind: TileKind,
+        tx: f64,
+        top: f64,
+        prev_bottom: &mut Option<f64>,
+    ) {
+        let k = match kind {
+            TileKind::Io => "io",
+            TileKind::Act => "act",
+        };
+        let (_, h_k) = self.sizes[k];
+        let bottom = top + h_k;
+        self.add(k, tx, top + h_k / 2.0, text);
+        if let Some(pb) = *prev_bottom {
+            self.edge(&[(tx, pb), (tx, top)], true);
+        }
+        *prev_bottom = Some(bottom);
     }
 
     /// Простой блок на основной линии. merge_stop: Some(y) — входная

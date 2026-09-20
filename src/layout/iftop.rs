@@ -1,7 +1,8 @@
 //! Ромб «если»/переключатель на основной линии: колонки веток,
 //! метки да/нет/кейсов, слияние, рельсы «-> конец» (pend) и кружки link.
 
-use super::ctx::{Ctx, Pend};
+use super::column::rail_only;
+use super::ctx::{BreakAt, ColEnd, Ctx, Pend};
 use super::ifnode::{build_plan, cascade_cols, Side};
 use super::types::{Anchor, Label};
 use crate::ir::{Branch, Node, NodeKind, Stmt};
@@ -50,8 +51,19 @@ impl Ctx<'_> {
         if comb {
             self.comb_line(&plan, y_b);
         }
-        let mut exits: Vec<Option<(f64, f64, bool, bool)>> = vec![None; nd.branches.len()];
+        let is_switch = nd.switch_var.is_some();
+        let scoped = is_switch || self.loop_depth > 0 || self.switch_depth > 0;
+        let saved_direct = self.case_direct;
+        let br_mark = self.breaks.len();
+        if is_switch {
+            self.switch_depth += 1;
+            self.case_direct = true;
+        } else {
+            self.case_direct = false;
+        }
+        let mut exits: Vec<Option<(f64, f64, bool, ColEnd)>> = vec![None; nd.branches.len()];
         for &(bi, side, t2, txx) in &plan {
+            let arrow = !(scoped && rail_only(&nd.branches[bi].stmts));
             self.column_entry(
                 side,
                 t2,
@@ -63,10 +75,20 @@ impl Ctx<'_> {
                 vl,
                 vr,
                 &nd.branches[bi].label,
+                arrow,
             );
-            let (yend, dead) = self.render_column(&nd.branches[bi].stmts, txx, top0);
-            exits[bi] = Some((txx, yend, nd.branches[bi].to_end && !dead, dead));
+            let (yend, end) = self.render_column(&nd.branches[bi].stmts, txx, top0);
+            exits[bi] = Some((
+                txx,
+                yend,
+                nd.branches[bi].to_end && end != ColEnd::Return,
+                end,
+            ));
         }
+        if is_switch {
+            self.switch_depth -= 1;
+        }
+        self.case_direct = saved_direct;
         let mut merge_y = y_b;
         for &(bi, side, ..) in &plan {
             let e = exits[bi].unwrap();
@@ -74,7 +96,7 @@ impl Ctx<'_> {
             // живой, мёртвый или «-> конец» — задаёт merge_y, иначе ствол
             // (0, merge_y) → следующий блок протыкает её содержимое.
             // Внесъёмные колонки (tx != 0) ствол не трогают.
-            if side == Side::Axis || (!e.2 && !e.3) {
+            if side == Side::Axis || (!e.2 && e.3 == ColEnd::Flow) {
                 merge_y = merge_y.max(e.1 + self.st.mgap);
             }
         }
@@ -87,7 +109,7 @@ impl Ctx<'_> {
         for &(bi, side, _, _) in &plan {
             let e = exits[bi].unwrap();
             if !e.2 {
-                if !e.3 {
+                if e.3 == ColEnd::Flow {
                     merge_cols.push((e.0, e.1));
                 }
                 continue;
@@ -137,7 +159,7 @@ impl Ctx<'_> {
             .iter()
             .filter(|&&(bi, ..)| {
                 let e = exits[bi].unwrap();
-                !e.2 && !e.3
+                !e.2 && e.3 == ColEnd::Flow
             })
             .count()
             + empty.len();
@@ -167,6 +189,28 @@ impl Ctx<'_> {
         if n_merge == 0 && empty.is_empty() && !has_axis {
             self.edge(&[vb, (0.0, merge_y)], false);
         }
+        // рельсы break из веток switch (if внутри case): наружу за
+        // колонки, вниз к выходу switch, T-стык на стволе
+        if is_switch {
+            let nested: Vec<BreakAt> = self.breaks.drain(br_mark..).collect();
+            let outer = plan
+                .iter()
+                .map(|&(.., txx)| txx.abs())
+                .fold(dw / 2.0 + 2.0 * self.st.grid, f64::max)
+                + self.nhe
+                + self.st.grid;
+            for b in &nested {
+                let slot = self.break_slot;
+                self.break_slot += 1;
+                let sgn = if b.tx <= 0.0 { -1.0 } else { 1.0 };
+                let rx = sgn
+                    * super::geometry::up(outer + slot as f64 * 2.0 * self.st.grid, self.st.grid);
+                self.edge(
+                    &[(b.tx, b.y), (rx, b.y), (rx, merge_y), (0.0, merge_y)],
+                    false,
+                );
+            }
+        }
         let cursor = merge_y.max(col_bottom).max(link_bottom);
         self.anchors.push(Anchor { x: 0.0, y: cursor });
         (Some((0.0, merge_y)), cursor)
@@ -190,6 +234,10 @@ impl Ctx<'_> {
             self.edge(&[p, (0.0, cy - dh / 2.0)], true);
         }
         let base = dw / 2.0 + self.st.hgap + self.nhe;
+        let saved_direct = self.case_direct;
+        let br_mark = self.breaks.len();
+        self.switch_depth += 1;
+        self.case_direct = true;
         let empty: Vec<String> = nd
             .branches
             .iter()
@@ -227,7 +275,7 @@ impl Ctx<'_> {
                 // шина ряда: от ствола до колонки (два сегмента без
                 // наложения — вместе образуют шину через ось)
                 self.edge(&[(0.0, y_bus), (tx, y_bus)], false);
-                self.edge(&[(tx, y_bus), (tx, top)], true);
+                self.edge(&[(tx, y_bus), (tx, top)], !rail_only(&b.stmts));
                 self.labels.push(Label {
                     x: tx
                         + if left {
@@ -239,9 +287,11 @@ impl Ctx<'_> {
                     text: b.label.clone(),
                     ha: if left { "right" } else { "left" }.into(),
                 });
-                let (yend, dead) = self.render_column(&b.stmts, tx, top);
+                let (yend, end) = self.render_column(&b.stmts, tx, top);
                 col_bottom = col_bottom.max(yend);
-                if dead {
+                if end != ColEnd::Flow {
+                    // тупик return или рельса break: слияния от колонки
+                    // нет — break дорисует дренаж switch
                     continue;
                 }
                 if b.to_end {
@@ -333,6 +383,23 @@ impl Ctx<'_> {
             // продолжение ствола до точки выхода
             self.edge(&[(0.0, trunk_from), (0.0, merge_y)], false);
         }
+        // рельсы break из веток внутри кейсов (if внутри case): наружу
+        // за сетку, вниз к выходу switch, T-стык на стволе
+        let nested: Vec<BreakAt> = self.breaks.drain(br_mark..).collect();
+        self.switch_depth -= 1;
+        self.case_direct = saved_direct;
+        let outer = base + self.nhe + self.st.grid;
+        for b in &nested {
+            let slot = self.break_slot;
+            self.break_slot += 1;
+            let sgn = if b.tx <= 0.0 { -1.0 } else { 1.0 };
+            let rx =
+                sgn * super::geometry::up(outer + slot as f64 * 2.0 * self.st.grid, self.st.grid);
+            self.edge(
+                &[(b.tx, b.y), (rx, b.y), (rx, merge_y), (0.0, merge_y)],
+                false,
+            );
+        }
         let cursor = merge_y.max(col_bottom).max(link_bottom);
         self.anchors.push(Anchor { x: 0.0, y: cursor });
         (Some((0.0, merge_y)), cursor)
@@ -387,7 +454,7 @@ impl Ctx<'_> {
         let base = dw / 2.0 + self.st.hgap + self.nhe;
         let y_b_last = cy0 + step * (k - 1) as f64 + dh / 2.0;
         let n_cols = k + usize::from(!tail.stmts.is_empty());
-        let mut exits: Vec<(f64, f64, bool, bool, Option<char>, bool)> = Vec::new();
+        let mut exits: Vec<(f64, f64, ColEnd, bool, Option<char>, bool)> = Vec::new();
         // да-входы: «гребёнка» на каждой стороне. Общий вертикальный
         // участок в коридоре между кромкой ромбов и колонками
         // (dw/2 + g — внутри полосы hgap = 2g), у каждой ветви своя
@@ -404,6 +471,9 @@ impl Ctx<'_> {
             let cy = cy0 + step * ci.min(k - 1) as f64;
             ins.push((sgn, tx, cy, ci));
         }
+        // ветки каскада — не кейс-колонки: break в них не растворяется
+        let saved_direct = self.case_direct;
+        self.case_direct = false;
         // общий вертикальный участок стороны: от высшей точки обхода до
         // низшей ветви, один раз; ветви-ответвления в него не рисуются
         for sgn in [-1.0, 1.0] {
@@ -420,37 +490,41 @@ impl Ctx<'_> {
             // спуск в свою колонку сверху
             self.edge(&[(sgn * dw / 2.0, cy), (sgn * x_v, cy)], false);
             self.edge(&[(sgn * x_v, y_over(ci)), (tx, y_over(ci))], false);
-            self.edge(&[(tx, y_over(ci)), (tx, top0)], true);
             let ybr = if ci < k { links[ci].1 } else { tail };
+            self.edge(
+                &[(tx, y_over(ci)), (tx, top0)],
+                !(rail_only(&ybr.stmts) && self.loop_depth + self.switch_depth > 0),
+            );
             self.labels.push(Label {
                 x: sgn * (dw / 2.0 + self.st.label_exit_dx),
                 y: cy - self.st.label_dy,
                 text: ybr.label.clone(),
                 ha: "center".into(),
             });
-            let (yend, dead) = self.render_column(&ybr.stmts, tx, top0);
-            exits.push((tx, yend, dead, ybr.to_end, ybr.link, sgn < 0.0));
+            let (yend, end) = self.render_column(&ybr.stmts, tx, top0);
+            exits.push((tx, yend, end, ybr.to_end, ybr.link, sgn < 0.0));
         }
+        self.case_direct = saved_direct;
         let col_bottom = exits.iter().map(|e| e.1).fold(y_b_last, f64::max);
         let mut merge_y = y_b_last + 2.0 * self.st.grid;
-        for &(_, yend, dead, to_end, _, _) in &exits {
-            if !dead && !to_end {
+        for &(_, yend, end, to_end, _, _) in &exits {
+            if end == ColEnd::Flow && !to_end {
                 merge_y = merge_y.max(yend + self.st.mgap);
             }
         }
         // единая шина: спуск каждой живой колонки и ровно один
         // горизонтальный сегмент от крайней левой до крайней правой
         let mut xs: Vec<f64> = vec![0.0];
-        for &(tx, yend, dead, to_end, _, _) in &exits {
-            if !dead && !to_end {
+        for &(tx, yend, end, to_end, _, _) in &exits {
+            if end == ColEnd::Flow && !to_end {
                 self.edge(&[(tx, yend), (tx, merge_y)], false);
                 xs.push(tx);
             }
         }
         // «-> конец»: рельса снаружи колонок всей схемы, кружки link
         let mut link_bottom = y_b_last;
-        for &(tx, yend, dead, to_end, link, left) in &exits {
-            if !to_end || dead {
+        for &(tx, yend, end, to_end, link, left) in &exits {
+            if !to_end || end != ColEnd::Flow {
                 continue;
             }
             let key = usize::from(!left);
@@ -517,7 +591,8 @@ impl Ctx<'_> {
         if hi - lo > 1e-9 {
             self.edge(&[(lo, merge_y), (hi, merge_y)], false);
         }
-        let n_merge = exits.iter().filter(|e| !e.2 && !e.3).count() + usize::from(has_rail);
+        let n_merge =
+            exits.iter().filter(|e| e.2 == ColEnd::Flow && !e.3).count() + usize::from(has_rail);
         if n_merge == 0 {
             // всё в тупиках: формальное продолжение ствола под ромбами
             self.edge(&[(0.0, y_b_last), (0.0, merge_y)], false);

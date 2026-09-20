@@ -3,8 +3,8 @@
 //! снимается сам — с сохранением нумерации строк, как в Python-версии.
 
 use crate::error::ParseError;
+use crate::frontend::tile_kind;
 use crate::ir::{Branch, LoopKind, Node, NodeKind, Stmt};
-use crate::style::Style;
 use lang_c::ast::*;
 use lang_c::driver::{parse_preprocessed, Config, Flavor, SyntaxError};
 use lang_c::span::Node as LangNode;
@@ -51,15 +51,10 @@ pub fn parse_c_to_nodes(src: &str, labels: &str) -> Result<Vec<Node>, ParseError
     for s in stmts {
         match s {
             // верхнеуровневый return не рисуем: терминатор «конец» и так завершает схему
-            Stmt::Text(t) if !is_return(&t) => {
-                let kind = if Style::DEFAULT.is_io(&t) {
-                    NodeKind::Io
-                } else {
-                    NodeKind::Act
-                };
-                nodes.push(Node::new(kind, t));
-            }
-            Stmt::Text(_) => {}
+            Stmt::Return(_) => {}
+            Stmt::Tile { kind, text } => nodes.push(Node::new(NodeKind::from(kind), text)),
+            Stmt::Break => nodes.push(Node::new(NodeKind::Act, "break")),
+            Stmt::Continue => nodes.push(Node::new(NodeKind::Act, "continue")),
             Stmt::Node(n) => nodes.push(*n),
         }
     }
@@ -124,10 +119,18 @@ fn emit_nodes(nodes: &[Node], depth: usize, out: &mut String) {
 fn emit_stmts(stmts: &[Stmt], depth: usize, out: &mut String) {
     for s in stmts {
         match s {
-            Stmt::Text(t) => {
+            Stmt::Tile { text, .. } | Stmt::Return(text) => {
                 pad(out, depth);
-                out.push_str(t);
+                out.push_str(text);
                 out.push('\n');
+            }
+            Stmt::Break => {
+                pad(out, depth);
+                out.push_str("break\n");
+            }
+            Stmt::Continue => {
+                pad(out, depth);
+                out.push_str("continue\n");
             }
             Stmt::Node(n) => emit_nodes(std::slice::from_ref(n), depth, out),
         }
@@ -184,11 +187,11 @@ impl<'a> Ctx<'a> {
             .filter_map(|idt| {
                 let name = declarator_name(&idt.node.declarator)?;
                 let init = idt.node.initializer.as_ref()?;
-                Some(Stmt::Text(abbrev_stmt(&format!(
-                    "{} = {}",
-                    name,
-                    self.init_text(init)
-                ))))
+                let text = abbrev_stmt(&format!("{} = {}", name, self.init_text(init)));
+                Some(Stmt::Tile {
+                    kind: tile_kind(&text),
+                    text,
+                })
             })
             .collect()
     }
@@ -264,19 +267,23 @@ impl<'a> Ctx<'a> {
                 Err(self.err("в коде цикл do-while — перепиши на while", d.span.start))
             }
             Statement::Goto(g) => Err(self.err("в коде goto — не поддерживается", g.span.start)),
-            Statement::Return(e) => Ok(vec![Stmt::Text(match e {
+            Statement::Return(e) => Ok(vec![Stmt::Return(match e {
                 Some(x) => format!("return {}", expr_text(self.src, x)),
                 None => "return".to_string(),
             })]),
-            Statement::Break => Ok(vec![Stmt::Text("break".to_string())]),
-            Statement::Continue => Ok(vec![Stmt::Text("continue".to_string())]),
+            Statement::Break => Ok(vec![Stmt::Break]),
+            Statement::Continue => Ok(vec![Stmt::Continue]),
             Statement::Compound(items) => self.items(items),
             Statement::Expression(Some(e)) => {
                 let text = expr_text(self.src, e);
                 Ok(if text.is_empty() {
                     vec![]
                 } else {
-                    vec![Stmt::Text(abbrev_stmt(&text))]
+                    let text = abbrev_stmt(&text);
+                    vec![Stmt::Tile {
+                        kind: tile_kind(&text),
+                        text,
+                    }]
                 })
             }
             Statement::Expression(None) => Ok(vec![]),
@@ -295,7 +302,10 @@ impl<'a> Ctx<'a> {
                     Statement::Expression(None) => format!("{}:", id.node.name),
                     _ => return Err(self.err("метка перед блоком не поддерживается", l.span.start)),
                 };
-                Ok(vec![Stmt::Text(abbrev_stmt(&text))])
+                Ok(vec![Stmt::Tile {
+                    kind: tile_kind(&text),
+                    text,
+                }])
             }
             Label::Case(_) | Label::CaseRange(_) | Label::Default => {
                 Err(self.err("метка case вне switch", l.span.start))
@@ -537,13 +547,65 @@ fn prepare(src: &str) -> String {
         .lines()
         .map(|l| {
             if l.trim_start().starts_with('#') {
-                ""
+                String::new()
             } else {
-                l
+                expand_stdbool(l)
             }
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Вшитый контракт <stdbool.h> — те же три объектных макроса, что
+/// объявляет заголовок у GCC/Clang и фейковая libc pycparser
+/// (питоновская версия gostpadi опиралась именно на неё). lang-c
+/// препроцессор не запускает, поэтому тип `bool` для него неизвестен:
+/// https://github.com/sehaxe/gostpadi — репорт: файл с `bool keep = true;`
+/// падал с «неожидаемый токен». Подстановка по границам слова, строковые
+/// и символьные литералы не трогаем. Функциональные макросы и #if из
+/// пользовательского кода не исполняются — осознанная граница фазы.
+const STDBOOL: [(&str, &str); 3] = [("bool", "_Bool"), ("true", "1"), ("false", "0")];
+
+fn expand_stdbool(line: &str) -> String {
+    if line.trim_start().starts_with('#') {
+        return line.to_string();
+    }
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = String::with_capacity(line.len() + 8);
+    let mut in_str = false; // "..."
+    let mut in_chr = false; // '...'
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if (in_str || in_chr) && c == '\\' {
+            out.push(c);
+            if let Some(&next) = chars.get(i + 1) {
+                out.push(next);
+                i += 1;
+            }
+        } else if c == '"' && !in_chr {
+            in_str = !in_str;
+            out.push(c);
+        } else if c == '\'' && !in_str {
+            in_chr = !in_chr;
+            out.push(c);
+        } else if !in_str && !in_chr && (c.is_ascii_alphabetic() || c == '_') {
+            let start = i;
+            while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            let word: String = chars[start..i].iter().collect();
+            match STDBOOL.iter().find(|(w, _)| *w == word) {
+                Some((_, rep)) => out.push_str(rep),
+                None => out.push_str(&word),
+            }
+            continue;
+        } else {
+            out.push(c);
+        }
+        i += 1;
+    }
+    out
 }
 
 fn line_of(src: &str, off: usize) -> usize {
@@ -672,16 +734,6 @@ fn abbrev_stmt(s: &str) -> String {
 }
 
 /// инструкция return (в ветке — тупик)
-fn is_return(s: &str) -> bool {
-    let t = s.trim_start();
-    let Some(rest) = t.strip_prefix("return") else {
-        return false;
-    };
-    match rest.chars().next() {
-        None => true,
-        Some(c) => !c.is_alphanumeric() && c != '_',
-    }
-}
 
 fn syntax_err(e: SyntaxError, orig: &str) -> ParseError {
     let mut exp: Vec<&str> = e.expected.iter().copied().collect();
@@ -699,6 +751,7 @@ fn syntax_err(e: SyntaxError, orig: &str) -> ParseError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::style::Style;
 
     fn parse_ok(src: &str) -> Vec<Node> {
         match parse_c_to_nodes(src, "en") {
@@ -735,7 +788,9 @@ mod tests {
         }
         while let Some(s) = work.pop() {
             match s {
-                Stmt::Text(t) => out.push(t.clone()),
+                Stmt::Tile { text: t, .. } | Stmt::Return(t) => out.push(t.clone()),
+                Stmt::Break => out.push("break".to_string()),
+                Stmt::Continue => out.push("continue".to_string()),
                 Stmt::Node(inner) => match inner.kind {
                     NodeKind::Decision | NodeKind::Loop => push_inner(inner, &mut work),
                     _ => out.push(inner.text.clone()),
@@ -775,7 +830,7 @@ mod tests {
             dec.branches[0]
                 .stmts
                 .iter()
-                .any(|s| matches!(s, Stmt::Text(t) if t == "return 1")),
+                .any(|s| matches!(s, Stmt::Return(t) if t == "return 1")),
             "return 1 lost in yes branch"
         );
         // switch month / 3: 4 ветки
@@ -887,7 +942,7 @@ mod tests {
         };
         assert_eq!(nested.text, "if (a == 0)");
         assert!(
-            matches!(&nested.branches[1].stmts[0], Stmt::Text(t) if t.contains("pos")),
+            matches!(&nested.branches[1].stmts[0], Stmt::Tile { text: t, .. } if t.contains("pos")),
             "else branch lost"
         );
     }
@@ -904,7 +959,7 @@ mod tests {
         // i++ остаётся как есть, тип счётчика вырезан
         assert_eq!(f.text, "i = 0; i < 5; i++");
         assert!(
-            matches!(f.body.as_deref().and_then(|b| b.first()), Some(Stmt::Text(t)) if t == "s = s + i"),
+            matches!(f.body.as_deref().and_then(|b| b.first()), Some(Stmt::Tile { text: t, .. }) if t == "s = s + i"),
             "for body lost"
         );
         let w = &nodes[1];
@@ -942,8 +997,8 @@ mod tests {
         let b1 = &sw.branches[0];
         assert_eq!(b1.label, "x = 1");
         assert_eq!(b1.stmts.len(), 2);
-        assert!(matches!(&b1.stmts[1], Stmt::Text(t) if t == "return 1"));
-        assert!(matches!(&sw.branches[1].stmts[0], Stmt::Text(t) if t == "break"));
+        assert!(matches!(&b1.stmts[1], Stmt::Return(t) if t == "return 1"));
+        assert!(matches!(&sw.branches[1].stmts[0], Stmt::Break));
         assert_eq!(sw.branches[2].label, "default");
     }
 
@@ -1083,5 +1138,55 @@ mod tests {
             };
             assert_eq!(nodes[0].kind, NodeKind::Term, "{}", name);
         }
+    }
+
+    /// stdbool-фаза: вшитый контракт <stdbool.h> — bool/true/false
+    /// подставляются, литералы и чужие слова не тронуты.
+    #[test]
+    fn stdbool_expand_word_boundaries_and_literals() {
+        assert_eq!(
+            expand_stdbool("bool keep = true; if (!flag_bool) x = trueish;"),
+            "_Bool keep = 1; if (!flag_bool) x = trueish;"
+        );
+        assert_eq!(
+            expand_stdbool("printf(\"bool true false\"); c = 'x';"),
+            "printf(\"bool true false\"); c = 'x';",
+            "строковые литералы не подменяются"
+        );
+        assert_eq!(
+            expand_stdbool("char q = '\\\"'; bool b = false;"),
+            "char q = '\\\"'; _Bool b = 0;",
+            "экранированные кавычки не ломают скан"
+        );
+        assert_eq!(
+            expand_stdbool("#define bool int"),
+            "#define bool int",
+            "директивы не трогаем"
+        );
+    }
+
+    /// Файл лёши: stdbool.h + bool + while(true) + scanf_s должен
+    /// строиться целиком (репорт: «4.c почему-то не рисует»).
+    #[test]
+    fn stdbool_program_parses() {
+        let src = "#include <stdio.h>\n#include <stdbool.h>\nint main() {\n    bool keep = true;\n    while (true) {\n        int a;\n        printf(\"num: \");\n        if (scanf_s(\"%d\", &a) != 1) {\n            break;\n        }\n        if (a > 10 || a < 0) {\n            continue;\n        }\n        keep = false;\n    }\n    return 0;\n}";
+        let nodes = parse_ok(src);
+        let tiles = all_tiles(&nodes);
+        assert!(
+            tiles.iter().any(|t| t == "keep = 1"),
+            "инициализация с подстановкой: {:?}",
+            tiles
+        );
+        assert!(tiles.iter().any(|t| t == "keep = 0"), "false -> 0");
+        let loop_text = nodes
+            .iter()
+            .filter(|n| n.kind == NodeKind::Loop)
+            .map(|n| n.text.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            loop_text,
+            vec!["1"],
+            "while (true) с подстановкой true -> 1"
+        );
     }
 }

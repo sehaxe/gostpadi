@@ -1,7 +1,18 @@
 pub mod c;
 pub mod gvn;
 
-use crate::ir::Branch;
+use crate::ir::{Branch, TileKind};
+
+/// Единственная граница строкового распознавания ввода-вывода: оба
+/// frontend'а зовут её при строительстве плитки; layout и measure
+/// читают готовый kind и текст не смотрят.
+pub(crate) fn tile_kind(text: &str) -> TileKind {
+    if crate::style::Style::DEFAULT.is_io(text) {
+        TileKind::Io
+    } else {
+        TileKind::Act
+    }
+}
 
 /// C-проваливание: пустая ветка case перед непустой — алиас («3:» перед
 /// «4: тело» выполняет тело, а не рисуется рельсой обхода). Метки

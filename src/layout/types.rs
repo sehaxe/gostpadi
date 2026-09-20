@@ -1,6 +1,6 @@
 //! Публичные типы результата раскладки.
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Shape {
     pub kind: String,
     pub cx: f64,
@@ -14,13 +14,13 @@ pub struct Shape {
     pub lines: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Edge {
     pub points: Vec<(f64, f64)>,
     pub arrow: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Label {
     pub x: f64,
     pub y: f64,

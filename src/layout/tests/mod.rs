@@ -1,7 +1,7 @@
 mod measure;
 mod scheme;
 
-use crate::ir::{Branch, Node, NodeKind, Stmt};
+use crate::ir::{Branch, Node, NodeKind, Stmt, TileKind};
 use crate::layout::{layout, normalize, Layout, Shape, Sizes};
 use crate::style::Style;
 
@@ -35,7 +35,21 @@ fn br(label: &str, stmts: Vec<Stmt>, to_end: bool) -> Branch {
 }
 
 fn s(t: &str) -> Stmt {
-    Stmt::Text(t.into())
+    Stmt::Tile {
+        kind: TileKind::Act,
+        text: t.into(),
+    }
+}
+
+fn sio(t: &str) -> Stmt {
+    Stmt::Tile {
+        kind: TileKind::Io,
+        text: t.into(),
+    }
+}
+
+fn sbrk() -> Stmt {
+    Stmt::Break
 }
 
 fn lay(nodes: &[Node]) -> Layout {

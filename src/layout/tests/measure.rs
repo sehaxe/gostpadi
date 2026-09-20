@@ -69,10 +69,16 @@ fn normalize_recurses_branches_and_body() {
     let st = Style::default();
     let mut nd = node(NodeKind::Decision, "c?");
     let mut inner = node(NodeKind::Act, "d = 1");
-    inner.body = Some(vec![Stmt::Text("a very long body line indeed xx".into())]);
+    inner.body = Some(vec![Stmt::Tile {
+        kind: TileKind::Act,
+        text: "a very long body line indeed xx".into(),
+    }]);
     nd.branches.push(br(
         "да",
-        vec![Stmt::Text("printf(long io statement here ok)".into())],
+        vec![Stmt::Tile {
+            kind: TileKind::Io,
+            text: "printf(long io statement here ok)".into(),
+        }],
         false,
     ));
     let sizes = normalize(&[nd, inner], &st);
@@ -87,7 +93,7 @@ fn text_stmt_classified_io_vs_act() {
     let st = Style::default();
     let mut nd = node(NodeKind::Decision, "c?");
     nd.branches
-        .push(br("да", vec![s("printf(x)"), s("a = 1")], false));
+        .push(br("да", vec![sio("printf(x)"), s("a = 1")], false));
     let sizes = normalize(&[nd], &st);
     let (w, _) = measure(&st, "act", "a = 1");
     assert_eq!(sizes["act"].0, w);

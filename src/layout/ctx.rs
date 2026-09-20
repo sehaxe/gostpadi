@@ -19,6 +19,17 @@ pub(super) struct BreakAt {
     pub y: f64,
 }
 
+/// Чем закончилась колонка. Flow — поток продолжается; Return — тупик
+/// (линии из него не выходят); Rail — поток ушёл рельсой break/continue,
+/// слияние колонки не дорисовывается: за него отвечает scope-владелец
+/// рельсы (цикл или switch).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum ColEnd {
+    Flow,
+    Return,
+    Rail,
+}
+
 pub(super) struct Ctx<'a> {
     pub st: &'a Style,
     pub sizes: &'a Sizes,
@@ -33,8 +44,15 @@ pub(super) struct Ctx<'a> {
     pub pend_count: [usize; 2],
     pub inbound: Vec<String>,
     pub loop_depth: usize,
+    /// вложенность switch: кейс-колонки dissolve-ят break в слияние,
+    /// вложенные (if внутри кейса) уходят рельсой к выходу switch
+    pub switch_depth: usize,
+    /// render_column вызван напрямую за кейс-колонку switch-рендера
+    pub case_direct: bool,
     pub break_slot: usize,
     pub breaks: Vec<BreakAt>,
+    /// continue: рельсы к выходу loop_end (следующая итерация)
+    pub continues: Vec<BreakAt>,
 }
 
 impl<'a> Ctx<'a> {
@@ -112,8 +130,11 @@ impl<'a> Ctx<'a> {
             pend_count: [0, 0],
             inbound: Vec::new(),
             loop_depth: 0,
+            switch_depth: 0,
+            case_direct: false,
             break_slot: 0,
             breaks: Vec::new(),
+            continues: Vec::new(),
         }
     }
 

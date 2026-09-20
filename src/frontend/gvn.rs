@@ -1,6 +1,26 @@
 use crate::error::ParseError;
+use crate::frontend::tile_kind;
 use crate::ir::{Branch, LoopKind, Node, NodeKind, Stmt};
 use crate::style::Style;
+
+/// Строка ветки/тела → типизированный Stmt. Единственное место, где
+/// текст ещё сниффится на выходы и ввод-вывод: дальше IR типизирован.
+fn stmt_from_line(s: String) -> Stmt {
+    let kw = s.trim();
+    if kw == "break" {
+        return Stmt::Break;
+    }
+    if kw == "continue" {
+        return Stmt::Continue;
+    }
+    if is_return(kw) {
+        return Stmt::Return(s);
+    }
+    Stmt::Tile {
+        kind: tile_kind(&s),
+        text: s,
+    }
+}
 
 fn wrap(text: &str, limit: usize) -> String {
     let mut res: Vec<String> = Vec::new();
@@ -275,7 +295,7 @@ impl<'a> Parser<'a> {
                 let node = self.cycle(s, ln, indent)?;
                 items.push(Stmt::Node(Box::new(node)));
             } else {
-                items.push(Stmt::Text(s));
+                items.push(stmt_from_line(s));
             }
         }
         Ok(items)
@@ -323,7 +343,7 @@ impl<'a> Parser<'a> {
                 }
                 let stmts = split_statements(&btext)
                     .into_iter()
-                    .map(Stmt::Text)
+                    .map(stmt_from_line)
                     .collect();
                 let br = Branch {
                     label,
@@ -346,17 +366,14 @@ impl<'a> Parser<'a> {
                     let node = self.cycle(s_b, ln_b, indent + 4)?;
                     branches[idx].stmts.push(Stmt::Node(Box::new(node)));
                 } else {
-                    branches[idx].stmts.push(Stmt::Text(s_b));
+                    branches[idx].stmts.push(stmt_from_line(s_b));
                 }
             }
         }
 
         // return handling and nested end check
         for br in branches.iter_mut() {
-            let has_return = br.stmts.iter().any(|st| match st {
-                Stmt::Text(t) => is_return(t),
-                _ => false,
-            });
+            let has_return = br.stmts.iter().any(|st| matches!(st, Stmt::Return(_)));
             if has_return {
                 br.to_end = false;
             }
@@ -586,7 +603,53 @@ pub fn parse(text: &str, style: &Style, labels: &str) -> Result<Vec<Node>, Parse
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::TileKind;
     use crate::style::Style;
+
+    /// Граница типизации: строки .gvn превращаются в типизированный Stmt
+    /// ровно один раз — здесь.
+    #[test]
+    fn typed_exits_and_tiles_from_lines() {
+        let st = Style::default();
+        let text = "if a > 0\n    да:\n    break\n    нет:\n    printf(\"x\")\n";
+        let nodes = parse(text, &st, "").unwrap();
+        let d = nodes.iter().find(|n| n.kind == NodeKind::Decision).unwrap();
+        assert!(
+            matches!(d.branches[0].stmts[0], Stmt::Break),
+            "break → Stmt::Break"
+        );
+        assert!(matches!(
+            d.branches[1].stmts[0],
+            Stmt::Tile {
+                kind: TileKind::Io,
+                ..
+            }
+        ));
+
+        let text = "if a > 0\n    да:\n    return 1\n    нет:\n    b = 2\n";
+        let nodes = parse(text, &st, "").unwrap();
+        let d = nodes.iter().find(|n| n.kind == NodeKind::Decision).unwrap();
+        assert!(matches!(d.branches[0].stmts[0], Stmt::Return(_)));
+        assert!(!d.branches[0].to_end, "return отменяет «-> конец»");
+        assert!(matches!(
+            d.branches[1].stmts[0],
+            Stmt::Tile {
+                kind: TileKind::Act,
+                ..
+            }
+        ));
+
+        let text = "while a > 0\n    continue\noutput printf(1)\n";
+        let nodes = parse(text, &st, "").unwrap();
+        let body = nodes
+            .iter()
+            .find(|n| n.kind == NodeKind::Loop)
+            .unwrap()
+            .body
+            .as_ref()
+            .unwrap();
+        assert!(matches!(body[0], Stmt::Continue));
+    }
 
     fn en_style() -> Style {
         Style::default()

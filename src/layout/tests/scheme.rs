@@ -100,7 +100,7 @@ fn nested_loop_numbering() {
 fn break_goes_left_rail_below_loop() {
     let nodes = vec![
         node(NodeKind::Term, "начало"),
-        loop_node("while i < 5", vec![s("a = 1"), s("break")]),
+        loop_node("while i < 5", vec![s("a = 1"), sbrk()]),
         node(NodeKind::Term, "конец"),
     ];
     let st = Style::default();
@@ -124,7 +124,7 @@ fn break_goes_left_rail_below_loop() {
 fn to_end_single_arrow_into_end() {
     let mut d = node(NodeKind::Decision, "if a > 0");
     d.branches = vec![
-        br("да", vec![s("printf(\"many\")")], true),
+        br("да", vec![sio("printf(\"many\")")], true),
         br("нет", vec![s("c = 0")], false),
     ];
     let nodes = vec![
@@ -141,7 +141,7 @@ fn to_end_single_arrow_into_end() {
 fn ret_is_dead_end() {
     let mut d = node(NodeKind::Decision, "if a > 0");
     d.branches = vec![
-        br("да", vec![s("return 1")], false),
+        br("да", vec![Stmt::Return("return 1".into())], false),
         br("нет", vec![s("b = 2")], false),
     ];
     let nodes = vec![
@@ -213,7 +213,7 @@ fn orthogonal_edges() {
         ],
         vec![
             node(NodeKind::Term, "начало"),
-            loop_node("while i < 5", vec![s("i = i + 1"), s("break")]),
+            loop_node("while i < 5", vec![s("i = i + 1"), sbrk()]),
             node(NodeKind::Term, "конец"),
         ],
     ];
@@ -694,7 +694,7 @@ fn grid_invariant() {
         ],
         vec![
             node(NodeKind::Term, "начало"),
-            loop_node("while i < 5", vec![s("a = 1"), s("break")]),
+            loop_node("while i < 5", vec![s("a = 1"), sbrk()]),
             node(NodeKind::Term, "конец"),
         ],
         vec![
@@ -958,9 +958,12 @@ output printf(d)
     let mut lefts: Vec<f64> = ios.iter().filter(|s| s.cx < 0.0).map(|s| s.cy).collect();
     lefts.sort_by(|a, b| a.partial_cmp(b).unwrap());
     assert_eq!(lefts.len(), 3);
+    // кейсы больше не таскают плитки break, поэтому ряды опираются на
+    // высоту самой плитки кейса, а не ромба
+    let (_, io_h) = measure(&st, "io", "printf(\"один\")");
     assert!(
-        lefts[1] > lefts[0] + dsh.h,
-        "второй ряд ниже первого: {:?}",
+        lefts[1] > lefts[0] + io_h && lefts[2] > lefts[1] + io_h,
+        "каждый следующий ряд ниже предыдущего: {:?}",
         lefts
     );
     // ширина схемы меньше, чем была бы одной шиной (2 яруса вширь)
@@ -1044,4 +1047,160 @@ output printf(1)
     assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
     assert!(overlaps_ok(&l.shapes));
     assert!(single_entry_ok(&l));
+}
+
+/// Репорт: ветка «да» из одного break рисовала вторую линию к слиянию
+/// if и стрелку в пустоту. Теперь колонка без плиток не дорисовывается
+/// к слиянию, вход без стрелки, выход — только рельса под цикл.
+#[test]
+fn break_only_branch_no_merge_descent() {
+    let st = Style::default();
+    let text = "\
+while true
+    input scanf(\"%d\", &a)
+    if a > 0
+        yes:
+        break
+        no:
+        printf(\"нет\")
+output printf(\"далее\")
+";
+    let nodes = crate::frontend::gvn::parse(text, &st, "").unwrap();
+    let sizes = normalize(&nodes, &st);
+    let l = lay(&nodes);
+    assert!(
+        !l.shapes
+            .iter()
+            .any(|sh| sh.lines == vec!["break".to_string()]),
+        "блок break не рисуется: {:?}",
+        l.shapes.iter().map(|s| s.lines.clone()).collect::<Vec<_>>()
+    );
+    let dsh = l.shapes.iter().find(|s| s.kind == "if").unwrap();
+    let nhe = super::nhe_of(&sizes, &nodes, &st);
+    let base = dsh.w / 2.0 + st.hgap + nhe;
+    let top2 = dsh.cy + dsh.h / 2.0 + st.vgap;
+    let le = l.shapes.iter().find(|sh| sh.kind == "loop_end").unwrap();
+    let merge_y = le.cy + le.h / 2.0 + st.mgap;
+    // вход в «да»-колонку без стрелки
+    let entry = l
+        .edges
+        .iter()
+        .find(|e| {
+            let last = e.points.last().unwrap();
+            (last.0 + base).abs() < 1e-9 && (last.1 - top2).abs() < 1e-9
+        })
+        .expect("вход в да-колонку");
+    assert!(!entry.arrow, "стрелки в пустую колонку нет");
+    // ложный спуск колонки к слиянию исчез: вертикали на x = -base
+    // ниже верха колонки нет
+    let bogus = l.edges.iter().any(|e| {
+        e.points.windows(2).any(|w| {
+            let (p, q) = (w[0], w[1]);
+            (p.0 + base).abs() < 1e-9 && (q.0 + base).abs() < 1e-9 && q.1.max(p.1) > top2 + 1e-9
+        })
+    });
+    assert!(!bogus, "спуск rail-колонки к шине слияния не рисуется");
+    // рельса break: левый канал ниже loop_end, T-стык на продолжении
+    let (lw, _) = measure(&st, "loop", "while true");
+    let rail = l
+        .edges
+        .iter()
+        .find(|e| {
+            e.points.iter().any(|p| p.0 < -lw / 2.0)
+                && e.points
+                    .last()
+                    .map(|p| p.0 == 0.0 && (p.1 - merge_y).abs() < 1e-9)
+                    .unwrap_or(false)
+        })
+        .expect("рельса break в левом канале");
+    let last = rail.points.last().unwrap();
+    assert!(
+        last.0 == 0.0 && (last.1 - merge_y).abs() < 1e-9,
+        "рельса приходит на выход цикла: {last:?} vs {merge_y}"
+    );
+    assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
+    assert!(single_entry_ok(&l));
+}
+
+/// Репорт: break в кейсе switch внутри цикла считался выходом из ЦИКЛА.
+/// В C он покидает только switch — схема с break обязана совпадать
+/// со схемой без него.
+#[test]
+fn case_break_inside_loop_changes_nothing() {
+    let st = Style::default();
+    let with_b = "\
+while i < 5
+    if switch (a)
+        1: printf(\"один\"); break
+        2: printf(\"два\"); break
+output printf(\"далее\")
+";
+    let without = "\
+while i < 5
+    if switch (a)
+        1: printf(\"один\")
+        2: printf(\"два\")
+output printf(\"далее\")
+";
+    let a = lay(&crate::frontend::gvn::parse(with_b, &st, "").unwrap());
+    let b = lay(&crate::frontend::gvn::parse(without, &st, "").unwrap());
+    assert_eq!(a.shapes, b.shapes, "фигуры совпадают");
+    assert_eq!(
+        a.edges, b.edges,
+        "рёбра совпадают: break растворён в слиянии кейса"
+    );
+}
+
+/// То же на верхнем уровне: раньше break в кейсе рисовался прямоугольником.
+#[test]
+fn top_level_case_break_dissolves() {
+    let st = Style::default();
+    let with_b = "if switch (a)\n    1: printf(\"один\"); break\n    2: printf(\"два\"); break\noutput printf(\"k\")\n";
+    let without =
+        "if switch (a)\n    1: printf(\"один\")\n    2: printf(\"два\")\noutput printf(\"k\")\n";
+    let a = lay(&crate::frontend::gvn::parse(with_b, &st, "").unwrap());
+    let b = lay(&crate::frontend::gvn::parse(without, &st, "").unwrap());
+    assert!(!a
+        .shapes
+        .iter()
+        .any(|sh| sh.lines == vec!["break".to_string()]));
+    assert_eq!(a.shapes, b.shapes);
+    assert_eq!(a.edges, b.edges);
+}
+
+/// continue: рельса к выходу loop_end (следующая итерация); мёртвый
+/// код после continue в той же колонке не рисуется.
+#[test]
+fn continue_rails_to_loop_end_output() {
+    let st = Style::default();
+    let text = "\
+while i < 5
+    a = 1
+    continue
+    b = 2
+output printf(\"далее\")
+";
+    let nodes = crate::frontend::gvn::parse(text, &st, "").unwrap();
+    let l = lay(&nodes);
+    assert!(!l
+        .shapes
+        .iter()
+        .any(|sh| sh.lines == vec!["b = 2".to_string()]));
+    let le = l.shapes.iter().find(|sh| sh.kind == "loop_end").unwrap();
+    let le_bottom = le.cy + le.h / 2.0;
+    let rail = l
+        .edges
+        .iter()
+        .find(|e| {
+            let last = e.points.last().unwrap();
+            last.0 == 0.0 && last.1 > le_bottom + 1e-9 && e.points.len() >= 4
+        })
+        .expect("рельса continue к выходу loop_end");
+    let merge_y = le_bottom + st.mgap;
+    let yj = rail.points.last().unwrap().1;
+    assert!(
+        yj < merge_y,
+        "T-стык на выходе loop_end, не ниже: {yj} vs {merge_y}"
+    );
+    assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
 }
