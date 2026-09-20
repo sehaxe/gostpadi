@@ -217,12 +217,41 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   .batchnote { color: var(--faint); font-size: 12px; }
 
-  /* ---------- мобильная версия ---------- */
-  #tabbar { display: none; }
+  /* ---------- панели: десктоп — показ по флагам, мобильный — активный таб ---------- */
+  .viewchips { display: flex; gap: 4px; }
+  .viewchips button {
+    border: 1px solid var(--line2); background: transparent; color: var(--muted);
+    border-radius: 999px; padding: 3px 10px; font-size: 12px;
+  }
+  .viewchips button[aria-pressed="true"] {
+    background: var(--accent-soft); border-color: var(--accent); color: var(--accent);
+  }
+  .menu-wrap { position: relative; }
+  .menu {
+    position: absolute; top: calc(100% + 6px); right: 0; z-index: 40;
+    background: var(--panel2); border: 1px solid var(--line2); border-radius: 10px;
+    box-shadow: var(--shadow); padding: 4px; min-width: 170px;
+  }
+  .menu[hidden] { display: none; }
+  .menu button {
+    display: block; width: 100%; text-align: left; border: 0; background: transparent;
+    color: var(--ink); border-radius: 7px; padding: 8px 10px; font-size: 13px;
+  }
+  .menu button:hover { background: var(--accent-soft); color: var(--accent); }
+
+  @media (min-width: 1081px) {
+    body[data-files="off"] #side { display: none; }
+    body[data-editor="off"] #edit { display: none; }
+    body[data-files="off"] main.studio { grid-template-columns: minmax(320px, 460px) 1fr; }
+    body[data-editor="off"] main.studio { grid-template-columns: 220px 1fr; }
+    body[data-files="off"][data-editor="off"] main.studio { grid-template-columns: 1fr; }
+  }
   @media (max-width: 1080px) {
     main.studio { grid-template-columns: 1fr; padding: 0; gap: 0; height: calc(100% - 46px - 52px); }
     .pane { border: 0; border-radius: 0; }
-    .pane[hidden] { display: none; }
+    body:not([data-mtab="side"]) #side { display: none; }
+    body:not([data-mtab="edit"]) #edit { display: none; }
+    body:not([data-mtab="view"]) #view { display: none; }
     #side { border-right: 0; }
     #tabbar {
       display: flex; height: 52px; background: var(--bg2);
@@ -235,6 +264,7 @@
     }
     #tabbar button[aria-current="true"] { color: var(--accent); }
     .hint { display: none; }
+    .viewchips { display: none; }
   }
   @media (min-width: 1081px) {
     .m-only { display: none !important; }
@@ -269,6 +299,10 @@
 <header class="top">
   <div class="brand">gost<em>padi</em><small>блок-схемы из кода — всё считается в браузере</small></div>
   <div class="top-actions">
+    <span class="viewchips" role="group" aria-label="показ панелей">
+      <button id="vt-files" aria-pressed="true">Файлы</button>
+      <button id="vt-editor" aria-pressed="true">Код</button>
+    </span>
     <button id="theme" class="btn icon" title="сменить тему">◐</button>
     <a href="https://github.com/sehaxe/gostpadi" title="исходники на GitHub">GitHub</a>
   </div>
@@ -277,7 +311,13 @@
 <main class="studio" id="app">
   <nav id="side" class="pane" aria-label="файлы">
     <div class="pane-title">Файлы<span class="spacer"></span>
-      <button id="add" class="btn icon" title="добавить файлы">+</button>
+      <span class="menu-wrap">
+        <button id="add" class="btn icon" title="добавить файлы" aria-haspopup="menu">+</button>
+        <span id="addmenu" class="menu" hidden role="menu">
+          <button data-act="open" role="menuitem">Открыть файлы…</button>
+          <button data-act="new" role="menuitem">Новый файл</button>
+        </span>
+      </span>
     </div>
     <ul id="filelist"></ul>
     <div class="side-hint">Перетащи файл с кодом куда угодно на странице или нажми «+». Блоки во всех схемах пачки будут одного размера.</div>
@@ -531,6 +571,14 @@ function renderNow() {
       return;
     }
     $("render").disabled = false;
+    if (!res.ok) {
+      // одиночный рендер падает с res.error: показываем как карточку пачки
+      const err = res.error || {};
+      const it = items[0] || { name: "scheme", text: "" };
+      showErrors([{ name: it.name, line: err.line, col: err.col, msg: err.msg || "ошибка разбора" }], items);
+      status("ошибка — см. карточку у редактора", true);
+      return;
+    }
     applyResult(res, items, performance.now() - t0);
   });
 }
@@ -937,6 +985,9 @@ function showErrors(errors, items) {
   const box = $("errbox");
   box.innerHTML = "";
   box.classList.toggle("show", errors.length > 0);
+  if (errors.length && !paneOn("editor")) {
+    if (isNarrow()) switchTab("edit"); else setPane("editor", true);
+  }
   if (!errors.length) { updateMode(); return; }
   for (const er of errors) {
     const idx = items.findIndex(it => it.name === er.name);
@@ -1091,19 +1142,70 @@ addEventListener("drop", e => {
   if (e.dataTransfer?.files.length) loadFiles(e.dataTransfer.files);
 });
 
-/* мобильные табы */
+/* мобильные табы + опциональные панели десктопа */
+function isNarrow() { return matchMedia("(max-width: 1080px)").matches; }
+
 function switchTab(name) {
-  for (const id of ["side", "edit", "view"]) $(id).hidden = id !== name;
+  document.body.dataset.mtab = name;
   for (const b of $("tabbar").children) {
     b.setAttribute("aria-current", b.dataset.tab === name ? "true" : "false");
   }
 }
-for (const b of $("tabbar").children) {
-  b.addEventListener("click", () => switchTab(b.dataset.tab));
+
+/* десктоп: какие панели показаны; схема видна всегда */
+function paneOn(name) { return document.body.dataset[name] !== "off"; }
+function setPane(name, on) {
+  document.body.dataset[name] = on ? "on" : "off";
+  store.set("gostpadi.panes", JSON.stringify({
+    files: paneOn("files"), editor: paneOn("editor"),
+  }));
+  syncChips();
 }
-matchMedia("(max-width: 1080px)").addEventListener?.("change", e => {
-  if (!e.matches) for (const id of ["side", "edit", "view"]) $(id).hidden = false;
+function syncChips() {
+  $("vt-files").setAttribute("aria-pressed", paneOn("files"));
+  $("vt-editor").setAttribute("aria-pressed", paneOn("editor"));
+}
+$("vt-files").addEventListener("click", () => setPane("files", !paneOn("files")));
+$("vt-editor").addEventListener("click", () => setPane("editor", !paneOn("editor")));
+(function initPanes() {
+  let saved = null;
+  try { saved = JSON.parse(store.get("gostpadi.panes") || "null"); } catch (e) {}
+  document.body.dataset.files = saved?.files === false ? "off" : "on";
+  document.body.dataset.editor = saved?.editor === false ? "off" : "on";
+  syncChips();
+})();
+
+/* меню «+» */
+const addmenu = $("addmenu");
+function closeMenu() { addmenu.hidden = true; }
+$("add").addEventListener("click", e => {
+  e.stopPropagation();
+  addmenu.hidden = !addmenu.hidden;
 });
+addmenu.addEventListener("click", e => {
+  e.stopPropagation();
+  const act = e.target.dataset.act;
+  if (!act) return;
+  closeMenu();
+  if (act === "open") $("file").click();
+  if (act === "new") createFile();
+});
+addEventListener("click", e => { if (!addmenu.hidden && !addmenu.contains(e.target)) closeMenu(); });
+addEventListener("keydown", e => { if (e.key === "Escape") closeMenu(); });
+
+/* новый пустой файл в пачке */
+function createFile() {
+  syncCur();
+  const taken = new Set(files.map(f => f.name));
+  const name = uniqName("файл1.c", taken);
+  files.push({ name, stem: name.replace(/\.[^.]+$/, ""), text: "", c: true, dirty: false });
+  cur = files.length - 1;
+  $("code").value = "";
+  updateMode();
+  drawFileList();
+  persist();
+  $("code").focus();
+}
 
 /* ============================== старт ============================== */
 
