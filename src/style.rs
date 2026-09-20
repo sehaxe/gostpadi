@@ -43,8 +43,8 @@ pub struct Style {
 }
 
 const IO_WORDS: &[&str] = &[
-    "printf", "scanf", "scan", "print", "println", "puts", "putchar", "echo", "getchar", "gets",
-    "cin", "cout", "read", "write",
+    "printf", "printf_s", "scanf", "scanf_s", "scan", "print", "println", "puts", "putchar",
+    "echo", "getchar", "gets", "cin", "cout", "read", "write",
 ];
 
 /// Коэффициенты производных метрик от кегля: значения при font = 12 pt.
@@ -212,6 +212,12 @@ mod tests {
         let s = Style::default();
         assert!(s.is_io("printf(\"hi\")"));
         assert!(s.is_io("scanf(\"%d\", &a)"));
+        assert!(s.is_io("scanf_s(\"%d\", &a)"), "суффиксная _s-версия scanf");
+        assert!(s.is_io("printf_s(\"hi\")"), "суффиксная _s-версия printf");
+        assert!(
+            !s.is_io("scanf_sx(\"%d\", &a)"),
+            "_s не ловит длиннее слово"
+        );
         assert!(!s.is_io("a = printf + 1"));
         assert!(!s.is_io("myprintf"));
     }
