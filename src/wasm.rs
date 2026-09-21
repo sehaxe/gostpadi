@@ -64,6 +64,7 @@ fn render_result(text: &str, is_c: bool, ru: bool, lw: f64, font: f64) -> String
         labels: if ru { "ru" } else { "en" }.into(),
         font: (font > 0.0).then_some(font),
         lw: (lw > 0.0).then_some(lw),
+        no_split: false,
     };
     match pipeline::render_text(text, is_c, &opts) {
         Ok(pages) => {
@@ -176,6 +177,7 @@ pub extern "C" fn gostpadi_render_batch(
         labels: if ru != 0 { "ru" } else { "en" }.into(),
         font: (font > 0.0).then_some(font),
         lw: (lw > 0.0).then_some(lw),
+        no_split: false,
     };
     let st = opts.style();
     // сбойные входы не останавливают остальные (порт CLI-пачки)

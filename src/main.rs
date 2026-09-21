@@ -50,13 +50,15 @@ const HELP: &str = "gostpadi 2.0.0 — блок-схемы по ГОСТ 19.701 
     --labels=ru|en  язык надписей (по умолчанию en)
     --font=N        кегль текста в pt (по умолчанию 12), растит всю геометрию
     --lw=N          толщина линий и усиков стрелок (по умолчанию 1.0)
+    --no-split      не резать длинную схему на листы: один лист, в А4
+                    вписывает общий масштаб пачки (для вставки в отчёт)
     --check         только проверить, не рисовать
     --template      заготовка .gvn на stdout
     -h, --help      эта справка
     -V, --version   версия
 ";
 
-const USAGE: &str = "использование: gostpadi схема.gvn [ещё.gvn|код.c ...] [-o out.svg|папка/] [--labels=ru|en] [--font=N] [--lw=N] [--check] [--template] [-h] [-V]";
+const USAGE: &str = "использование: gostpadi схема.gvn [ещё.gvn|код.c ...] [-o out.svg|папка/] [--labels=ru|en] [--font=N] [--lw=N] [--no-split] [--check] [--template] [-h] [-V]";
 
 /// Базовый путь результата входа: ".../stem.svg" (суффиксы листов добавит
 /// page_path). Папкой считается -o с косой чертой или существующая папка;
@@ -132,6 +134,7 @@ fn main() {
     let mut labels = "en".to_string();
     let mut font: Option<f64> = None;
     let mut lw: Option<f64> = None;
+    let mut no_split = false;
     let mut check = false;
     let mut template = false;
 
@@ -149,6 +152,7 @@ fn main() {
             }
             "--template" => template = true,
             "--check" => check = true,
+            "--no-split" => no_split = true,
             "-o" | "--output" => {
                 i += 1;
                 if i >= argv.len() {
@@ -208,7 +212,12 @@ fn main() {
         }
     }
 
-    let opts = Options { labels, font, lw };
+    let opts = Options {
+        labels,
+        font,
+        lw,
+        no_split,
+    };
     let st = opts.style();
 
     if check {

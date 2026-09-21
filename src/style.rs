@@ -31,6 +31,9 @@ pub struct Style {
     pub a4_h: f64,
     pub page_pad: f64,
     pub split_scale: f64,
+    /// не резать длинную схему на листы: один лист, вписывание в А4
+    /// выполняет общий масштаб пачки (fit_scale)
+    pub no_split: bool,
     pub edge_lw: f64,
     pub label_dx: f64,
     pub label_dy: f64,
@@ -97,6 +100,7 @@ impl Style {
         a4_h: 700.0,
         page_pad: 14.0,
         split_scale: 0.70,
+        no_split: false,
         edge_lw: 1.0,
         label_dx: 14.0,
         label_dy: 12.0,

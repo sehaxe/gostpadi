@@ -13,13 +13,17 @@ pub struct Options {
     pub labels: String, // "en" | "ru"
     pub font: Option<f64>,
     pub lw: Option<f64>,
+    pub no_split: bool,
 }
 
 impl Options {
     /// Стиль пайплайна: кегль и толщина пера из опций, остальное —
     /// производные (Style::with_metrics). None — значения по умолчанию.
     pub fn style(&self) -> Style {
-        Style::with_metrics(self.font.unwrap_or(12.0), self.lw.unwrap_or(1.0))
+        Style {
+            no_split: self.no_split,
+            ..Style::with_metrics(self.font.unwrap_or(12.0), self.lw.unwrap_or(1.0))
+        }
     }
 }
 
@@ -50,18 +54,23 @@ pub fn parse_batch(
 }
 
 /// Узлы из parse_batch + стиль -> (путь, страницы SVG). Длинные схемы
-/// режутся на листы А4; размеры фигур и масштаб общие на всю пачку:
-/// figures одного типа во всех файлах — одного визуального размера.
+/// режутся на листы А4 (или одним листом при no_split — тогда высокий
+/// лист ужимает общий масштаб); размеры фигур и масштаб общие на всю
+/// пачку: figures одного типа во всех файлах — одного визуального размера.
 pub fn render_batch(schemes: Vec<(String, Vec<Node>)>, st: &Style) -> Vec<(String, Vec<String>)> {
     let normed: Vec<Sizes> = schemes.iter().map(|(_, n)| normalize(n, st)).collect();
     let sizes = uniform_sizes(&normed);
     let laid: Vec<(String, Vec<Layout>)> = schemes
         .into_iter()
         .map(|(path, nodes)| {
-            let pages = split_scheme(nodes, &sizes, st)
-                .iter()
-                .map(|part| layout(part, &sizes, st))
-                .collect();
+            let pages = if st.no_split {
+                vec![layout(&nodes, &sizes, st)]
+            } else {
+                split_scheme(nodes, &sizes, st)
+                    .iter()
+                    .map(|part| layout(part, &sizes, st))
+                    .collect()
+            };
             (path, pages)
         })
         .collect();
@@ -96,6 +105,7 @@ mod tests {
             labels: "en".into(),
             font: None,
             lw: None,
+            no_split: false,
         }
     }
 
