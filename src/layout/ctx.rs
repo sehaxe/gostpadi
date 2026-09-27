@@ -164,22 +164,6 @@ impl<'a> Ctx<'a> {
         self.shapes.len() - 1
     }
 
-    /// Самая левая точка фигур и рёбер, добавленных после отметок
-    /// (ms, me). Коридоры рельс и линии возврата цикла идут отсюда:
-    /// оценка nhe в column::extent каскад кейсов switch не покрывает,
-    /// а линия возврата идёт через всю высоту тела.
-    pub(super) fn left_of(&self, ms: usize, me: usize) -> f64 {
-        self.shapes[ms..]
-            .iter()
-            .map(|sh| sh.cx - sh.w / 2.0)
-            .chain(
-                self.edges[me..]
-                    .iter()
-                    .flat_map(|e| e.points.iter().map(|p| p.0)),
-            )
-            .fold(f64::MAX, f64::min)
-    }
-
     pub(super) fn edge(&mut self, pts: &[(f64, f64)], arrow: bool) {
         let mut clean = vec![pts[0]];
         for &p in &pts[1..] {
