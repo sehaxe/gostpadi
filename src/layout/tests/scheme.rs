@@ -161,9 +161,14 @@ fn merge_bus_reaches_continuation_below_it() {
 
 /// Репорт (задача 3): рельса break уходила из блока горизонталью с высоты
 /// его низа — отрезок ложился вдоль границы плитки, и линия читалась как
-/// выход из угла. Теперь из центра блока сначала вниз на в-gap.
+/// выход из угла.
+///
+/// Колонка плитки в задаче 3 целиком левее трапеции слияния, поэтому
+/// вертикаль можно вести прямо: рельса выходит из центра плитки, падает
+/// на merge и вправо на ось — один изгиб. Раньше сюда вклинивался коридор
+/// с отступом вниз на в-gap, и у плитки выходило три лишних изгиба.
 #[test]
-fn break_rail_leaves_tile_from_centre() {
+fn break_rail_from_clear_column_falls_straight() {
     let src = "\
 int main() {
     for (d = 2; d <= m; d++) {
@@ -182,14 +187,22 @@ int main() {
         .iter()
         .find(|sh| sh.lines == vec!["coprime = 0".to_string()])
         .expect("плитка перед break");
+    let le = l.shapes.iter().find(|sh| sh.kind == "loop_end").unwrap();
     let cx = tile.cx;
     let bottom = tile.cy + tile.h / 2.0;
-    // рельса: из низа плитки сначала вертикаль вниз из центра, потом влево
+    // колонка плитки должна быть вне трапеции слияния — иначе тест проверяет
+    // не тот маршрут и падает не по делу
+    assert!(
+        cx < le.cx - le.w / 2.0 || cx > le.cx + le.w / 2.0,
+        "колонка плитки вне трапеции слияния: cx={cx}, трапеция {}..{}",
+        le.cx - le.w / 2.0,
+        le.cx + le.w / 2.0
+    );
     let rail = l
         .edges
         .iter()
-        .find(|e| e.points.len() == 5 && e.points[0].0 == cx)
-        .expect("рельса break из центра плитки");
+        .find(|e| e.points.len() == 3 && (e.points[0].0 - cx).abs() < 1e-9)
+        .expect("рельса из центра плитки прямо вниз");
     assert!(
         (rail.points[0].1 - bottom).abs() < 1e-9,
         "рельса начинается с низа плитки: {:?}",
@@ -197,13 +210,60 @@ int main() {
     );
     assert!(
         rail.points[1].0 == cx && rail.points[1].1 > bottom,
-        "отъезд вниз из центра, а не вбок: {:?}",
-        &rail.points[1..3]
+        "падение строго вниз по оси плитки: {:?}",
+        &rail.points[1..2]
     );
     assert!(
-        rail.points[2].0 < cx && (rail.points[2].1 - rail.points[1].1).abs() < 1e-9,
-        "поворот влево ниже плитки: {:?}",
+        rail.points[2].0 == le.cx && rail.points[2].1 == rail.points[1].1,
+        "вправо на ось цикла, на той же высоте: {:?}",
         &rail.points[2..3]
+    );
+    // без коридора: рельса не заходит влево от своей колонки
+    assert!(
+        rail.points.iter().all(|p| p.0 >= cx - 1e-9),
+        "рельса не уходит влево от оси плитки: {:?}",
+        rail.points
+    );
+    // ровно два изгиба вместо четырёх: ступеньки вниз и влево нет
+    assert_eq!(
+        rail.points.len(),
+        3,
+        "прямая рельса: центр плитки -> вниз -> ось цикла: {:?}",
+        rail.points
+    );
+    assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
+}
+
+/// Когда колонка плитки накрыта трапецией слияния, рельса идёт через
+/// коридор левее — иначе вертикаль проткнула бы трапецию.
+#[test]
+fn break_rail_under_trapezoid_uses_corridor() {
+    let nodes = vec![
+        node(NodeKind::Term, "начало"),
+        loop_node("while i < 5", vec![s("a = 1"), sbrk()]),
+        node(NodeKind::Term, "конец"),
+    ];
+    let st = Style::default();
+    let (lw, _) = measure(&st, "loop", "while i < 5");
+    let l = lay(&nodes);
+    // плитка стоит на оси цикла, то есть прямо под трапецией слияния:
+    // рельса обязана уйти в коридор левее, иначе проткнёт трапецию
+    let rail = l
+        .edges
+        .iter()
+        .find(|e| e.points.iter().any(|p| p.0 < -lw / 2.0))
+        .expect("рельса ушла в левый коридор мимо трапеции");
+    let leftmost = rail.points.iter().map(|p| p.0).fold(f64::MAX, f64::min);
+    assert!(
+        leftmost < -lw / 2.0,
+        "рельса заходит левее половины ширины трапеции: {leftmost} против {}",
+        -lw / 2.0
+    );
+    // коридор значит лишний изгиб: вниз, влево, вниз, вправо
+    assert!(
+        rail.points.len() == 5,
+        "через коридор — четыре сегмента: {:?}",
+        rail.points
     );
     assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
 }
