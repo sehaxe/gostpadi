@@ -116,6 +116,98 @@ fn loop_begin_shows_keyword() {
     );
 }
 
+/// Репорт (задача 3): у ромба с одной непустой веткой, ушедшей рельсой
+/// break, низ колонки уходил под шину слияния. Поток приходил на ось на
+/// высоте шины, а продолжение начиналось ниже — вертикаль обрывалась в
+/// воздухе, и стрелка в следующий блок висела без входа.
+#[test]
+fn merge_bus_reaches_continuation_below_it() {
+    let nodes = vec![
+        node(NodeKind::Term, "начало"),
+        loop_node(
+            "for d = 2; d <= m; d++",
+            vec![Stmt::Node(Box::new({
+                let mut d = node(NodeKind::Decision, "if a");
+                d.branches = vec![
+                    br("да", vec![s("x = 0"), sbrk()], false),
+                    br("нет", vec![], false), // пустая ветка, как в задаче 3
+                ];
+                d
+            }))],
+        ),
+        node(NodeKind::Term, "конец"),
+    ];
+    let l = lay(&nodes);
+    let le = l.shapes.iter().find(|sh| sh.kind == "loop_end").unwrap();
+    // вертикаль по оси колонки от шины слияния до входа в loop_end
+    let spine = l
+        .edges
+        .iter()
+        .find(|e| {
+            let p = e.points.last().unwrap();
+            e.arrow && p.1 == le.cy - le.h / 2.0 && p.0 == 0.0 && e.points.len() == 2
+        })
+        .expect("спуск в трапецию слияния");
+    let from = spine.points[0];
+    // откуда-то должен быть вход в этот спуск: либо шина, либо этот же
+    // конец — обрыв виден именно как разрыв вертикали
+    let joined = l.edges.iter().any(|e| {
+        let last = *e.points.last().unwrap();
+        (last.0 - from.0).abs() < 1e-9 && (last.1 - from.1).abs() < 1e-9
+    });
+    assert!(joined, "в спуск к трапеции никто не приходит: {from:?}");
+    assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
+}
+
+/// Репорт (задача 3): рельса break уходила из блока горизонталью с высоты
+/// его низа — отрезок ложился вдоль границы плитки, и линия читалась как
+/// выход из угла. Теперь из центра блока сначала вниз на в-gap.
+#[test]
+fn break_rail_leaves_tile_from_centre() {
+    let src = "\
+int main() {
+    for (d = 2; d <= m; d++) {
+        if (p % d == 0) {
+            coprime = 0;
+            break;
+        }
+    }
+    return 0;
+}
+";
+    let nodes = crate::frontend::c::parse_c_to_nodes(src, "ru").unwrap();
+    let l = lay(&nodes);
+    let tile = l
+        .shapes
+        .iter()
+        .find(|sh| sh.lines == vec!["coprime = 0".to_string()])
+        .expect("плитка перед break");
+    let cx = tile.cx;
+    let bottom = tile.cy + tile.h / 2.0;
+    // рельса: из низа плитки сначала вертикаль вниз из центра, потом влево
+    let rail = l
+        .edges
+        .iter()
+        .find(|e| e.points.len() == 5 && e.points[0].0 == cx)
+        .expect("рельса break из центра плитки");
+    assert!(
+        (rail.points[0].1 - bottom).abs() < 1e-9,
+        "рельса начинается с низа плитки: {:?}",
+        rail.points[0]
+    );
+    assert!(
+        rail.points[1].0 == cx && rail.points[1].1 > bottom,
+        "отъезд вниз из центра, а не вбок: {:?}",
+        &rail.points[1..3]
+    );
+    assert!(
+        rail.points[2].0 < cx && (rail.points[2].1 - rail.points[1].1).abs() < 1e-9,
+        "поворот влево ниже плитки: {:?}",
+        &rail.points[2..3]
+    );
+    assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
+}
+
 #[test]
 fn break_goes_left_rail_below_loop() {
     let nodes = vec![

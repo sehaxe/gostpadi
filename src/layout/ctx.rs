@@ -17,6 +17,9 @@ pub(super) struct Pend {
 pub(super) struct BreakAt {
     pub tx: f64,
     pub y: f64,
+    /// Перед break стояла нарисованная плитка: рельса уходит из её низа,
+    /// иначе колонка без плиток и уходить неоткуда.
+    pub from_tile: bool,
 }
 
 /// Чем закончилась колонка. Flow — поток продолжается; Return — тупик

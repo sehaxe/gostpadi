@@ -100,6 +100,7 @@ impl Ctx<'_> {
                         let exit = BreakAt {
                             tx,
                             y: prev_bottom.unwrap_or(top0),
+                            from_tile: prev_bottom.is_some(),
                         };
                         if is_break {
                             self.breaks.push(exit);

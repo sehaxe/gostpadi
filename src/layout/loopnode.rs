@@ -55,13 +55,28 @@ impl Ctx<'_> {
         }
         let merge = cy2 + lh / 2.0 + self.st.mgap;
         self.edge(&[(tx, cy2 + lh / 2.0), (tx, merge)], false);
-        // рельсы break: влево, вниз мимо loop_end, T-стык на продолжении
+        // рельсы break: влево, вниз мимо loop_end, T-стык на продолжении.
+        // Перед break стоит плитка — рельса должна выйти из её центра, а не
+        // сбоку: горизонталь с высоты низа плитки сливается с её границей
+        // и читается как уход из угла. Поэтому сначала вниз на в-gap.
+        // Колонка без плиток (только break/continue) выходит сразу влево:
+        // выходить неоткуда, и вертикаль здесь лишняя.
         let breaks: Vec<BreakAt> = self.breaks.drain(mark..).collect();
         for b in &breaks {
             let slot = self.break_slot;
             self.break_slot += 1;
             let rx = tx - chan - slot as f64 * 2.0 * self.st.grid;
-            self.edge(&[(b.tx, b.y), (rx, b.y), (rx, merge), (tx, merge)], false);
+            let mut pts = vec![(b.tx, b.y)];
+            if b.from_tile {
+                let by = b.y + self.st.vgap;
+                pts.push((b.tx, by));
+                pts.push((rx, by));
+            } else {
+                pts.push((rx, b.y));
+            }
+            pts.push((rx, merge));
+            pts.push((tx, merge));
+            self.edge(&pts, false);
         }
         // рельсы continue: тот же коридор, T-стык на выходе loop_end —
         // следующая итерация
