@@ -1,5 +1,5 @@
 use super::ctx::{BreakAt, ColEnd, Ctx};
-use super::geometry::up;
+use super::geometry::{down, up};
 use super::types::Anchor;
 use crate::ir::Node;
 
@@ -37,6 +37,8 @@ impl Ctx<'_> {
         let top0 = cy1 + lh / 2.0 + self.st.vgap;
         let mark = self.breaks.len();
         let mark_c = self.continues.len();
+        let mark_s = self.shapes.len();
+        let mark_e = self.edges.len();
         let saved_direct = self.case_direct;
         self.case_direct = false;
         let (yend, end) = match &nd.body {
@@ -74,6 +76,23 @@ impl Ctx<'_> {
                 let rx = tx - chan - slot as f64 * 2.0 * self.st.grid;
                 self.edge(&[(c.tx, c.y), (rx, c.y), (rx, yj), (tx, yj)], false);
             }
+        }
+        // Обратная связь (ГОСТ 19.701-90, символ 3.4): из низа тела влево
+        // в коридор, вверх и в блок «подготовка» сбоку. Раньше линии
+        // возврата не было вовсе — на нижней трапеции висел номер цикла,
+        // которому не на что было указать. Заходит сбоку, а не сверху:
+        // сверху в блок уже входит входная стрелка.
+        if end == ColEnd::Flow {
+            let slot = self.break_slot;
+            self.break_slot += 1;
+            // коридор — от фактического левого края тела, не от оценки
+            // nhe: каскад кейсов switch шире, чем считает column::extent
+            let left = self.left_of(mark_s, mark_e).min(tx - lw / 2.0) - self.st.grid;
+            let rx = down(left, self.st.grid) - slot as f64 * 2.0 * self.st.grid;
+            self.edge(
+                &[(tx, yend), (rx, yend), (rx, cy1), (tx - lw / 2.0, cy1)],
+                true,
+            );
         }
         self.loop_depth -= 1;
         (merge, ColEnd::Flow)
