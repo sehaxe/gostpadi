@@ -29,6 +29,23 @@ fn stmt_from_line(s: String) -> Stmt {
     }
 }
 
+/// Граница слова не позже чем `from`: конец идентификатора, чтобы
+/// перенос не разрывал «имя_переменной» пополам и не склеивал соседние
+/// слова. Если в остатке границы нет, режем по `from`.
+fn next_word_break(chars: &[char], from: usize) -> usize {
+    let n = chars.len();
+    let mut i = from;
+    // если прямо на границе уже граница слова — берём её
+    let is_break = |c: char| !(c.is_alphanumeric() || c == '_' || c == '.');
+    if i < n && is_break(chars[i]) && i > 0 {
+        return i;
+    }
+    while i < n && !is_break(chars[i]) {
+        i += 1;
+    }
+    i.min(n)
+}
+
 fn wrap(text: &str, limit: usize) -> String {
     let mut res: Vec<String> = Vec::new();
     for para in text.split('\n') {
@@ -38,11 +55,16 @@ fn wrap(text: &str, limit: usize) -> String {
             if chars.len() <= limit {
                 break;
             }
+            // Режем по последнему пробелу внутри окна. Если пробелов нет
+            // (длинный идентификатор или строка), режем по границе СЛОВА
+            // после окна, а не по лимиту: жёсткий рез по limit терял
+            // разделитель, и `a = long_name` склеивалось в
+            // `a =long_name`, а `&month, &day` — в `&month,&day`.
             let cut = chars[..limit]
                 .iter()
                 .rposition(|&c| c == ' ')
                 .filter(|&p| p > 0)
-                .unwrap_or(limit);
+                .unwrap_or_else(|| next_word_break(&chars, limit));
             let left: String = chars[..cut].iter().collect();
             res.push(left.trim_end().to_string());
             let rest: String = chars[cut..].iter().collect();

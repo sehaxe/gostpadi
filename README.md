@@ -164,7 +164,7 @@ Rust, ноль зависимостей (только парсер C `lang-c`), 
 ## Разработка
 
 ```bash
-cargo test                                 # 134 тестов: парсер, раскладка, рендер, CLI
+cargo test                                 # 135 тестов: парсер, раскладка, рендер, CLI
 cargo clippy --all-targets -- -D warnings  # линтер
 cargo fmt --check                          # форматирование
 ```

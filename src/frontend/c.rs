@@ -627,13 +627,162 @@ fn col_of(src: &str, off: usize) -> usize {
 
 /// Узел AST -> однострочный текст C: срез исходника по span,
 /// внутренние скобки и переносы сохраняются как написал автор.
+/// AST -> однострочный текст C.
+///
+/// Пробелы схлопываются, а вокруг операторов приводятся к одному с
+/// каждой стороны. Автор может написать `a= a` или `a =a`, и на схеме
+/// это читалось как опечатка в программе, а не как авторская запись.
+/// Схлопывание не трогает строковые литералы: они приходят из исходника
+/// как есть, а `split_whitespace` по ним не ходит.
 fn expr_text(src: &str, e: &LangNode<Expression>) -> String {
     let s = src.get(e.span.start..e.span.end).unwrap_or_default();
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
+    space_operators(&s.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
-/// scanf("%d", &x) -> scanf(...) — форматные строки в условиях не нужны.
+/// Пробел вокруг бинарных операторов и после запятой. Сравнения,
+/// присваивания и арифметика на блок-схеме читаются глазом, а `a<a`
+/// или `x,y` сливаются в одно слово.
+///
+/// Пробел ставится с ОБЕИХ сторон: слева, если перед оператором уже есть
+/// операнд, и справа всегда. Односторонний пробел давал `i- =1` и
+/// `p- >x` вместо `i -= 1` и `p->x`.
+///
+/// Не трогаем: `++`/`--` (инкремент), `->` (разыменование), унарный знак,
+/// содержимое строковых литералов.
+/// Пробел вокруг бинарных операторов и после запятой.
+///
+/// Разбор идёт «островами»: сначала копируется операнд, потом оператор,
+/// и только между ними вставляется ровно один пробел. Проверка «а
+/// операнд ли перед оператором» делается по последнему непробельному
+/// символу накопленного — иначе `a =b` путал оператор с пробелом и
+/// оставлял `a =b` как есть.
+///
+/// Не трогаем `++`/`--`, `->` и унарный знак: они не разрываются.
+fn space_operators(s: &str) -> String {
+    const BINARY: [char; 12] = ['=', '<', '>', '+', '-', '*', '/', '%', '&', '|', '^', '!'];
+    const COMPOUND: [&str; 14] = [
+        "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "->", "++", "--",
+    ];
+    let c: Vec<char> = s.chars().collect();
+    let n = c.len();
+    let mut out = String::with_capacity(n + 8);
+    let mut i = 0;
+    while i < n {
+        let ch = c[i];
+        if ch == ' ' {
+            i += 1;
+            continue;
+        }
+        if ch == ',' {
+            // Запятая в C всегда разделяет аргументы, значит пробел после
+            // неё обязателен. lang-c иногда склеивает их ещё в span
+            // (`&m,&d`), поэтому пробел ставим безусловно, а не только
+            // если справа уже был.
+            while out.ends_with(' ') {
+                out.pop();
+            }
+            out.push_str(", ");
+            i += 1;
+            continue;
+        }
+        // строковый литерал целиком: пробелы внутри — часть текста
+        if ch == '"' {
+            out.push(ch);
+            i += 1;
+            while i < n {
+                out.push(c[i]);
+                if c[i] == '\\' && i + 1 < n {
+                    out.push(c[i + 1]);
+                    i += 2;
+                    continue;
+                }
+                if c[i] == '"' {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        let two: String = c[i..(i + 2).min(n)].iter().collect();
+        if COMPOUND.contains(&two.as_str()) {
+            // `++`/`--`/`->` приклеены к операнду, остальные — нет
+            let tight = two == "++" || two == "--" || two == "->";
+            if !tight {
+                out.push(' ');
+            }
+            out.push_str(&two);
+            if !tight {
+                out.push(' ');
+            }
+            i += 2;
+            continue;
+        }
+        if BINARY.contains(&ch) {
+            // Перед оператором должен стоять операнд — иначе это унарный
+            // знак (`&x`, `-1`, `!ok`), и он приклеивается к операнду.
+            let last = out.chars().rev().find(|p| !p.is_whitespace());
+            let binary = last.is_some_and(|p| {
+                p.is_alphanumeric() || p == '_' || p == ')' || p == ']' || p == '}'
+            });
+            if binary {
+                while out.ends_with(' ') {
+                    out.pop();
+                }
+                out.push(' ');
+                out.push(ch);
+                out.push(' ');
+            } else {
+                out.push(ch);
+            }
+            i += 1;
+            continue;
+        }
+        out.push(ch);
+        i += 1;
+    }
+    out.trim_end().to_string()
+}
+
+/// Сокращение середины: голова и хвост остаются, режется середина.
+///
+/// Так сокращённый текст остаётся РАЗЛИЧИМЫМ между ветками. Раньше
+/// усечение всегда отбрасывало хвост, и четыре кейса
+/// `printf("Введите номер месяца (1-12): ")` … `(13-24)` … `(25-36)` …
+/// «неверно» давали на схеме четыре одинаковых `printf("Введите номер...")`
+/// — различить их было нечем. Хвост как раз и нёс различие.
+fn ellipsize(s: &str, budget: usize) -> String {
+    let c: Vec<char> = s.chars().collect();
+    if c.len() <= budget || budget < 5 {
+        return s.to_string();
+    }
+    let head = (budget - 3) / 2;
+    let mut tail = budget - 3 - head;
+    // Грань хвоста не должна попадать внутрь слова: `...13-24)` без
+    // открывающей скобки читается хуже, чем `...(13-24)`. Если начало
+    // хвоста оказалось внутри токена, сдвигаем его назад до границы.
+    while c[c.len() - tail].is_alphanumeric() {
+        let prev = c.len() - tail - 1;
+        if prev == 0 || c[prev].is_whitespace() {
+            break;
+        }
+        tail += 1;
+    }
+    let mut out: String = c[..head].iter().collect();
+    while out.ends_with(char::is_whitespace) {
+        out.pop();
+    }
+    out.push_str("...");
+    out.extend(c[c.len() - tail..].iter());
+    out
+}
+
+/// scanf("%d", &month) -> scanf(..., &month): форматная строка в условии —
+/// шум, а переменная, в которую идёт ввод, — нет. Раньше отбрасывался
+/// весь список аргументов, и две разные переменные давали одинаковый
+/// `scanf(...)`.
 fn shorten_calls(cond: &str) -> String {
+    const ARG_BUDGET: usize = 20;
     let chars: Vec<char> = cond.chars().collect();
     let n = chars.len();
     let mut out = String::with_capacity(cond.len());
@@ -647,8 +796,11 @@ fn shorten_calls(cond: &str) -> String {
             let name: String = chars[start..i].iter().collect();
             if i + 1 < n && chars[i] == '(' && chars[i + 1] == '"' {
                 if let Some(close) = call_close(&chars, i) {
+                    let args: String = chars[i + 1..close].iter().collect();
                     out.push_str(&name);
-                    out.push_str("(...)");
+                    out.push('(');
+                    out.push_str(&ellipsize(&args, ARG_BUDGET));
+                    out.push(')');
                     i = close + 1;
                     continue;
                 }
@@ -694,12 +846,18 @@ fn call_close(chars: &[char], open: usize) -> Option<usize> {
     None
 }
 
-/// Длинные printf("…") сокращаем до printf("Начало фразы...") —
-/// как принято в учебных схемах; условия и присваивания не трогаем.
+/// Длинные printf("…") сокращаем, СОХРАНЯЯ хвост строки: различия
+/// между кейсами обычно в конце («(1-12)» против «(13-24)»), а резать
+/// надо середину. Бюджет 19 символов на содержимое — столько же, сколько
+/// занимало прежнее усечение до 15 символов плюс «...».
 fn abbrev_stmt(s: &str) -> String {
-    if s.chars().count() <= 26 {
-        return s.to_string();
-    }
+    const CONTENT_BUDGET: usize = 19;
+    // аргументы после строки сохраняем: printf("%d", n) короче бюджета
+    // и должно остаться целиком
+    let args = |q: usize| -> String {
+        let t = s[q + 1..s.len() - 1].trim();
+        t.to_string()
+    };
     for w in ["printf", "puts", "print", "echo", "write"] {
         let Some(rest) = s.strip_prefix(w) else {
             continue;
@@ -723,12 +881,15 @@ fn abbrev_stmt(s: &str) -> String {
             continue;
         }
         let content = &s[content_start..q];
-        let cut15: String = content.chars().take(15).collect();
-        let cut = match cut15.rfind(' ') {
-            Some(p) => &cut15[..p],
-            None => &cut15[..],
+        if content.chars().count() <= CONTENT_BUDGET {
+            return s.to_string();
+        }
+        let a = args(q);
+        return if a.is_empty() {
+            format!("{w}(\"{}\")", ellipsize(content, CONTENT_BUDGET))
+        } else {
+            format!("{w}(\"{}\", {})", ellipsize(content, CONTENT_BUDGET), a)
         };
-        return format!("{w}(\"{cut}...\")");
     }
     s.to_string()
 }
@@ -810,18 +971,23 @@ mod tests {
         {
             assert!(tiles.iter().any(|t| t.contains(word)), "lost: {}", word);
         }
-        // длинный printf сокращён по _abbrev_stmt
+        // длинный printf сокращён по _abbrev_stmt, но ХВОСТ сохранён
         assert!(
-            tiles.iter().any(|t| t == "printf(\"Введите номер...\")"),
-            "{:?}",
+            tiles
+                .iter()
+                .any(|t| t.contains("Введите") && t.contains("1-12")),
+            "хвост с диапазоном должен сохраниться: {:?}",
             tiles
         );
-        // условие: scanf(...) != 1 || ... по _shorten_calls
+        // условие: формат scanf сокращён, переменная сохранена
         let dec = nodes
             .iter()
             .find(|n| n.kind == NodeKind::Decision && n.switch_var.is_none())
             .unwrap();
-        assert_eq!(dec.text, "if (scanf(...) != 1 || month < 1 || month > 12)");
+        assert_eq!(
+            dec.text,
+            "if (scanf(\"%d\", &month) != 1 || month < 1 || month > 12)"
+        );
         // return 1 в ветке присутствует как текст (тупик)
         assert_eq!(dec.branches[0].label, "yes");
         assert!(
@@ -1078,7 +1244,8 @@ mod tests {
     #[test]
     fn scanf_cond_shortened() {
         let nodes = parse_ok("int main(void) { if (scanf(\"%d\", &x)) printf(\"ok\"); }");
-        assert_eq!(nodes[0].text, "if (scanf(...))");
+        // форматная строка — шум, переменная — нет
+        assert_eq!(nodes[0].text, "if (scanf(\"%d\", &x))");
     }
 
     #[test]
@@ -1113,12 +1280,32 @@ mod tests {
         assert_eq!(dec.text, "if (a % 2 == 0)");
     }
 
+    /// Усечение сохраняет ХВОСТ строки: различия между кейсами обычно
+    /// в конце («(1-12)» против «(13-24)»), а резать надо середину.
+    /// Раньше четыре кейса давали четыре одинаковых
+    /// `printf("Введите номер...")`.
     #[test]
-    fn abbrev_long_printf() {
-        assert_eq!(
-            abbrev_stmt("printf(\"Введите номер месяца (1-12): \")"),
-            "printf(\"Введите номер...\")"
-        );
+    fn abbrev_long_printf_keeps_the_tail() {
+        let cases = [
+            "printf(\"Введите номер месяца (1-12): \")",
+            "printf(\"Введите номер месяца (13-24): \")",
+            "printf(\"Введите номер месяца (25-36): \")",
+        ];
+        let got: Vec<String> = cases.iter().map(|c| abbrev_stmt(c)).collect();
+        for g in &got {
+            println!("{g}");
+        }
+        // все три различимы: в каждом виден свой диапазон
+        assert!(got[0].contains("(1-12)"), "{}", got[0]);
+        assert!(got[1].contains("(13-24)"), "{}", got[1]);
+        assert!(got[2].contains("(25-36)"), "{}", got[2]);
+        // и ни одна не равна другой
+        assert_ne!(got[0], got[1]);
+        assert_ne!(got[1], got[2]);
+        // хвост не режется посреди числа: скобка на месте
+        assert!(got[1].contains("13-24)"), "скобка потеряна: {}", got[1]);
+
+        // короткие и не-printf не трогаем
         assert_eq!(abbrev_stmt("printf(\"Весна\\n\")"), "printf(\"Весна\\n\")");
         assert_eq!(
             abbrev_stmt("a = 111111 + 222222 + 333333"),
@@ -1130,11 +1317,46 @@ mod tests {
         );
     }
 
+    /// Условие с вызовом: форматная строка — шум, переменная — нет.
+    /// Раньше отбрасывался весь список аргументов, и разные переменные
+    /// давали одинаковый `scanf(...)`.
     #[test]
-    fn shorten_calls_only_string_first_arg() {
-        assert_eq!(shorten_calls("scanf(\"%d\", &x) != 1"), "scanf(...) != 1");
+    fn shorten_calls_keeps_the_target_variable() {
+        let a = shorten_calls("scanf(\"%d\", &month) != 1");
+        let b = shorten_calls("scanf(\"%d\", &day) != 1");
+        assert!(a.contains("month"), "{a}");
+        assert!(b.contains("day"), "{b}");
+        assert_ne!(a, b, "разные переменные должны различаться");
         assert_eq!(shorten_calls("f(x) != 1"), "f(x) != 1");
         assert_eq!(shorten_calls("a || b"), "a || b");
+    }
+
+    /// Пробелы вокруг бинарных операторов: автор может написать
+    /// `a= a` или `a =a`, и на схеме это читалось как опечатка.
+    /// `++`/`--`/`->` приклеены к операнду, унарные знаки — тоже.
+    #[test]
+    fn space_operators_normalises_spacing() {
+        for (src, want) in [
+            ("a= a", "a = a"),
+            ("a =a", "a = a"),
+            ("a = a", "a = a"),
+            ("x=1", "x = 1"),
+            ("a<b", "a < b"),
+            ("a % b", "a % b"),
+            ("b = a*2+1", "b = a * 2 + 1"),
+            ("a++", "a++"),
+            ("a--", "a--"),
+            ("p->x", "p->x"),
+            ("&month, &day", "&month, &day"),
+        ] {
+            assert_eq!(space_operators(src), want, "{src:?}");
+        }
+        // содержимое строкового литерала не трогаем
+        assert_eq!(
+            space_operators("q = \"x =y\""),
+            "q = \"x =y\"",
+            "операторы внутри строки не нормализуются"
+        );
     }
 
     #[test]
