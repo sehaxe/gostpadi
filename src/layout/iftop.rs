@@ -202,7 +202,16 @@ impl Ctx<'_> {
             .fold(dw / 2.0 + 2.0 * self.st.grid, f64::max);
         for (k, lbl) in empty.iter().enumerate() {
             let bx = super::geometry::up(clear, self.st.grid) + k as f64 * 2.0 * self.st.grid;
-            self.edge(&[vr, (bx, cy), (bx, merge_y), (0.0, merge_y)], false);
+            // Симметрия: пустая ветка не спускается на всю высоту схемы.
+            // Раньше она шла от вершины вниз до merge_y (низ самой глубокой
+            // колонки) — на схеме с высокой «да»-веткой это давало
+            // вертикаль в сотни пунктов пустоты. Теперь идёт вбок и
+            // присоединяется к шине на уровне низа ромба (y_b), а если
+            // шины выше нет — тоже коротко. Линии обеих веток выходят из
+            // вершин ромба на одной высоте и уходят вниз на одинаковое
+            // расстояние, а зеркальность не ломается пустотой.
+            let join_y = y_b;
+            self.edge(&[vr, (bx, cy), (bx, join_y), (0.0, join_y)], false);
             self.labels.push(Label {
                 x: dw / 2.0 + self.st.label_exit_dx + k as f64 * 2.0 * self.st.grid,
                 y: cy - self.st.label_dy,

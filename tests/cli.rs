@@ -253,23 +253,26 @@ fn rect_widths(svg: &str) -> Vec<f64> {
     out
 }
 
-/// --font=16: в SVG font-size="16", фигуры крупнее, чем при дефолте 12.
+/// --font=20: в SVG font-size="20", фигуры крупнее, чем при дефолте 14.
 #[test]
 fn font_flag_grows_svg() {
     let d = tmp("font16");
-    let svg16 = render_svg(&d, "f16", &["--font=16"]);
+    let svg20 = render_svg(&d, "f20", &["--font=20"]);
     assert!(
-        svg16.contains("font-size=\"16\""),
-        "нет font-size=\"16\": {:?}",
-        svg16.matches("font-size").take(3).collect::<Vec<_>>()
+        svg20.contains("font-size=\"20\""),
+        "нет font-size=\"20\": {:?}",
+        svg20.matches("font-size").take(3).collect::<Vec<_>>()
     );
-    let svg12 = render_svg(&d, "f12", &[]);
-    assert!(svg12.contains("font-size=\"12\""));
+    let svg_def = render_svg(&d, "fdef", &[]);
     assert!(
-        rect_widths(&svg16)[0] > rect_widths(&svg12)[0],
-        "rect при font=16 крупнее: {} vs {}",
-        rect_widths(&svg16)[0],
-        rect_widths(&svg12)[0]
+        svg_def.contains("font-size=\"14\""),
+        "кегль по умолчанию 14"
+    );
+    assert!(
+        rect_widths(&svg20)[0] > rect_widths(&svg_def)[0],
+        "rect при font=20 крупнее: {} vs {}",
+        rect_widths(&svg20)[0],
+        rect_widths(&svg_def)[0]
     );
 }
 

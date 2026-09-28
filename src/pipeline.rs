@@ -30,7 +30,7 @@ impl Options {
             } else {
                 crate::sheet::Sheet::A4
             },
-            ..Style::with_metrics(self.font.unwrap_or(12.0), self.lw.unwrap_or(1.0))
+            ..Style::with_metrics(self.font.unwrap_or(14.0), self.lw.unwrap_or(1.0))
         }
     }
 }

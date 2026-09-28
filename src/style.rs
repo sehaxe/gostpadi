@@ -69,22 +69,22 @@ const LABEL_DY_RATE: f64 = 1.0; // подпись над точкой: базо�
 const GRID: f64 = 14.17;
 
 impl Style {
-    /// Шаблон DEFAULT записан для font = 12 pt, lw = 1.0; произвольные
+    /// Шаблон DEFAULT записан для font = 14 pt, lw = 1.0; произвольные
     /// значения кегля/пера — только через with_metrics, иначе
     /// производные метрики разъедутся с font.
     pub const DEFAULT: Style = Style {
-        font: 12.0,
-        char_w: 7.32,
-        pad_x: 18.0,
-        pad_y: 14.04,
-        pitch: 18.0,
+        font: 14.0,
+        char_w: 8.54,
+        pad_x: 21.0,
+        pad_y: 16.38,
+        pitch: 21.0,
         max_chars: 30,
         cond_chars: 22,
-        text_pad: 6.0,
-        cond_pad: 26.0,
-        term_pad_v: 16.0,
-        term_pad_h: 22.0,
-        line_slack: 4.0,
+        text_pad: 7.0,
+        cond_pad: 26.0 * (14.0 / 12.0),
+        term_pad_v: 16.0 * (14.0 / 12.0),
+        term_pad_h: 22.0 * (14.0 / 12.0),
+        line_slack: 4.0 * (14.0 / 12.0),
         grid: GRID,
         vgap: 3.0 * GRID,
         hgap: 2.0 * GRID,
@@ -101,7 +101,7 @@ impl Style {
         no_split: false,
         edge_lw: 1.0,
         label_dx: 14.0,
-        label_dy: 12.0,
+        label_dy: 14.0,
         label_exit_dx: 2.0 * GRID,
         label_axis_dx: 14.0,
         letters: "АБВГДЕЖЗИКЛМНОПРСТУФХЦЧШЭЮЯ",
@@ -170,7 +170,7 @@ mod tests {
     #[test]
     fn default_values() {
         let s = Style::default();
-        assert!((s.font - 12.0).abs() < 1e-9);
+        assert!((s.font - 14.0).abs() < 1e-9);
         assert!((s.grid - 14.17).abs() < 1e-9);
         assert!((s.label_exit_dx - s.grid * 2.0).abs() < 0.01);
         assert_eq!(s.max_chars, 30);
@@ -219,11 +219,11 @@ mod tests {
         assert!(!s.is_io("a = printf + 1"));
         assert!(!s.is_io("myprintf"));
     }
-    /// DEFAULT — это with_metrics(12, 1): шаблон и конструктор согласованы.
+    /// DEFAULT — это with_metrics(14, 1): шаблон и конструктор согласованы.
     #[test]
-    fn default_is_with_metrics_at_12pt() {
+    fn default_is_with_metrics_at_14pt() {
         let d = Style::default();
-        let m = Style::with_metrics(12.0, 1.0);
+        let m = Style::with_metrics(14.0, 1.0);
         for (a, b) in [
             (d.char_w, m.char_w),
             (d.pitch, m.pitch),
