@@ -262,6 +262,13 @@ fn find_branch_colon(s: &str) -> Option<usize> {
     None
 }
 
+/// Один ответ на оба отказа: «-> конец» нельзя ни в теле цикла, ни в
+/// ветке, вложенной в другую ветку. Формулировки расходились, а для
+/// тела цикла отказа не было вовсе — разбор проходил, а раскладка
+/// теряла переход молча. Средство одно: `break`.
+const NO_END_IN_NEST: &str = "«-> end» внутри тела цикла или вложенной ветки не поддерживается — \
+     для выхода из тела цикла используйте break";
+
 /// Строка `метка -> end: текст` — управляющая конструкция: именно так
 /// её понимает `decision`, разбирая ветки if/switch. В теле цикла
 /// меток веток нет, `block` читал тело как плоский список утверждений,
@@ -363,12 +370,9 @@ impl<'a> Parser<'a> {
                 let node = self.cycle(s, ln, indent)?;
                 items.push(Stmt::Node(Box::new(node)));
             } else if is_to_end_branch_line(&s) {
-                return Err(ParseError::new(
-                    "«метка -> end» в теле цикла не поддерживается: \
-                     метки веток читаются только в ветках if/switch",
-                )
-                .with_line(ln)
-                .with_src(line_str));
+                return Err(ParseError::new(NO_END_IN_NEST)
+                    .with_line(ln)
+                    .with_src(line_str));
             } else {
                 items.push(stmt_from_line(s));
             }
@@ -526,6 +530,13 @@ impl<'a> Parser<'a> {
             let ind = indent_of(top_line);
             if ind > indent {
                 let body = self.block(ind)?;
+                // Тело цикла — дыра была тут: no_end_inside звали только из
+                // decision(), поэтому «-> end» внутри while/for верхнего
+                // уровня проходил разбор, а раскладка его молча теряла —
+                // ветка сливалась обратно в цикл вместо ухода в «конец».
+                // Закрываем здесь, а не в layout: рисовать пересекающую
+                // трапеции рельсу дороже, чем сказать правду на входе.
+                no_end_inside(&body)?;
                 nd.body = Some(body);
             }
         }
@@ -540,9 +551,7 @@ fn no_end_inside(stmts: &[Stmt]) -> Result<(), ParseError> {
                 NodeKind::Decision => {
                     for br in &node.branches {
                         if br.to_end {
-                            return Err(ParseError::new(
-                                "«-> конец» внутри вложенной ветки не поддерживается",
-                            ));
+                            return Err(ParseError::new(NO_END_IN_NEST));
                         }
                         no_end_inside(&br.stmts)?;
                     }
@@ -924,7 +933,7 @@ mod tests {
         let src = "input scanf(\"%d\", &a)\nwhile a > 0\n    stop -> end: printf(\"выход\")\n    next: a = a - 1\noutput printf(\"%d\", a)";
         let e = parse(src, &Style::DEFAULT, "ru").expect_err("должен быть отказ");
         assert!(
-            e.msg.contains("в теле цикла"),
+            e.msg.contains("внутри тела цикла"),
             "сообщение должно называть проблему: {e:?}"
         );
     }
@@ -941,6 +950,41 @@ mod tests {
                 .any(|b| b.to_end && b.label == "no"),
             "ветка no должна нести to_end: {d:?}"
         );
+    }
+
+    /// Явная форма той же беды: `if` с `-> end` в теле цикла. `no_end_inside`
+    /// звали только из `decision()`, поэтому мимо. Разбор проходил, а
+    /// раскладка возвращала ветку в цикл вместо ухода в «конец» — схема
+    /// показывала выполнение `printf("%d", a)` после выхода из while.
+    #[test]
+    fn to_end_in_if_inside_loop_body_is_rejected() {
+        let src = "input scanf(\"%d\", &a)\nwhile a > 0\n    if stop\n        yes -> end: printf(\"выход\")\n        no: a = a - 1\noutput printf(\"%d\", a)";
+        let e = parse(src, &Style::DEFAULT, "ru").expect_err("должен быть отказ");
+        assert!(
+            e.msg.contains("break"),
+            "ответ должен называть средство: {e:?}"
+        );
+    }
+
+    /// Средство из отказа действительно работает: `break` в теле цикла
+    /// разбирается и рисуется видимым блоком (ADR-0004).
+    #[test]
+    fn break_in_loop_body_is_the_working_alternative() {
+        let src = "while a > 0\n    if stop\n        yes: printf(\"выход\"); break\n        no: a = a - 1";
+        let d = parse(src, &Style::DEFAULT, "ru").expect("break должен разбираться");
+        let has_break = d.iter().any(|n| {
+            n.body.as_ref().is_some_and(|b| {
+                b.iter().any(|s| match s {
+                    Stmt::Break => true,
+                    Stmt::Node(i) => i
+                        .branches
+                        .iter()
+                        .any(|br| br.stmts.iter().any(|x| matches!(x, Stmt::Break))),
+                    _ => false,
+                })
+            })
+        });
+        assert!(has_break, "break должен попасть в тело цикла: {d:?}");
     }
 
     #[test]
