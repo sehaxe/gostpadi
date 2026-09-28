@@ -9,10 +9,15 @@ pub enum NodeKind {
     Conn,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoopKind {
     While,
     For,
+    /// тело выполняется до проверки условия. Рисуется тем же
+    /// шестиугольником «подготовка», что и остальные циклы, но с
+    /// подписью `do while`: в C условие проверяется ПОСЛЕ тела, и
+    /// без подписи шестиугольник врал бы, что проверка идёт первой.
+    DoWhile,
 }
 
 #[derive(Debug, Clone)]
@@ -73,7 +78,20 @@ impl Node {
         match self.loop_kind {
             Some(LoopKind::While) => format!("while {}", self.text),
             Some(LoopKind::For) => format!("for {}", self.text),
+            Some(LoopKind::DoWhile) => format!("do while {}", self.text),
             None => self.text.clone(),
+        }
+    }
+
+    /// Ключевое слово цикла в формате `.gvn`. Писатель C-фронтенда
+    /// возвращает его обратно в текст, а парсер `.gvn` снимает: без
+    /// этого цикл терял бы вид в IR. Одно место на оба конца.
+    pub fn gvn_keyword(&self) -> &'static str {
+        match self.loop_kind {
+            Some(LoopKind::While) => "while",
+            Some(LoopKind::For) => "for",
+            Some(LoopKind::DoWhile) => "do-while",
+            None => "for",
         }
     }
 

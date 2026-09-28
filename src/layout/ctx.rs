@@ -13,17 +13,14 @@ pub(super) struct Pend {
     pub rail: f64,
 }
 
-/// break внутри тела цикла: точка ухода на левую рельсу.
+/// continue внутри тела цикла: точка ухода на рельсу к началу итерации.
 pub(super) struct BreakAt {
     pub tx: f64,
     pub y: f64,
-    /// Перед break стояла нарисованная плитка: рельса уходит из её низа,
-    /// иначе колонка без плиток и уходить неоткуда.
-    pub from_tile: bool,
 }
 
 /// Чем закончилась колонка. Flow — поток продолжается; Return — тупик
-/// (линии из него не выходят); Rail — поток ушёл рельсой break/continue,
+/// (линии из него не выходят); Rail — поток ушёл рельсой continue,
 /// слияние колонки не дорисовывается: за него отвечает scope-владелец
 /// рельсы (цикл или switch).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -53,7 +50,6 @@ pub(super) struct Ctx<'a> {
     /// render_column вызван напрямую за кейс-колонку switch-рендера
     pub case_direct: bool,
     pub break_slot: usize,
-    pub breaks: Vec<BreakAt>,
     /// continue: рельсы к выходу loop_end (следующая итерация)
     pub continues: Vec<BreakAt>,
 }
@@ -139,7 +135,6 @@ impl<'a> Ctx<'a> {
             switch_depth: 0,
             case_direct: false,
             break_slot: 0,
-            breaks: Vec::new(),
             continues: Vec::new(),
         }
     }

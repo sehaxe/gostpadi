@@ -4,13 +4,15 @@ use super::types::Sizes;
 use crate::ir::{Branch, NodeKind, Stmt, TileKind};
 use crate::style::Style;
 
-/// Колонка состоит только из break/continue: входить в неё со стрелкой
-/// нечего — поток уйдёт рельсой или растворится в слиянии кейса.
+/// Колонка, в которую нечего входить: её тело не рисует ни одного
+/// блока, поэтому стрелка в неё была бы стрелкой в пустоту.
+///
+/// Раньше сюда попадал и `break`: он уходил рельсой и сам блока не
+/// рисовал. Теперь `break` — обычный прямоугольник (ADR-0004), и вход
+/// в него со стрелкой обязателен. Единственная инструкция, после
+/// которой в колонке не остаётся ничего видимого, — `continue`.
 pub(super) fn rail_only(items: &[Stmt]) -> bool {
-    !items.is_empty()
-        && items
-            .iter()
-            .all(|s| matches!(s, Stmt::Break | Stmt::Continue))
+    !items.is_empty() && items.iter().all(|s| matches!(s, Stmt::Continue))
 }
 
 /// Полуширина содержимого колонки вокруг её оси: плитки, вложенные
@@ -87,31 +89,28 @@ impl Ctx<'_> {
                     return (top + h_r, ColEnd::Return);
                 }
                 Stmt::Break | Stmt::Continue => {
-                    let is_break = matches!(it, Stmt::Break);
+                    // break — обычный прямоугольник процесса: он стоит
+                    // в коде, и читатель должен его видеть. Ни рельсы,
+                    // ни обрыва колонки: после break линия идёт дальше
+                    // обычным порядком (ADR-0004).
+                    //
+                    // continue — наоборот, рельса: он не выполняет
+                    // ничего, а возвращает поток к началу цикла, и
+                    // прямоугольник «continue» на схеме был бы ложью.
+                    if matches!(it, Stmt::Break) {
+                        self.draw_tile("break", TileKind::Act, tx, top, &mut prev_bottom);
+                        continue;
+                    }
                     let scoped = self.loop_depth > 0 || self.switch_depth > 0;
                     if scoped {
-                        // break напрямую в кейс-колонке switch —
-                        // растворяется: слияние кейса само доводит поток
-                        // до шины switch (в C break покидает только
-                        // switch, а не цикл вокруг)
-                        if is_break && self.switch_depth > 0 && self.case_direct {
-                            return (prev_bottom.unwrap_or(top0), ColEnd::Flow);
-                        }
-                        let exit = BreakAt {
+                        self.continues.push(BreakAt {
                             tx,
                             y: prev_bottom.unwrap_or(top0),
-                            from_tile: prev_bottom.is_some(),
-                        };
-                        if is_break {
-                            self.breaks.push(exit);
-                        } else {
-                            self.continues.push(exit);
-                        }
+                        });
                         return (prev_bottom.unwrap_or(top0), ColEnd::Rail);
                     }
-                    // вне цикла и switch — прежняя плитка
-                    let text = if is_break { "break" } else { "continue" };
-                    self.draw_tile(text, TileKind::Act, tx, top, &mut prev_bottom);
+                    // вне цикла и switch — обычная плитка
+                    self.draw_tile("continue", TileKind::Act, tx, top, &mut prev_bottom);
                 }
                 Stmt::Tile { kind, text } => {
                     self.draw_tile(text, *kind, tx, top, &mut prev_bottom);

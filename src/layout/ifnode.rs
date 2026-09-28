@@ -1,5 +1,5 @@
 use super::column::rail_only;
-use super::ctx::{BreakAt, ColEnd, Ctx};
+use super::ctx::{ColEnd, Ctx};
 use super::types::Label;
 use crate::ir::{Node, NodeKind, Stmt};
 
@@ -207,7 +207,6 @@ impl Ctx<'_> {
         let is_switch = nd.switch_var.is_some();
         let scoped = is_switch || self.loop_depth > 0 || self.switch_depth > 0;
         let saved_direct = self.case_direct;
-        let br_mark = self.breaks.len();
         if is_switch {
             self.switch_depth += 1;
             self.case_direct = true;
@@ -252,29 +251,6 @@ impl Ctx<'_> {
             .map(|&(bi, y, _)| (plan.iter().find(|p| p.0 == bi).unwrap().3, y))
             .collect();
         self.merge_bus(&cols, tx, merge2);
-        // рельсы break из веток внутри кейсов (if внутри case): наружу
-        // за колонки switch, вниз к слиянию switch, T-стык на стволе
-        if is_switch {
-            let nested: Vec<BreakAt> = self.breaks.drain(br_mark..).collect();
-            let outer = plan
-                .iter()
-                .map(|&(.., txx)| (txx - tx).abs())
-                .fold(dw / 2.0 + 2.0 * self.st.grid, f64::max)
-                + sub
-                + self.st.grid;
-            for b in &nested {
-                let slot = self.break_slot;
-                self.break_slot += 1;
-                let sgn = if b.tx <= tx { -1.0 } else { 1.0 };
-                let rx = tx
-                    + sgn
-                        * super::geometry::up(
-                            outer + slot as f64 * 2.0 * self.st.grid,
-                            self.st.grid,
-                        );
-                self.edge(&[(b.tx, b.y), (rx, b.y), (rx, merge2), (tx, merge2)], false);
-            }
-        }
         if !empty.is_empty() {
             merge2 = merge2.max(y_b + 2.0 * self.st.grid);
             // рельса жмётся к под-ромбу: пол — вершина + 2g, дальше —

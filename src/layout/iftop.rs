@@ -2,7 +2,7 @@
 //! метки да/нет/кейсов, слияние, рельсы «-> конец» (pend) и кружки link.
 
 use super::column::rail_only;
-use super::ctx::{BreakAt, ColEnd, Ctx, Pend};
+use super::ctx::{ColEnd, Ctx, Pend};
 use super::ifnode::{build_plan, cascade_cols, Side};
 use super::types::{Anchor, Label};
 use crate::ir::{Branch, Node, NodeKind, Stmt};
@@ -79,7 +79,6 @@ impl Ctx<'_> {
         let is_switch = nd.switch_var.is_some();
         let scoped = is_switch || self.loop_depth > 0 || self.switch_depth > 0;
         let saved_direct = self.case_direct;
-        let br_mark = self.breaks.len();
         if is_switch {
             self.switch_depth += 1;
             self.case_direct = true;
@@ -214,28 +213,6 @@ impl Ctx<'_> {
         if n_merge == 0 && empty.is_empty() && !has_axis {
             self.edge(&[vb, (0.0, merge_y)], false);
         }
-        // рельсы break из веток switch (if внутри case): наружу за
-        // колонки, вниз к выходу switch, T-стык на стволе
-        if is_switch {
-            let nested: Vec<BreakAt> = self.breaks.drain(br_mark..).collect();
-            let outer = plan
-                .iter()
-                .map(|&(.., txx)| txx.abs())
-                .fold(dw / 2.0 + 2.0 * self.st.grid, f64::max)
-                + self.nhe
-                + self.st.grid;
-            for b in &nested {
-                let slot = self.break_slot;
-                self.break_slot += 1;
-                let sgn = if b.tx <= 0.0 { -1.0 } else { 1.0 };
-                let rx = sgn
-                    * super::geometry::up(outer + slot as f64 * 2.0 * self.st.grid, self.st.grid);
-                self.edge(
-                    &[(b.tx, b.y), (rx, b.y), (rx, merge_y), (0.0, merge_y)],
-                    false,
-                );
-            }
-        }
         let cursor = merge_y.max(col_bottom).max(link_bottom);
         self.anchors.push(Anchor { y: cursor });
         (Some((0.0, merge_y)), cursor)
@@ -260,7 +237,6 @@ impl Ctx<'_> {
         }
         let base = dw / 2.0 + self.st.hgap + self.nhe;
         let saved_direct = self.case_direct;
-        let br_mark = self.breaks.len();
         self.switch_depth += 1;
         self.case_direct = true;
         let empty: Vec<String> = nd
@@ -408,23 +384,8 @@ impl Ctx<'_> {
             // продолжение ствола до точки выхода
             self.edge(&[(0.0, trunk_from), (0.0, merge_y)], false);
         }
-        // рельсы break из веток внутри кейсов (if внутри case): наружу
-        // за сетку, вниз к выходу switch, T-стык на стволе
-        let nested: Vec<BreakAt> = self.breaks.drain(br_mark..).collect();
         self.switch_depth -= 1;
         self.case_direct = saved_direct;
-        let outer = base + self.nhe + self.st.grid;
-        for b in &nested {
-            let slot = self.break_slot;
-            self.break_slot += 1;
-            let sgn = if b.tx <= 0.0 { -1.0 } else { 1.0 };
-            let rx =
-                sgn * super::geometry::up(outer + slot as f64 * 2.0 * self.st.grid, self.st.grid);
-            self.edge(
-                &[(b.tx, b.y), (rx, b.y), (rx, merge_y), (0.0, merge_y)],
-                false,
-            );
-        }
         let cursor = merge_y.max(col_bottom).max(link_bottom);
         self.anchors.push(Anchor { y: cursor });
         (Some((0.0, merge_y)), cursor)

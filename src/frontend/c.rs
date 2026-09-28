@@ -75,11 +75,8 @@ fn emit_nodes(nodes: &[Node], depth: usize, out: &mut String) {
         match n.kind {
             NodeKind::Loop => {
                 // keyword добавляем обратно: парсер .gvn снимает его сам
-                out.push_str(if n.loop_kind == Some(LoopKind::While) {
-                    "while "
-                } else {
-                    "for "
-                });
+                out.push_str(n.gvn_keyword());
+                out.push(' ');
                 out.push_str(&n.text);
                 out.push('\n');
                 if let Some(body) = &n.body {
@@ -262,7 +259,17 @@ impl<'a> Ctx<'a> {
                 Ok(vec![Stmt::Node(Box::new(nd))])
             }
             Statement::DoWhile(d) => {
-                Err(self.err("в коде цикл do-while — перепиши на while", d.span.start))
+                // тело выполняется до проверки условия, поэтому условие
+                // уходит в заголовок трапеции с пометкой «do while», а
+                // тело — в её содержимое: рисуется тем же циклом, что и
+                // остальные, но подпись видна на схеме
+                let mut nd = Node::new(
+                    NodeKind::Loop,
+                    shorten_calls(&expr_text(self.src, &d.node.expression)),
+                );
+                nd.loop_kind = Some(LoopKind::DoWhile);
+                nd.body = Some(self.block_stmt(&d.node.statement)?);
+                Ok(vec![Stmt::Node(Box::new(nd))])
             }
             Statement::Goto(g) => Err(self.err("в коде goto — не поддерживается", g.span.start)),
             Statement::Return(e) => Ok(vec![Stmt::Return(match e {
@@ -968,12 +975,64 @@ mod tests {
         assert!(gvn.contains("for i = 0; i < 5; i = i + 1\n"), "{}", gvn);
     }
 
+    /// do-while рисуется как цикл: тело в содержимом трапеции,
+    /// условие — в заголовке с пометкой «do while». Раньше он
+    /// отвергался с требованием переписать на while, что меняло
+    /// семантику: тело do выполняется до проверки.
     #[test]
-    fn dowhile_and_goto_rejected() {
-        let e =
-            parse_c_to_nodes("int main(void) { do { x = 1; } while (x < 3); }", "en").unwrap_err();
-        assert!(e.msg.contains("do-while"), "{}", e.msg);
-        assert_eq!(e.line, Some(1));
+    fn dowhile_is_a_loop_with_body_and_marked_header() {
+        let nodes = parse_ok("int main(void) { do { x = x + 1; } while (x < 3); }");
+        let loop_node = nodes
+            .iter()
+            .find(|n| n.kind == NodeKind::Loop)
+            .expect("do-while должен стать узлом-циклом");
+        assert_eq!(loop_node.loop_kind, Some(LoopKind::DoWhile));
+        let body = loop_node.body.as_ref().expect("тело do-while");
+        assert!(
+            body.iter()
+                .any(|s| matches!(s, Stmt::Tile { text, .. } if text.contains("x = x + 1"))),
+            "тело do-while должно попасть в содержимое трапеции: {body:?}"
+        );
+        // на схеме видно, что это именно do-while
+        assert_eq!(loop_node.loop_label(), "do while x < 3");
+    }
+
+    /// Ключевое слово цикла возвращается в текст .gvn и снимается
+    /// парсером обратно: без этого цикл терял бы вид в IR. Одно
+    /// место на оба конца — Node::gvn_keyword.
+    #[test]
+    fn loop_keyword_survives_the_gvn_roundtrip() {
+        for (src, want) in [
+            ("int main(void){ do { x++; } while (x<3); }", "do-while"),
+            ("int main(void){ while (x<3) x++; }", "while"),
+            ("int main(void){ for(int i=0;i<3;i++) x++; }", "for"),
+        ] {
+            let gvn = c_to_gvn(src, "en").unwrap();
+            assert!(
+                gvn.contains(&format!("{want} ")),
+                "в .gvn нет ключевого слова {want}:\n{gvn}"
+            );
+            // и обратно: разобранный цикл того же вида
+            let st = crate::style::Style::default();
+            let back = crate::frontend::gvn::parse(&gvn, &st, "en").unwrap();
+            let lp = back
+                .iter()
+                .find(|n| n.kind == NodeKind::Loop)
+                .expect("цикл не разобран");
+            let expect = match want {
+                "while" => LoopKind::While,
+                "do-while" => LoopKind::DoWhile,
+                _ => LoopKind::For,
+            };
+            assert_eq!(lp.loop_kind, Some(expect), "вид цикла потерян в .gvn");
+            assert!(lp.body.is_some(), "тело цикла потерялось");
+        }
+    }
+
+    /// goto по-прежнему не поддерживается — в отличие от do-while,
+    /// который рисовать можно честно.
+    #[test]
+    fn goto_still_rejected() {
         let e2 = parse_c_to_nodes("int main(void) {\n  goto end;\n  end: ;\n}", "en").unwrap_err();
         assert!(e2.msg.contains("goto"), "{}", e2.msg);
         assert_eq!(e2.line, Some(2));

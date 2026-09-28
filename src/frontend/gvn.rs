@@ -5,8 +5,15 @@ use crate::style::Style;
 
 /// Строка ветки/тела → типизированный Stmt. Единственное место, где
 /// текст ещё сниффится на выходы и ввод-вывод: дальше IR типизирован.
+///
+/// Ключевое слово сверяется без хвостовой точки с запятой: `break;`
+/// на своей строке в теле цикла раньше не узнавался и рисовался
+/// плиткой «break;», хотя `yes: printf(y); break` в ветке разбирался
+/// верно (там текст режется по `;`). Один и тот же `break;` значил
+/// разное в зависимости от вложенности. Хвост убирается ТОЛЬКО для
+/// сверки: текст обычной плитки остаётся как написан.
 fn stmt_from_line(s: String) -> Stmt {
-    let kw = s.trim();
+    let kw = s.trim().trim_end_matches(';').trim();
     if kw == "break" {
         return Stmt::Break;
     }
@@ -129,22 +136,29 @@ fn starts_with_if_or_switch(s: &str) -> bool {
     false
 }
 
+/// Ключевые слова циклов в формате `.gvn`. Единственный список:
+/// и `starts_with_while_or_for`, и разбор в `cycle` сверяются с ним,
+/// и писатель C-фронтенда берёт отсюда же (Node::gvn_keyword).
+/// Раньше «while» и «for» были вписаны в трёх местах по отдельности.
+const LOOP_KEYWORDS: [(&str, LoopKind); 3] = [
+    ("while", LoopKind::While),
+    ("do-while", LoopKind::DoWhile),
+    ("for", LoopKind::For),
+];
+
+fn loop_keyword(s: &str) -> Option<(&'static str, LoopKind)> {
+    LOOP_KEYWORDS.iter().find_map(|(kw, kind)| {
+        let r = s.strip_prefix(*kw)?;
+        if r.is_empty() {
+            return None;
+        }
+        let ch = r.chars().next()?;
+        (ch == ' ' || ch == '(').then_some((*kw, *kind))
+    })
+}
+
 fn starts_with_while_or_for(s: &str) -> bool {
-    if let Some(r) = s.strip_prefix("while") {
-        if r.is_empty() {
-            return false;
-        }
-        let ch = r.chars().next().unwrap();
-        return ch == ' ' || ch == '(';
-    }
-    if let Some(r) = s.strip_prefix("for") {
-        if r.is_empty() {
-            return false;
-        }
-        let ch = r.chars().next().unwrap();
-        return ch == ' ' || ch == '(';
-    }
-    false
+    loop_keyword(s).is_some()
 }
 
 fn is_return(s: &str) -> bool {
@@ -438,11 +452,12 @@ impl<'a> Parser<'a> {
             rest = rest[1..rest.len() - 1].trim().to_string();
         }
         let text = wrap(&rest, self.style.max_chars);
-        let loop_kind = if kw == "while" {
-            Some(LoopKind::While)
-        } else {
-            Some(LoopKind::For)
-        };
+        let loop_kind = Some(
+            LOOP_KEYWORDS
+                .iter()
+                .find(|(k, _)| *k == kw)
+                .map_or(LoopKind::For, |(_, kind)| *kind),
+        );
         let mut nd = Node::new(NodeKind::Loop, text);
         nd.loop_kind = loop_kind;
 
@@ -788,5 +803,50 @@ mod tests {
         assert_eq!(v, vec!["a", "b", "c"]);
         let v2 = split_statements("printf(\"a; b\"); return 1");
         assert_eq!(v2.len(), 2);
+    }
+
+    /// `break;` и `continue;` на своей строке — выходы, а не плитки.
+    /// Раньше точка с запятой мешала: в ветке текст режется по `;` и
+    /// всё работало, а в теле цикла та же строка рисовалась плиткой.
+    #[test]
+    fn break_and_continue_with_semicolon_are_exits() {
+        for text in ["break", "break;", "break ;", "  break  ;  "] {
+            assert!(
+                matches!(stmt_from_line(text.to_string()), Stmt::Break),
+                "{text:?} должен быть выходом из цикла"
+            );
+        }
+        for text in ["continue", "continue;", "continue ;"] {
+            assert!(
+                matches!(stmt_from_line(text.to_string()), Stmt::Continue),
+                "{text:?} должен быть переходом к следующей итерации"
+            );
+        }
+    }
+
+    /// Хвост убирается только для сверки с ключевым словом: текст
+    /// обычной плитки не должен терять точку с запятой.
+    #[test]
+    fn ordinary_tiles_keep_their_semicolon() {
+        for text in ["x = 1;", "a = b + c; ;", "printf(\"hi\");"] {
+            match stmt_from_line(text.to_string()) {
+                Stmt::Tile { text: t, .. } => assert_eq!(t, text, "текст плитки изменён"),
+                other => panic!("{text:?} стал {other:?}, а не плиткой"),
+            }
+        }
+    }
+
+    /// `return;` уже распознавался как выход — точка с запятой после
+    /// return в C обязательна, и она не должна ломать разбор.
+    #[test]
+    fn return_with_semicolon_is_still_an_exit() {
+        assert!(matches!(
+            stmt_from_line("return 1;".to_string()),
+            Stmt::Return(_)
+        ));
+        assert!(matches!(
+            stmt_from_line("return;".to_string()),
+            Stmt::Return(_)
+        ));
     }
 }
