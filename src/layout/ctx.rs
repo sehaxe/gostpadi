@@ -196,19 +196,25 @@ impl<'a> Ctx<'a> {
             ys.extend([sh.cy - sh.h / 2.0, sh.cy + sh.h / 2.0]);
         }
         for l in &self.labels {
-            // оценка ширины подписи: половина глифа на символ (моноширинный)
-            let half = l.text.chars().count() as f64 * self.st.char_w / 2.0;
+            // Ширина подписи: глиф на символ (моноширинный). Якорь
+            // решает, откуда текст растёт: "left" -> text-anchor=start,
+            // текст идёт вправо на всю ширину; "right" -> влево. Раньше
+            // для них бралась половина ширины, и длинная подпись
+            // (например «default» у края схемы) вылезала за поля листа.
+            let w = l.text.chars().count() as f64 * self.st.char_w;
             match l.ha.as_str() {
-                "right" => xs.push(l.x - half),
-                "left" => xs.push(l.x + half),
+                "right" => xs.push(l.x - w),
+                "left" => xs.push(l.x + w),
                 _ => {
-                    xs.push(l.x - half);
-                    xs.push(l.x + half);
+                    xs.push(l.x - w / 2.0);
+                    xs.push(l.x + w / 2.0);
                 }
             }
             ys.push(l.y);
         }
-        let pad = self.st.page_pad;
+        // Габарит — точный, без полей: поля принадлежат листу
+        // (sheet::Sheet::origin), а не раскладке. Раньше page_pad
+        // запекался здесь и вычитался из листа ещё раз при вписывании.
         let minx = xs.iter().cloned().fold(f64::MAX, f64::min);
         let miny = ys.iter().cloned().fold(f64::MAX, f64::min);
         let maxx = xs.iter().cloned().fold(f64::MIN, f64::max);
@@ -217,12 +223,7 @@ impl<'a> Ctx<'a> {
             shapes: self.shapes,
             edges: self.edges,
             labels: self.labels,
-            bounds: (
-                minx - pad,
-                miny - pad,
-                maxx - minx + 2.0 * pad,
-                maxy - miny + 2.0 * pad,
-            ),
+            bounds: (minx, miny, maxx - minx, maxy - miny),
             anchors: self.anchors,
         }
     }

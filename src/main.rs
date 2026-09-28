@@ -52,13 +52,14 @@ const HELP: &str = "gostpadi 2.0.0 — блок-схемы по ГОСТ 19.701 
     --lw=N          толщина линий и усиков стрелок (по умолчанию 1.0)
     --no-split      не резать длинную схему на листы: один лист, в А4
                     вписывает общий масштаб пачки (для вставки в отчёт)
+    --landscape     альбомный лист А4 297x210 вместо книжного 210x297
     --check         только проверить, не рисовать
     --template      заготовка .gvn на stdout
     -h, --help      эта справка
     -V, --version   версия
 ";
 
-const USAGE: &str = "использование: gostpadi схема.gvn [ещё.gvn|код.c ...] [-o out.svg|папка/] [--labels=ru|en] [--font=N] [--lw=N] [--no-split] [--check] [--template] [-h] [-V]";
+const USAGE: &str = "использование: gostpadi схема.gvn [ещё.gvn|код.c ...] [-o out.svg|папка/] [--labels=ru|en] [--font=N] [--lw=N] [--no-split] [--landscape] [--check] [--template] [-h] [-V]";
 
 /// Базовый путь результата входа: ".../stem.svg" (суффиксы листов добавит
 /// page_path). Папкой считается -o с косой чертой или существующая папка;
@@ -135,6 +136,7 @@ fn main() {
     let mut font: Option<f64> = None;
     let mut lw: Option<f64> = None;
     let mut no_split = false;
+    let mut landscape = false;
     let mut check = false;
     let mut template = false;
 
@@ -153,6 +155,7 @@ fn main() {
             "--template" => template = true,
             "--check" => check = true,
             "--no-split" => no_split = true,
+            "--landscape" => landscape = true,
             "-o" | "--output" => {
                 i += 1;
                 if i >= argv.len() {
@@ -217,6 +220,7 @@ fn main() {
         font,
         lw,
         no_split,
+        landscape,
     };
     let st = opts.style();
 
@@ -293,10 +297,8 @@ fn main() {
         .any(|s| stems.iter().filter(|t| *t == s).count() > 1);
 
     let mut failed = parse_failed;
-    for ((_, pages), inp) in pipeline::render_batch(schemes, &st)
-        .into_iter()
-        .zip(&inputs)
-    {
+    let (rendered, info) = pipeline::render_batch(schemes, &st);
+    for ((_, pages), inp) in rendered.into_iter().zip(&inputs) {
         let base = base_for(inp, output.as_deref(), folder, inputs.len() > 1, dup);
         for (k, svg) in pages.iter().enumerate() {
             let target = page_path(&base, k);
@@ -307,6 +309,19 @@ fn main() {
             }
             out(&format!("{}\n", target.display()));
         }
+    }
+    // Молча выдать 4.7 pt текста нельзя: на листе это нечитаемо, и
+    // причина обычно одна — слишком широкий блок, который порезка
+    // не может разрезать (резать можно только между узлами).
+    if info.is_illegible() {
+        eprintln!(
+            "внимание: общий масштаб {:.3} — кегль на листе {:.1} pt вместо {} pt, \
+             схема читается с трудом. Порезка идёт только между блоками верхнего \
+             уровня, поэтому мешает один слишком широкий блок: разнесите его \
+             (например поделите кейсы switch на два блока) либо уберите длинные \
+             подписи кейсов.",
+            info.scale, info.font_on_page, st.font
+        );
     }
     if failed {
         process::exit(1);

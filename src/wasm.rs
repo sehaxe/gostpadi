@@ -58,14 +58,23 @@ fn json_str(out: &mut String, s: &str) {
     out.push('"');
 }
 
-/// Текст схемы -> ответ в формате JSON (листы SVG либо ошибка разбора).
-fn render_result(text: &str, is_c: bool, ru: bool, lw: f64, font: f64) -> String {
-    let opts = Options {
+/// Опции сайта в Options. Один конструктор на оба входа: раньше
+/// Options собирался дважды одинаковым телом, и новое поле опций
+/// приходилось добавлять в два места — забыть можно было молча,
+/// сборка wasm32 не проверяется нативным `cargo build`.
+fn site_options(ru: bool, lw: f64, font: f64) -> Options {
+    Options {
         labels: if ru { "ru" } else { "en" }.into(),
         font: (font > 0.0).then_some(font),
         lw: (lw > 0.0).then_some(lw),
         no_split: false,
-    };
+        landscape: false,
+    }
+}
+
+/// Текст схемы -> ответ в формате JSON (листы SVG либо ошибка разбора).
+fn render_result(text: &str, is_c: bool, ru: bool, lw: f64, font: f64) -> String {
+    let opts = site_options(ru, lw, font);
     match pipeline::render_text(text, is_c, &opts) {
         Ok(pages) => {
             let mut out = String::with_capacity(pages.iter().map(|p| p.len()).sum::<usize>() + 32);
@@ -173,12 +182,7 @@ pub extern "C" fn gostpadi_render_batch(
         Some(v) if !v.is_empty() => v,
         _ => return std::ptr::null_mut(),
     };
-    let opts = Options {
-        labels: if ru != 0 { "ru" } else { "en" }.into(),
-        font: (font > 0.0).then_some(font),
-        lw: (lw > 0.0).then_some(lw),
-        no_split: false,
-    };
+    let opts = site_options(ru != 0, lw, font);
     let st = opts.style();
     // сбойные входы не останавливают остальные (порт CLI-пачки)
     let mut ok: Vec<(String, Vec<crate::ir::Node>)> = Vec::new();
@@ -192,7 +196,7 @@ pub extern "C" fn gostpadi_render_batch(
             Err((_, e)) => errors.push((name.clone(), e)),
         }
     }
-    let rendered = pipeline::render_batch(ok, &st);
+    let (rendered, _info) = pipeline::render_batch(ok, &st);
     let mut out = String::with_capacity(4096);
     out.push_str("{\"ok\":true,\"files\":[");
     for (i, (name, pages)) in rendered.iter().enumerate() {

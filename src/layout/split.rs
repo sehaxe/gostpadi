@@ -8,8 +8,7 @@ use crate::style::Style;
 /// Межстраничный соединитель: буква + номер листа, где продолжение
 /// (ГОСТ 19.701-90: первая строка — номер листа).
 pub fn split_scheme(mut items: Vec<Node>, sizes: &Sizes, st: &Style) -> Vec<Vec<Node>> {
-    // поиск точки реза ведётся по нижним 88% страницы: ниже листать
-    // бессмысленно, выше — резать слишком рано
+    // поиск точки реза ведётся по нижним 88% текстовой зоны листа
     const CUT_SEARCH_FRAC: f64 = 0.88;
     let mut parts: Vec<Vec<Node>> = Vec::new();
     let mut li = 0usize;
@@ -17,12 +16,17 @@ pub fn split_scheme(mut items: Vec<Node>, sizes: &Sizes, st: &Style) -> Vec<Vec<
     let letter = |li: usize| st.letters.chars().nth(li % n_letters).unwrap();
     loop {
         let res = layout(&items, sizes, st);
-        let fits = res.bounds.3 <= (st.a4_h - 2.0 * st.page_pad) / st.split_scale;
+        // «влезает ли» решает лист: тот же вопрос, что и при рендере,
+        // те же числа. Раньше здесь была своя формула (высота против
+        // обеих осей у fit_scale) с собственным page_pad.
+        let fits = st.sheet.fits_height(res.bounds.3, st.split_scale);
         if fits || items.len() < 6 {
             parts.push(items);
             break;
         }
-        let limit = (st.a4_h - 2.0 * st.page_pad) * CUT_SEARCH_FRAC;
+        // ищем последнюю точку реза не ниже 88% текстовой зоны: ниже
+        // резать бессмысленно, выше — слишком рано
+        let limit = st.sheet.text_h() * CUT_SEARCH_FRAC;
         let mut cut = None;
         // точки реза: 2..len-2 (как раньше) — take до, skip после,
         // чтобы saturating_sub не дал underflow на пустой схеме

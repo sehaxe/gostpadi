@@ -31,13 +31,11 @@ pub(crate) fn put(out: &mut String, v: f64) {
     }
 }
 
-/// Масштаб вписывания раскладки в А4 (не больше 1: мелкие схемы
-/// рисуются 1:1, крупные сжимаются).
+/// Масштаб вписывания раскладки в лист (не больше 1: мелкие схемы
+/// рисуются 1:1, крупные сжимаются). Решение принимает лист.
 pub fn fit_scale(bounds: (f64, f64, f64, f64), st: &Style) -> f64 {
     let (_, _, w, h) = bounds;
-    1.0_f64
-        .min((st.a4_w - 2.0 * st.page_pad) / w)
-        .min((st.a4_h - 2.0 * st.page_pad) / h)
+    st.sheet.scale_for(w, h)
 }
 
 /// Раскладка + стиль -> SVG с автоподбором масштаба.
@@ -52,9 +50,12 @@ pub fn render_svg(l: &Layout, st: &Style) -> String {
 /// фигурами, фигуры под подписями. Весь документ собирается в двух
 /// буферах (тело и документ) — без промежуточных строк на каждый элемент.
 pub fn render_svg_at(l: &Layout, st: &Style, s: f64) -> String {
-    let (minx, miny, w, h) = l.bounds;
+    let sheet = st.sheet;
     // усики стрелок в локальных единицах: масштаб применит g-обёртка.
     let whisker = WHISKER_FRAC * 2.0 * st.grid;
+    // лист центрирует содержимое в текстовой зоне; страница всегда
+    // одного размера, а не обрезается по содержимому
+    let (tx, ty) = sheet.origin(l.bounds, s);
 
     let mut body = String::new();
     for e in &l.edges {
@@ -73,21 +74,21 @@ pub fn render_svg_at(l: &Layout, st: &Style, s: f64) -> String {
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
 <svg xmlns=\"http://www.w3.org/2000/svg\" width=\"",
     );
-    put(&mut out, w * s);
+    put(&mut out, sheet.w);
     out.push_str("pt\" height=\"");
-    put(&mut out, h * s);
+    put(&mut out, sheet.h);
     out.push_str("pt\" viewBox=\"0 0 ");
-    put(&mut out, w * s);
+    put(&mut out, sheet.w);
     out.push(' ');
-    put(&mut out, h * s);
+    put(&mut out, sheet.h);
     out.push_str("\">\n<rect x=\"0\" y=\"0\" width=\"");
-    put(&mut out, w * s);
+    put(&mut out, sheet.w);
     out.push_str("\" height=\"");
-    put(&mut out, h * s);
+    put(&mut out, sheet.h);
     out.push_str("\" fill=\"#ffffff\"/>\n<g transform=\"translate(");
-    put(&mut out, -minx * s);
+    put(&mut out, tx);
     out.push(' ');
-    put(&mut out, -miny * s);
+    put(&mut out, ty);
     out.push_str(") scale(");
     put(&mut out, s);
     out.push_str(")\">");

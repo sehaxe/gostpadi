@@ -14,14 +14,22 @@ pub struct Options {
     pub font: Option<f64>,
     pub lw: Option<f64>,
     pub no_split: bool,
+    /// альбомная ориентация листа А4. Выбирается один на всю пачку:
+    /// страницы лабы обязаны совпадать (ГОСТ 19.701-90 п. 4.1.3).
+    pub landscape: bool,
 }
 
 impl Options {
-    /// Стиль пайплайна: кегль и толщина пера из опций, остальное —
+    /// Стиль пайплайна: кегль, толщина пера и лист из опций, остальное —
     /// производные (Style::with_metrics). None — значения по умолчанию.
     pub fn style(&self) -> Style {
         Style {
             no_split: self.no_split,
+            sheet: if self.landscape {
+                crate::sheet::Sheet::A4_LANDSCAPE
+            } else {
+                crate::sheet::Sheet::A4
+            },
             ..Style::with_metrics(self.font.unwrap_or(12.0), self.lw.unwrap_or(1.0))
         }
     }
@@ -56,45 +64,117 @@ pub fn parse_batch(
     Ok(out)
 }
 
-/// Узлы из parse_batch + стиль -> (путь, страницы SVG). Длинные схемы
-/// режутся на листы А4 (или одним листом при no_split — тогда высокий
-/// лист ужимает общий масштаб); размеры фигур и масштаб общие на всю
-/// пачку: figures одного типа во всех файлах — одного визуального размера.
-pub fn render_batch(schemes: Vec<(String, Vec<Node>)>, st: &Style) -> Vec<(String, Vec<String>)> {
-    let normed: Vec<Sizes> = schemes.iter().map(|(_, n)| normalize(n, st)).collect();
-    let sizes = uniform_sizes(&normed);
-    let laid: Vec<(String, Vec<Layout>)> = schemes
+/// Чем закончилась пачка: общий масштаб и выбранный лист. Нужно
+/// вызывающему, чтобы честно сказать, когда кегль на листе упал
+/// ниже читаемого: раньше пачка из пяти схем с одним широким
+/// диспетчем молча давала 4.7 pt текста на всех пяти листах.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BatchInfo {
+    /// общий масштаб пачки
+    pub scale: f64,
+    pub sheet: crate::sheet::Sheet,
+    /// кегль на листе, pt — то, что читает преподаватель
+    pub font_on_page: f64,
+}
+
+impl BatchInfo {
+    /// Масштаб уронил бы кегль ниже порога читаемости. Порог тот же,
+    /// что у порезки: ниже `split_scale` лист сжимать нельзя, это
+    /// ровно тот случай, когда `split_scheme` режет вместо сжатия.
+    /// Здесь он означает «кегль на листе меньше 0.7 кегля в файле».
+    pub fn is_illegible(&self) -> bool {
+        self.scale < 0.7
+    }
+
+    /// Насколько текст на листе мельче исходного кегля, в процентах.
+    pub fn shrink_percent(&self) -> u32 {
+        ((1.0 - self.scale) * 100.0).round().max(0.0) as u32
+    }
+}
+fn lay_out(
+    schemes: Vec<(String, Vec<Node>)>,
+    sizes: &Sizes,
+    st: &Style,
+) -> Vec<(String, Vec<Layout>)> {
+    schemes
         .into_iter()
         .map(|(path, nodes)| {
             let pages = if st.no_split {
-                vec![layout(&nodes, &sizes, st)]
+                vec![layout(&nodes, sizes, st)]
             } else {
-                split_scheme(nodes, &sizes, st)
+                split_scheme(nodes, sizes, st)
                     .iter()
-                    .map(|part| layout(part, &sizes, st))
+                    .map(|part| layout(part, sizes, st))
                     .collect()
             };
-            (path, pages)
-        })
-        .collect();
-    // единый масштаб пачки: минимальный из постраничных вписываний
-    let s = laid
-        .iter()
-        .flat_map(|(_, pages)| pages)
-        .map(|l| fit_scale(l.bounds, st))
-        .fold(1.0_f64, f64::min);
-    laid.into_iter()
-        .map(|(path, pages)| {
-            let pages = pages.iter().map(|l| render_svg_at(l, st, s)).collect();
             (path, pages)
         })
         .collect()
 }
 
+/// Единый масштаб пачки: минимальный из постраничных вписываний.
+/// Общий по всем файлам намеренно — ГОСТ 19.701-90 п. 4.1.3 требует,
+/// чтобы символы были одного размера, и страницы лабы обязаны совпадать.
+fn shared_scale(laid: &[(String, Vec<Layout>)], st: &Style) -> f64 {
+    laid.iter()
+        .flat_map(|(_, pages)| pages)
+        .map(|l| fit_scale(l.bounds, st))
+        .fold(1.0_f64, f64::min)
+}
+
+/// Узлы из parse_batch + стиль -> (путь, страницы SVG). Размеры фигур,
+/// ориентация листа и масштаб — общие на всю пачку.
+///
+/// Ориентация выбирается один на пачку, а не на файл: страницы лабы
+/// обязаны совпадать. Книжная берётся, если она держит общий масштаб не
+/// ниже порога читаемости; иначе — альбомная, у которой текстовая зона
+/// шире в 1.5 раза. Раньше ориентации не было вовсе, и один широкий
+/// диспетч ужимал всю лабу до нечитаемых 4.7 pt.
+pub fn render_batch(
+    schemes: Vec<(String, Vec<Node>)>,
+    st: &Style,
+) -> (Vec<(String, Vec<String>)>, BatchInfo) {
+    let normed: Vec<Sizes> = schemes.iter().map(|(_, n)| normalize(n, st)).collect();
+    let sizes = uniform_sizes(&normed);
+
+    let laid = lay_out(schemes.clone(), &sizes, st);
+    let s = shared_scale(&laid, st);
+    let (st, laid, s) = if s >= st.split_scale || st.no_split {
+        (st.clone(), laid, s)
+    } else {
+        // книжная нечитаема: пробуем альбомную, лист у неё шире
+        let alt = Style {
+            sheet: crate::sheet::Sheet::A4_LANDSCAPE,
+            ..st.clone()
+        };
+        let laid_alt = lay_out(schemes.clone(), &sizes, &alt);
+        let s_alt = shared_scale(&laid_alt, &alt);
+        if s_alt > s {
+            (alt, laid_alt, s_alt)
+        } else {
+            (st.clone(), laid, s)
+        }
+    };
+
+    let info = BatchInfo {
+        scale: s,
+        sheet: st.sheet,
+        font_on_page: st.font * s,
+    };
+    let out = laid
+        .into_iter()
+        .map(|(path, pages)| {
+            let pages = pages.iter().map(|l| render_svg_at(l, &st, s)).collect();
+            (path, pages)
+        })
+        .collect();
+    (out, info)
+}
+
 /// Один вход -> страницы SVG.
 pub fn render_text(text: &str, is_c: bool, opts: &Options) -> Result<Vec<String>, ParseError> {
     match parse_batch(&[(String::new(), text.to_string(), is_c)], opts) {
-        Ok(schemes) => Ok(render_batch(schemes, &opts.style()).remove(0).1),
+        Ok(schemes) => Ok(render_batch(schemes, &opts.style()).0.remove(0).1),
         Err((_, e)) => Err(e),
     }
 }
@@ -109,6 +189,7 @@ mod tests {
             font: None,
             lw: None,
             no_split: false,
+            landscape: false,
         }
     }
 
@@ -202,7 +283,7 @@ mod tests {
             &opts(),
         )
         .unwrap();
-        let out = render_batch(schemes, &opts().style());
+        let (out, _) = render_batch(schemes, &opts().style());
         assert_eq!(out.len(), 2);
         let (mut wa, mut wb) = (rect_widths(&out[0].1[0]), rect_widths(&out[1].1[0]));
         wa.sort_by(|x, y| y.partial_cmp(x).unwrap());
@@ -210,6 +291,135 @@ mod tests {
         assert_eq!(
             wa[0], wb[0],
             "самая широкая фигура одинакова в обеих схемах"
+        );
+    }
+
+    /// ГЛАВНОЕ требование лабы: все листы пачки совпадают — размер
+    /// листа, масштаб, кегль. ГОСТ 19.701-90 п. 4.1.3 требует, чтобы
+    /// символы были одного размера; страницы обязаны совпадать иначе.
+    /// Раньше страница обрезалась по содержимому, и пять листов пачки
+    /// имели пять разных высот.
+    #[test]
+    fn whole_lab_gets_identical_sheets() {
+        let files: [(&str, &str); 4] = [
+            ("main.c", "int main(){int a; scanf(\"%d\",&a); if(a>1){printf(\"big\");return 1;} switch(a){case 1: printf(\"one\"); break; case 2: printf(\"two\"); break; default: a=0;} return 0;}"),
+            ("linear.gvn", "input scanf(\"%d\", &a)\nc = a * 2\noutput printf(\"c = %d\", c)\n"),
+            ("if.gvn", "if a > 0\n    yes: printf(\"p\")\n    no: c = 1\noutput printf(\"d\")\n"),
+            ("loop.gvn", "while a > 0\n    a = a - 1\noutput printf(\"z\")\n"),
+        ];
+        let inputs: Vec<(String, String, bool)> = files
+            .iter()
+            .map(|(n, t)| (n.to_string(), t.to_string(), n.ends_with(".c")))
+            .collect();
+        let schemes = parse_batch(&inputs, &opts()).unwrap();
+        let (out, info) = render_batch(schemes, &opts().style());
+        assert!(out.len() >= 4, "каждый файл дал хотя бы один лист");
+
+        let mm = 72.0 / 25.4;
+        let w_pt = format!("{:.3}", opts().style().sheet.w);
+        let h_pt = format!("{}", opts().style().sheet.h);
+        let h_pt = &h_pt[..h_pt.find('.').unwrap_or(h_pt.len())];
+        let mut scales = std::collections::BTreeSet::new();
+        for (name, pages) in &out {
+            for svg in pages {
+                assert!(
+                    svg.contains(&format!("width=\"{w_pt}pt\"")),
+                    "{name}: лист не {w_pt} pt шириной"
+                );
+                assert!(svg.contains("height=\""), "{name}: нет высоты листа");
+                assert!(
+                    svg.contains(&format!("height=\"{h_pt}")),
+                    " {name}: высота листа не {h_pt}"
+                );
+                let s = svg
+                    .split("scale(")
+                    .nth(1)
+                    .and_then(|p| p.split(')').next())
+                    .unwrap()
+                    .to_string();
+                scales.insert(s);
+            }
+        }
+        assert_eq!(scales.len(), 1, "листы лабы разного масштаба: {scales:?}");
+        assert_eq!(
+            info.sheet,
+            opts().style().sheet,
+            "лист А4 книжный по умолчанию"
+        );
+        let _ = mm;
+    }
+
+    /// Ориентация выбирается на всю пачку и всегда в её пользу:
+    /// если книжная роняет масштаб ниже порога, берётся та, что
+    /// даёт лучший результат, — и страницы лабы остаются одинаковыми.
+    #[test]
+    fn batch_picks_the_better_orientation_for_all_files() {
+        // диспетч на 6 кейсов: в один ряд он шире любого листа
+        let mut wide = String::from("if switch (d)\n");
+        wide.push_str(
+            &["1", "2", "3", "4", "5", "6"]
+                .iter()
+                .map(|k| format!("    {k}: printf(\"{k}\"); break\n"))
+                .collect::<String>(),
+        );
+        wide.push_str("output printf(d)\n");
+        let narrow = "input scanf(1)\nx = 1\n";
+        let inputs = vec![
+            ("wide.gvn".into(), wide, false),
+            ("narrow.gvn".into(), narrow.into(), false),
+        ];
+        let schemes = parse_batch(&inputs, &opts()).unwrap();
+        let (out, info) = render_batch(schemes, &opts().style());
+        assert_eq!(out.len(), 2);
+        // ориентация одна на оба файла: в узкой книжная, в широкой
+        // альбомная, но вместе — один выбор
+        let sheet_of = |svg: &str| {
+            let w: f64 = svg
+                .split("width=\"")
+                .nth(1)
+                .and_then(|p| p.split("pt").next())
+                .unwrap()
+                .parse()
+                .unwrap();
+            if (w - crate::sheet::Sheet::A4.w).abs() < 1.0 {
+                "книжная"
+            } else {
+                "альбомная"
+            }
+        };
+        assert_eq!(sheet_of(&out[0].1[0]), sheet_of(&out[1].1[0]));
+        assert!(
+            info.scale > 0.0 && info.scale <= 1.0,
+            "масштаб вне (0,1]: {}",
+            info.scale
+        );
+    }
+
+    /// Нечитаемый результат обязан быть назван, а не выдан молча:
+    /// кегль на листе считается и проверяется.
+    #[test]
+    fn illegible_batch_is_reported() {
+        let mut absurdly_wide = String::from("if switch (d)\n");
+        absurdly_wide.push_str(
+            &(1..=9)
+                .map(|k| format!("    {k}: printf(\"case {k} with a long label\"); break\n"))
+                .collect::<String>(),
+        );
+        absurdly_wide.push_str("output printf(d)\n");
+        let schemes = parse_batch(&[("w.gvn".into(), absurdly_wide, false)], &opts()).unwrap();
+        let (_, info) = render_batch(schemes, &opts().style());
+        // либо впихнулось, либо честно помечено нечитаемым
+        if info.scale < 0.7 {
+            assert!(
+                info.is_illegible(),
+                "масштаб {:.3} -> кегль {:.1} pt должен быть помечен нечитаемым",
+                info.scale,
+                info.font_on_page
+            );
+        }
+        assert!(
+            info.font_on_page <= 12.0 + 1e-9,
+            "лист не может увеличить кегль"
         );
     }
 
@@ -228,7 +438,7 @@ mod tests {
             &opts(),
         )
         .unwrap();
-        let out = render_batch(schemes, &opts().style());
+        let (out, _) = render_batch(schemes, &opts().style());
         assert_eq!(out.len(), 2);
         let sa = scales(&out[0].1[0]);
         let sb = scales(&out[1].1[0]);

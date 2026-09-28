@@ -1,3 +1,5 @@
+use crate::sheet::Sheet;
+
 #[derive(Debug, Clone)]
 pub struct Style {
     pub font: f64,
@@ -27,12 +29,14 @@ pub struct Style {
     pub conn_r: f64,
     pub conn_step: f64,
     pub aspect: f64,
-    pub a4_w: f64,
-    pub a4_h: f64,
-    pub page_pad: f64,
+    /// лист документации: формат, поля, вписывание. Владеет всей
+    /// геометрией страницы; порезка и рендер спрашивают его.
+    pub sheet: Sheet,
+    /// порог читаемости: ниже этого масштаба лист режется, а не
+    /// сжимается. Не коэффициент вписывания — спрашивает sheet.
     pub split_scale: f64,
     /// не резать длинную схему на листы: один лист, вписывание в А4
-    /// выполняет общий масштаб пачки (fit_scale)
+    /// выполняет общий масштаб пачки (sheet::scale_for)
     pub no_split: bool,
     pub edge_lw: f64,
     pub label_dx: f64,
@@ -92,9 +96,7 @@ impl Style {
         conn_r: GRID,
         conn_step: GRID,
         aspect: 1.0,
-        a4_w: 468.0,
-        a4_h: 700.0,
-        page_pad: 14.0,
+        sheet: Sheet::A4,
         split_scale: 0.70,
         no_split: false,
         edge_lw: 1.0,
@@ -246,8 +248,23 @@ mod tests {
         assert!((s.pad_x - 24.0 * 1.5).abs() < 1e-9);
         assert!((s.pad_y - 24.0 * 1.17).abs() < 1e-9);
         assert!((s.edge_lw - 2.5).abs() < 1e-9);
-        // сетка и страница — от кегля не зависят
+        // сетка и лист — от кегля не зависят
         assert!((s.grid - 14.17).abs() < 1e-9);
-        assert!((s.a4_w - 468.0).abs() < 1e-9);
+        assert_eq!(s.sheet, crate::sheet::Sheet::A4);
+    }
+
+    /// Лист — А4 с полями ЕСКД. Раньше здесь стояли a4_w/a4_h/page_pad:
+    /// 468×700 pt не соответствовали ни формату А4, ни чему-либо ещё.
+    #[test]
+    fn sheet_is_a4_with_eskd_margins() {
+        let s = Style::default();
+        let sh = s.sheet;
+        let mm = 72.0 / 25.4;
+        assert!((sh.w / mm - 210.0).abs() < 1e-9, "лист 210 мм");
+        assert!((sh.h / mm - 297.0).abs() < 1e-9, "лист 297 мм");
+        assert!((sh.m_l / mm - 30.0).abs() < 1e-9, "левое поле 30 мм");
+        assert!((sh.m_r / mm - 10.0).abs() < 1e-9, "правое поле 10 мм");
+        assert!((sh.m_t / mm - 20.0).abs() < 1e-9, "верхнее поле 20 мм");
+        assert!((sh.m_b / mm - 20.0).abs() < 1e-9, "нижнее поле 20 мм");
     }
 }

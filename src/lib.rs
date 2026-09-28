@@ -9,6 +9,7 @@ pub mod generate;
 pub mod ir;
 pub mod layout;
 pub mod pipeline;
+pub mod sheet;
 pub mod style;
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
