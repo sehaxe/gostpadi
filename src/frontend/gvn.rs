@@ -60,11 +60,30 @@ fn wrap(text: &str, limit: usize) -> String {
             // после окна, а не по лимиту: жёсткий рез по limit терял
             // разделитель, и `a = long_name` склеивалось в
             // `a =long_name`, а `&month, &day` — в `&month,&day`.
-            let cut = chars[..limit]
-                .iter()
-                .rposition(|&c| c == ' ')
-                .filter(|&p| p > 0)
-                .unwrap_or_else(|| next_word_break(&chars, limit));
+            //
+            // Пробел сразу после оператора точкой переноса не служит:
+            // `a * b / 2` рвалось на `a *` / `b / 2`, оператор отрывался
+            // от правого операнда. В таком случае берём пробел перед ним.
+            // Запятая в список не входит: `foo(a,` / `b)` — нормальный
+            // перенос, и с неё уход назад рвал строковый литерал.
+            let cut = {
+                let mut p = chars[..limit]
+                    .iter()
+                    .rposition(|&c| c == ' ')
+                    .filter(|&p| p > 0);
+                while let Some(at) = p {
+                    let prev = at.checked_sub(1).map_or('\0', |k| chars[k]);
+                    let after_op = matches!(prev, '+' | '-' | '*' | '/' | '%' | '<' | '>' | '=');
+                    if !after_op {
+                        break;
+                    }
+                    p = chars[..at.saturating_sub(1)]
+                        .iter()
+                        .rposition(|&c| c == ' ')
+                        .filter(|&q| q > 0);
+                }
+                p.unwrap_or_else(|| next_word_break(&chars, limit))
+            };
             let left: String = chars[..cut].iter().collect();
             res.push(left.trim_end().to_string());
             let rest: String = chars[cut..].iter().collect();
@@ -639,6 +658,7 @@ pub fn parse(text: &str, style: &Style, labels: &str) -> Result<Vec<Node>, Parse
 mod tests {
     use super::*;
     use crate::ir::TileKind;
+    use crate::sheet::Sheet;
     use crate::style::Style;
 
     /// Граница типизации: строки .gvn превращаются в типизированный Stmt
@@ -817,6 +837,63 @@ mod tests {
             .unwrap();
         let labels: Vec<&str> = sw.branches.iter().map(|b| b.label.as_str()).collect();
         assert_eq!(labels, vec!["x = caseless", "x = CASE 7", "x = 8"]);
+    }
+
+    /// Перенос не отрывает бинарный оператор от правого операнда:
+    /// `a * b / 2` не должно рваться на `a *` / `b / 2`. И не рвёт
+    /// строковый литерал — уход с запятой обратно это делал.
+    #[test]
+    fn wrap_keeps_operator_with_its_operand() {
+        let w = wrap("printf(\"Площадь: %.2f\\n\", a * b / 2)", 30);
+        let lines: Vec<&str> = w.lines().collect();
+        assert!(lines.len() >= 2, "{w:?}");
+        assert!(
+            !lines[0].trim_end().ends_with('*'),
+            "оператор не должен оставаться в конце строки: {w:?}"
+        );
+        assert!(
+            lines[1].starts_with("* b"),
+            "оператор идёт со своим операндом: {w:?}"
+        );
+
+        // строковый литерал остаётся целым
+        let w2 = wrap("if (scanf(\"%f %f\", &a, &b) != 2 || a <= 0)", 22);
+        assert!(
+            w2.contains("\"%f %f\""),
+            "форматная строка не должна рваться: {w2:?}"
+        );
+    }
+
+    /// Главная ось схемы (x = 0 в раскладке) встаёт по центру листа, а не
+    /// габарит: при широкой «да»-ветке ствол уезжал вбок.
+    #[test]
+    fn sheet_centres_the_main_axis_not_the_bounding_box() {
+        let s = Sheet::A4;
+        // содержимое асимметрично: широкая левая ветка
+        let bounds = (-200.0, 0.0, 240.0, 300.0);
+        let sc = 0.8;
+        let (tx, _) = s.origin(bounds, sc);
+        let axis_on_page = tx; // точка x=0 раскладки попадает сюда
+        let centre = (s.m_l + s.w - s.m_r) / 2.0;
+        assert!(
+            (axis_on_page - centre).abs() < 1e-6,
+            "ось {axis_on_page} должна быть в центре зоны {centre}"
+        );
+    }
+
+    /// ...но если содержимое почти во всю ширину зоны, ось в центр не
+    /// влезает — приоритет у полей, иначе ветка уедет за лист.
+    #[test]
+    fn sheet_keeps_content_inside_when_axis_cannot_centre() {
+        let s = Sheet::A4;
+        let sc = 0.8;
+        let w = s.text_w() / sc; // ровно во всю зону
+        let bounds = (-w * 0.8, 0.0, w, 300.0);
+        let (tx, _) = s.origin(bounds, sc);
+        let left = tx + bounds.0 * sc;
+        let right = tx + (bounds.0 + bounds.2) * sc;
+        assert!(left >= s.m_l - 1e-6, "левое поле: {left}");
+        assert!(right <= s.w - s.m_r + 1e-6, "правое поле: {right}");
     }
 
     #[test]
