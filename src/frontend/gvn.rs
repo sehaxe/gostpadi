@@ -262,6 +262,19 @@ fn find_branch_colon(s: &str) -> Option<usize> {
     None
 }
 
+/// Строка `метка -> end: текст` — управляющая конструкция: именно так
+/// её понимает `decision`, разбирая ветки if/switch. В теле цикла
+/// меток веток нет, `block` читал тело как плоский список утверждений,
+/// и такая строка уезжала в `stmt_from_line` — на схеме появлялся
+/// прямоугольник с ЛИТЕРАЛЬНЫМ текстом `stop -> end: printf("выход")`.
+/// Схема врала, и врала молча. Ловим явно.
+fn is_to_end_branch_line(s: &str) -> bool {
+    let Some(i) = find_branch_colon(s) else {
+        return false;
+    };
+    strip_arrow_end(&s[..i]).is_some() || s[i + 1..].trim_end().ends_with("-> end")
+}
+
 fn strip_arrow_end(label: &str) -> Option<String> {
     let t = label.trim();
     if !t.ends_with("end") {
@@ -349,6 +362,13 @@ impl<'a> Parser<'a> {
             } else if starts_with_while_or_for(&s) {
                 let node = self.cycle(s, ln, indent)?;
                 items.push(Stmt::Node(Box::new(node)));
+            } else if is_to_end_branch_line(&s) {
+                return Err(ParseError::new(
+                    "«метка -> end» в теле цикла не поддерживается: \
+                     метки веток читаются только в ветках if/switch",
+                )
+                .with_line(ln)
+                .with_src(line_str));
             } else {
                 items.push(stmt_from_line(s));
             }
@@ -894,6 +914,33 @@ mod tests {
         let right = tx + (bounds.0 + bounds.2) * sc;
         assert!(left >= s.m_l - 1e-6, "левое поле: {left}");
         assert!(right <= s.w - s.m_r + 1e-6, "правое поле: {right}");
+    }
+
+    /// `метка -> end` в теле цикла — явная ошибка, а не тихая порча:
+    /// раньше строка уезжала в `stmt_from_line` и рисовалась
+    /// прямоугольником с буквальным текстом `stop -> end: printf(...)`.
+    #[test]
+    fn to_end_label_in_loop_body_is_rejected_not_drawn() {
+        let src = "input scanf(\"%d\", &a)\nwhile a > 0\n    stop -> end: printf(\"выход\")\n    next: a = a - 1\noutput printf(\"%d\", a)";
+        let e = parse(src, &Style::DEFAULT, "ru").expect_err("должен быть отказ");
+        assert!(
+            e.msg.contains("в теле цикла"),
+            "сообщение должно называть проблему: {e:?}"
+        );
+    }
+
+    /// ...а та же строка в ветке if/switch разбирается как ветка.
+    #[test]
+    fn to_end_label_still_works_in_if_branch() {
+        let src = "if a > 0\n    no -> end: printf(\"нет\")\n    yes: printf(\"да\")";
+        let d = parse(src, &Style::DEFAULT, "ru").expect("ветка должна разобраться");
+        assert!(
+            d.iter()
+                .filter(|n| n.kind == NodeKind::Decision)
+                .flat_map(|n| &n.branches)
+                .any(|b| b.to_end && b.label == "no"),
+            "ветка no должна нести to_end: {d:?}"
+        );
     }
 
     #[test]
