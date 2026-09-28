@@ -60,7 +60,7 @@ fn split_statements(text: &str) -> Vec<String> {
     while i < n {
         let ch = chars[i];
         if ch == '"' {
-            let prev_is_bs = cur.chars().last() == Some('\\');
+            let prev_is_bs = cur.ends_with('\\');
             if !prev_is_bs {
                 in_str = !in_str;
             }
@@ -302,7 +302,7 @@ impl<'a> Parser<'a> {
     }
 
     fn decision(&mut self, s: String, lineno: usize, indent: usize) -> Result<Node, ParseError> {
-        let kw_end = s.find(|c| c == '(' || c == ' ').unwrap_or(s.len());
+        let kw_end = s.find(['(', ' ']).unwrap_or(s.len());
         let kw = s[..kw_end].to_string();
         let rest = s.strip_prefix(&kw).unwrap_or(&s).trim().to_string();
         let cond_raw = if kw == "switch" {
@@ -424,7 +424,6 @@ impl<'a> Parser<'a> {
 
         let mut nd = Node::new(NodeKind::Decision, cond.clone());
         nd.branches = branches;
-        nd.lang = self.labels.clone();
         if cond.starts_with("switch") {
             nd.switch_var = extract_switch_var(&cond);
         }
@@ -432,7 +431,7 @@ impl<'a> Parser<'a> {
     }
 
     fn cycle(&mut self, s: String, _lineno: usize, indent: usize) -> Result<Node, ParseError> {
-        let kw_end = s.find(|c| c == '(' || c == ' ').unwrap_or(s.len());
+        let kw_end = s.find(['(', ' ']).unwrap_or(s.len());
         let kw = s[..kw_end].to_string();
         let mut rest = s.strip_prefix(&kw).unwrap_or(&s).trim().to_string();
         if rest.starts_with('(') && rest.ends_with(')') && rest.len() >= 2 {
@@ -446,7 +445,6 @@ impl<'a> Parser<'a> {
         };
         let mut nd = Node::new(NodeKind::Loop, text);
         nd.loop_kind = loop_kind;
-        nd.lang = self.labels.clone();
 
         if let Some((_, top_line)) = self.peek() {
             let ind = indent_of(top_line);

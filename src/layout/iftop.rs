@@ -212,7 +212,7 @@ impl Ctx<'_> {
             }
         }
         let cursor = merge_y.max(col_bottom).max(link_bottom);
-        self.anchors.push(Anchor { x: 0.0, y: cursor });
+        self.anchors.push(Anchor { y: cursor });
         (Some((0.0, merge_y)), cursor)
     }
 
@@ -401,7 +401,7 @@ impl Ctx<'_> {
             );
         }
         let cursor = merge_y.max(col_bottom).max(link_bottom);
-        self.anchors.push(Anchor { x: 0.0, y: cursor });
+        self.anchors.push(Anchor { y: cursor });
         (Some((0.0, merge_y)), cursor)
     }
 
@@ -565,7 +565,7 @@ impl Ctx<'_> {
         // горизонталь не рисует — её накрывает шина
         let has_rail = tail.stmts.is_empty();
         if has_rail {
-            let left = k % 2 == 0;
+            let left = k.is_multiple_of(2);
             let sgn: f64 = if left { -1.0 } else { 1.0 };
             let clear = exits
                 .iter()
@@ -598,7 +598,7 @@ impl Ctx<'_> {
             self.edge(&[(0.0, y_b_last), (0.0, merge_y)], false);
         }
         let cursor = merge_y.max(col_bottom).max(link_bottom);
-        self.anchors.push(Anchor { x: 0.0, y: cursor });
+        self.anchors.push(Anchor { y: cursor });
         (Some((0.0, merge_y)), cursor)
     }
 }

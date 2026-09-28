@@ -18,7 +18,7 @@ impl Ctx<'_> {
             self.edge(&[p, (0.0, cursor + self.st.vgap)], true);
         }
         let (merge, _) = self.sub_loop(nd, 0.0, cursor + self.st.vgap);
-        self.anchors.push(Anchor { x: 0.0, y: merge });
+        self.anchors.push(Anchor { y: merge });
         (Some((0.0, merge)), merge)
     }
 

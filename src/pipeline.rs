@@ -36,12 +36,15 @@ fn to_nodes(text: &str, is_c: bool, opts: &Options, st: &Style) -> Result<Vec<No
     parse(&gvn, st, &opts.labels)
 }
 
+/// Разобранная схема: путь входа и её узлы.
+pub type Scheme = (String, Vec<Node>);
+
 /// Пачка входов (путь, текст, это C?) -> (путь, узлы).
 /// Ошибка разбора возвращается вместе с путём входа.
 pub fn parse_batch(
     inputs: &[(String, String, bool)],
     opts: &Options,
-) -> Result<Vec<(String, Vec<Node>)>, (String, ParseError)> {
+) -> Result<Vec<Scheme>, (String, ParseError)> {
     let st = opts.style();
     let mut out = Vec::with_capacity(inputs.len());
     for (path, text, is_c) in inputs {

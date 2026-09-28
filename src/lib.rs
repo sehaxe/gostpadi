@@ -1,11 +1,13 @@
 #![cfg_attr(not(target_arch = "wasm32"), forbid(unsafe_code))]
-#![allow(clippy::all, clippy::pedantic, clippy::nursery)]
+// pedantic/nursery — вкусовые группы, их выключаем осознанно.
+// `clippy::all` (корректность, подозрительное, сложность, скорость) НЕ
+// выключаем: иначе `cargo clippy -- -D warnings` в CI ничего не проверяет.
+#![allow(clippy::pedantic, clippy::nursery)]
 pub mod error;
 pub mod frontend;
 pub mod generate;
 pub mod ir;
 pub mod layout;
-pub mod linter;
 pub mod pipeline;
 pub mod style;
 #[cfg(target_arch = "wasm32")]

@@ -39,8 +39,6 @@ pub struct Style {
     pub label_dy: f64,
     pub label_exit_dx: f64,
     pub label_axis_dx: f64,
-    pub vertex_label_dy: f64,
-    pub label_gap: f64,
     pub letters: &'static str,
     pub io_words: &'static [&'static str],
 }
@@ -61,8 +59,6 @@ const TERM_PAD_V_RATE: f64 = 16.0 / 12.0; // высота капсулы све�
 const TERM_PAD_H_RATE: f64 = 22.0 / 12.0; // ширина капсулы сверх текста
 const LINE_SLACK_RATE: f64 = 4.0 / 12.0; // подрезка высоты блока
 const LABEL_DY_RATE: f64 = 1.0; // подпись над точкой: базовая линия
-const VERTEX_LABEL_DY_RATE: f64 = 11.0 / 12.0;
-const LABEL_GAP_RATE: f64 = 16.0 / 12.0;
 
 /// Модульная сетка 5 мм (b = 2a, ГОСТ 19.701-90) при font = 12 pt.
 /// Все зазоры задаются целыми долями сетки, без литералов вида 14.2.
@@ -106,8 +102,6 @@ impl Style {
         label_dy: 12.0,
         label_exit_dx: 2.0 * GRID,
         label_axis_dx: 14.0,
-        vertex_label_dy: 11.0,
-        label_gap: 16.0,
         letters: "АБВГДЕЖЗИКЛМНОПРСТУФХЦЧШЭЮЯ",
         io_words: IO_WORDS,
     };
@@ -129,8 +123,6 @@ impl Style {
         s.term_pad_h = font * TERM_PAD_H_RATE;
         s.line_slack = font * LINE_SLACK_RATE;
         s.label_dy = font * LABEL_DY_RATE;
-        s.vertex_label_dy = font * VERTEX_LABEL_DY_RATE;
-        s.label_gap = font * LABEL_GAP_RATE;
         // зазоры кратны модульной сетке (см. GRID)
         s.vgap = 3.0 * s.grid;
         s.hgap = 2.0 * s.grid;
@@ -241,8 +233,6 @@ mod tests {
             (d.term_pad_h, m.term_pad_h),
             (d.line_slack, m.line_slack),
             (d.label_dy, m.label_dy),
-            (d.vertex_label_dy, m.vertex_label_dy),
-            (d.label_gap, m.label_gap),
         ] {
             assert!((a - b).abs() < 1e-9, "{a} != {b}");
         }

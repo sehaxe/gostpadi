@@ -219,7 +219,6 @@ impl<'a> Ctx<'a> {
                     shorten_calls(&expr_text(self.src, &w.node.expression)),
                 );
                 nd.loop_kind = Some(LoopKind::While);
-                nd.lang = self.labels.to_string();
                 nd.body = Some(self.block_stmt(&w.node.statement)?);
                 Ok(vec![Stmt::Node(Box::new(nd))])
             }
@@ -259,7 +258,6 @@ impl<'a> Ctx<'a> {
                     .unwrap_or_default();
                 let mut nd = Node::new(NodeKind::Loop, format!("{}; {}; {}", init, cond, step));
                 nd.loop_kind = Some(LoopKind::For);
-                nd.lang = self.labels.to_string();
                 nd.body = Some(self.block_stmt(&f.node.statement)?);
                 Ok(vec![Stmt::Node(Box::new(nd))])
             }
@@ -322,7 +320,6 @@ impl<'a> Ctx<'a> {
                 shorten_calls(&expr_text(self.src, i.node.condition.as_ref()))
             ),
         );
-        nd.lang = self.labels.to_string();
         let no_stmts = match &i.node.else_statement {
             Some(e) => self.block_stmt(e)?,
             None => Vec::new(),
@@ -347,7 +344,6 @@ impl<'a> Ctx<'a> {
     fn switch_node(&self, s: &LangNode<SwitchStatement>) -> Result<Node, ParseError> {
         let var = expr_text(self.src, &s.node.expression);
         let mut nd = Node::new(NodeKind::Decision, format!("switch ({})", var));
-        nd.lang = self.labels.to_string();
         nd.switch_var = Some(var.clone());
         let items = match &s.node.statement.node {
             Statement::Compound(items) => items,
@@ -385,6 +381,8 @@ impl<'a> Ctx<'a> {
         branches: &mut Vec<Branch>,
         s: &LangNode<SwitchStatement>,
     ) -> Result<(), ParseError> {
+        // Vec, а не срез: switch_item дописывает новые ветки, а не только
+        // продлевает последнюю — срез не даст push.
         if !matches!(&st.node, Statement::Labeled(_)) {
             let stmts = self.stmt(st)?;
             return switch_extend_last(branches, stmts, || {
@@ -395,32 +393,25 @@ impl<'a> Ctx<'a> {
         // тело, предыдущие остаются пустыми ветками (алиасами)
         let mut labs: Vec<String> = Vec::new();
         let mut cur = st;
-        loop {
-            match &cur.node {
-                Statement::Labeled(l) => {
-                    let chained = match &l.node.label.node {
-                        Label::Case(e) => {
-                            labs.push(format!("{} = {}", var, expr_text(self.src, e.as_ref())));
-                            true
-                        }
-                        Label::Default => {
-                            labs.push("default".to_string());
-                            true
-                        }
-                        Label::CaseRange(_) => {
-                            return Err(
-                                self.err("диапазон case «a ... b» не поддерживается", l.span.start)
-                            )
-                        }
-                        Label::Identifier(_) => false,
-                    };
-                    if !chained {
-                        break;
-                    }
-                    cur = l.node.statement.as_ref();
+        while let Statement::Labeled(l) = &cur.node {
+            let chained = match &l.node.label.node {
+                Label::Case(e) => {
+                    labs.push(format!("{} = {}", var, expr_text(self.src, e.as_ref())));
+                    true
                 }
-                _ => break,
+                Label::Default => {
+                    labs.push("default".to_string());
+                    true
+                }
+                Label::CaseRange(_) => {
+                    return Err(self.err("диапазон case «a ... b» не поддерживается", l.span.start));
+                }
+                Label::Identifier(_) => false,
+            };
+            if !chained {
+                break;
             }
+            cur = l.node.statement.as_ref();
         }
         if labs.is_empty() {
             // goto-метка внутри switch — обычная инструкция
@@ -449,8 +440,10 @@ impl<'a> Ctx<'a> {
     }
 }
 
+/// Продлить содержимое последней ветки switch; пустой список — ошибка.
+/// Срез здесь и достаточен: функция ничего не добавляет.
 fn switch_extend_last(
-    branches: &mut Vec<Branch>,
+    branches: &mut [Branch],
     stmts: Vec<Stmt>,
     err: impl FnOnce() -> ParseError,
 ) -> Result<(), ParseError> {
@@ -526,9 +519,9 @@ fn strip_comments(src: &str) -> String {
                     n
                 }
             };
-            for k in i..j {
+            for c in &chars[i..j] {
                 // \n сохраняем: иначе номера строк ошибок съезжают
-                out.push(if chars[k] == '\n' { '\n' } else { ' ' });
+                out.push(if *c == '\n' { '\n' } else { ' ' });
             }
             i = j;
             continue;
@@ -732,8 +725,6 @@ fn abbrev_stmt(s: &str) -> String {
     }
     s.to_string()
 }
-
-/// инструкция return (в ветке — тупик)
 
 fn syntax_err(e: SyntaxError, orig: &str) -> ParseError {
     let mut exp: Vec<&str> = e.expected.iter().copied().collect();

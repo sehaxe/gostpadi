@@ -54,7 +54,6 @@ pub struct Node {
     pub branches: Vec<Branch>,
     pub body: Option<Vec<Stmt>>,
     pub loop_kind: Option<LoopKind>,
-    pub lang: String,
     pub switch_var: Option<String>,
 }
 
@@ -85,7 +84,6 @@ impl Node {
             branches: Vec::new(),
             body: None,
             loop_kind: None,
-            lang: "en".to_string(),
             switch_var: None,
         }
     }

@@ -161,10 +161,7 @@ impl Ctx<'_> {
             (Some(p), None) => self.edge(&[p, (0.0, cy - h / 2.0)], true),
             _ => {}
         }
-        self.anchors.push(super::Anchor {
-            x: 0.0,
-            y: cy + h / 2.0,
-        });
+        self.anchors.push(super::Anchor { y: cy + h / 2.0 });
         ((0.0, cy + h / 2.0), cy + h / 2.0, i)
     }
 }

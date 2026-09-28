@@ -24,10 +24,13 @@ pub fn split_scheme(mut items: Vec<Node>, sizes: &Sizes, st: &Style) -> Vec<Vec<
         }
         let limit = (st.a4_h - 2.0 * st.page_pad) * CUT_SEARCH_FRAC;
         let mut cut = None;
-        for j in 2..items.len().saturating_sub(2) {
+        // точки реза: 2..len-2 (как раньше) — take до, skip после,
+        // чтобы saturating_sub не дал underflow на пустой схеме
+        let end = items.len().saturating_sub(2);
+        for (j, item) in items.iter().enumerate().take(end).skip(2) {
             // резать можно перед простым блоком, «если» или циклом
             if !matches!(
-                items[j].kind,
+                item.kind,
                 NodeKind::Act | NodeKind::Io | NodeKind::Decision | NodeKind::Loop
             ) {
                 continue;

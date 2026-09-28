@@ -63,7 +63,7 @@ pub fn layout(nodes: &[Node], sizes: &Sizes, st: &Style) -> Layout {
             _ => {
                 if nd.kind == NodeKind::Conn && leads_to_end(nodes, idx) {
                     c.inbound.push(nd.text.clone());
-                    c.anchors.push(Anchor { x: 0.0, y: cursor });
+                    c.anchors.push(Anchor { y: cursor });
                     continue;
                 }
                 let pend_here = idx == last && !c.pend.is_empty();
