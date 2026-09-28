@@ -27,7 +27,7 @@ pub(super) fn extent(sizes: &Sizes, st: &Style, colw: f64, items: &[Stmt]) -> f6
                 .map(|b| extent(sizes, st, colw, &b.stmts))
                 .fold(colw / 2.0, f64::max);
             let n = ne.len();
-            let tiers = n.saturating_sub(1) / 2;
+            let tiers = super::ifnode::max_tier(n);
             let pitch2 = 2.0 * sub + st.colgap;
             he = he
                 .max(dw2 / 2.0 + st.hgap + sub + tiers as f64 * pitch2)

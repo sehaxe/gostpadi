@@ -8,6 +8,26 @@ use super::types::{Anchor, Label};
 use crate::ir::{Branch, Node, NodeKind, Stmt};
 
 impl Ctx<'_> {
+    /// Помещается ли шина диспетча (все кейсы в один ряд) в лист
+    /// читаемо, то есть без ухода масштаба листа ниже порога.
+    ///
+    /// Шина раскладывает кейсы ярусами от оси (`build_plan`): кейс
+    /// яруса `t` стоит на расстоянии `base + t * pitch`, а сам ряд
+    /// занимает `nhe` в каждую сторону. Порог — не «влезает при
+    /// масштабе 1.0», а «влезает не хуже, чем режет порезка»: иначе
+    /// три кейса, которым не хватало трёх процентов, уезжали в сетку
+    /// и читались хуже, чем на шине.
+    fn bus_fits(&self, cases: usize) -> bool {
+        if cases < 2 {
+            return true;
+        }
+        let dw = self.sizes["if"].0;
+        let pitch = 2.0 * self.nhe + self.st.colgap;
+        let base = dw / 2.0 + self.st.hgap + self.nhe;
+        let half = base + super::ifnode::max_tier(cases) as f64 * pitch + self.nhe;
+        2.0 * half <= self.st.sheet.text_w() / self.st.split_scale
+    }
+
     /// Ромб «если»/переключатель на основной линии.
     pub(super) fn decision_top(
         &mut self,
@@ -18,9 +38,14 @@ impl Ctx<'_> {
         if matches!(cascade_cols(nd), Some((k, _)) if k >= 2) {
             return self.decision_cascade(nd, prev, cursor);
         }
-        // большой переключатель: кейсы сеткой, по два на ряд
+        // Диспетч: кейсы либо на одной шине (bus), либо сеткой по два
+        // на ряд. Выбор — по ширине, а не по числу кейсов: шина растёт
+        // линейно, и при 4 кейсах она оказывалась ШИРЕ, чем сетка при
+        // 5 (808 pt против 496 pt), то есть четыре кейса читались хуже
+        // пяти, а порог «5+» этого не замечал. Решает лист: если шина
+        // не помещается в текстовую зону, кладём кейсы сеткой.
         let n_ne = nd.branches.iter().filter(|b| !b.stmts.is_empty()).count();
-        if nd.switch_var.is_some() && n_ne >= 5 {
+        if nd.switch_var.is_some() && n_ne >= 2 && !self.bus_fits(n_ne) {
             return self.switch_rows(nd, prev, cursor);
         }
         let (dw, dh) = self.sizes["if"];

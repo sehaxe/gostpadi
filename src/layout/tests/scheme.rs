@@ -1154,40 +1154,106 @@ output printf(d)
     assert!(single_entry_ok(&l));
 }
 
-/// Четыре кейса — ещё одна шина (как на доске), не сетка: все четыре
-/// кейса на одном верхнем ряду, на ±base и ±(base + pitch).
+/// ЧЕТЫРЕ кейса идут сеткой, а не шиной — и это не «5+», а ширина.
+///
+/// Шина растёт линейно: 4 кейса = два яруса от оси, и она выходила
+/// 808 pt, на 63% шире сетки при пяти кейсах (496 pt). На А4 (текстовая
+/// зона 481.9 pt) четыре кейса на шине ужимали лист до 0.60 и кегля
+/// 7 pt, а сетка даёт 0.98 и 12 pt. Прежний порог «5+» делал четыре
+/// кейса хуже пяти; этот тест фиксировал именно то.
 #[test]
-fn switch_four_cases_stay_single_bus() {
+fn switch_four_cases_use_grid_because_bus_is_too_wide() {
     let st = Style::default();
-    let text = "\
-if switch (d)
-    1: printf(\"один\"); break
-    2: printf(\"два\"); break
-    3: printf(\"три\"); break
-    4: printf(\"четыре\"); break
-output printf(d)
-";
-    let nodes = crate::frontend::gvn::parse(text, &st, "").unwrap();
+    let text = dispatch(4);
+    let nodes = crate::frontend::gvn::parse(&text, &st, "").unwrap();
     let sizes = normalize(&nodes, &st);
     let l = layout(&nodes, &sizes, &st);
     let nhe = super::nhe_of(&sizes, &nodes, &st);
     let dsh = l.shapes.iter().find(|s| s.kind == "if").unwrap();
-    let base = dsh.w / 2.0 + st.hgap + nhe;
     let pitch = 2.0 * nhe + st.colgap;
-    let want = [-base - pitch, -base, base, base + pitch];
-    let mut got: Vec<f64> = l
-        .shapes
-        .iter()
-        .filter(|s| s.kind == "io" && s.cx != 0.0)
-        .map(|s| s.cx)
-        .collect();
-    got.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    for (g, w) in got.iter().zip(want.iter()) {
-        assert!((g - w).abs() < 1e-9, "cx {g}, ожидалось {w}");
-    }
+    let base = dsh.w / 2.0 + st.hgap + nhe;
+
+    assert_eq!(
+        rows_of_cases(&l),
+        2,
+        "четыре кейса — два ряда сетки, не один ряд шины"
+    );
+
+    // шина была бы шире порога читаемости, иначе правило решило бы
+    // в пользу шины и тест не проверял бы ничего
+    let bus_w = 2.0 * (base + pitch + nhe);
+    assert!(
+        bus_w > st.sheet.text_w() / st.split_scale,
+        "шина 4 кейсов ({bus_w:.0} pt) должна быть шире порога читаемости ({:.0} pt)",
+        st.sheet.text_w() / st.split_scale
+    );
+
+    let (_, _, w, h) = l.bounds;
+    let s = st.sheet.scale_for(w, h);
+    assert!(
+        s >= st.split_scale,
+        "масштаб {s:.3} ниже порога {}: схема обязана быть читаемой",
+        st.split_scale
+    );
     assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
     assert!(overlaps_ok(&l.shapes));
     assert!(single_entry_ok(&l));
+}
+
+/// Три кейса остаются на шине: шина трёх кейсов — один ярус, и она
+/// читаема. Порог «влезает при масштабе 1.0» увёл бы их в сетку
+/// на ровном месте, где читать хуже.
+#[test]
+fn switch_three_cases_stay_on_bus() {
+    let st = Style::default();
+    let text = dispatch(3);
+    let nodes = crate::frontend::gvn::parse(&text, &st, "").unwrap();
+    let sizes = normalize(&nodes, &st);
+    let l = layout(&nodes, &sizes, &st);
+    assert_eq!(rows_of_cases(&l), 1, "три кейса — одна шина, сетка лишняя");
+    assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
+}
+
+/// Пять кейсов — тоже сетка, но по другой причине: два яруса, и шина
+/// была бы такой же широкой, как при четырёх.
+#[test]
+fn switch_five_cases_use_grid() {
+    let st = Style::default();
+    let text = dispatch(5);
+    let nodes = crate::frontend::gvn::parse(&text, &st, "").unwrap();
+    let sizes = normalize(&nodes, &st);
+    let l = layout(&nodes, &sizes, &st);
+    assert_eq!(rows_of_cases(&l), 3, "пять кейсов — три ряда сетки");
+    assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
+}
+
+/// Сколько рядов заняли кейсы диспетча: одна шина — один ряд,
+/// сетка по два на ряд — несколько. Ряд опознаём по ВЕРХНЕЙ кромке:
+/// плитки в ряду могут быть разной высоты (разная длина текста), и по
+/// центру они разъезжаются, хотя стоят на одной линии.
+///
+/// Считает ВСЕ плитки ввода-вывода, поэтому тестовые схемы не должны
+/// заканчиваться ещё одной `output`-плиткой — иначе она добавит ряд.
+fn rows_of_cases(l: &Layout) -> usize {
+    let mut tops: Vec<f64> = l
+        .shapes
+        .iter()
+        .filter(|s| s.kind == "io")
+        .map(|s| s.cy - s.h / 2.0)
+        .collect();
+    tops.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    tops.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
+    tops.len()
+}
+
+/// Схема-диспетч из `cases` кейсов без завершающей плитки: в
+/// rows_of_cases попадают только кейсы.
+fn dispatch(cases: usize) -> String {
+    let mut t = String::from("if switch (d)\n");
+    for k in 1..=cases {
+        t.push_str(&format!("    {k}: printf(\"кейс {k}\"); break\n"));
+    }
+    t
 }
 
 /// Рельса пустой ветки не разлетается за широкой левой колонкой:

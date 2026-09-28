@@ -67,12 +67,15 @@ impl<'a> Ctx<'a> {
             match scan.kind {
                 NodeKind::Decision => {
                     let m = scan.branches.iter().filter(|b| !b.stmts.is_empty()).count();
-                    max_tier = max_tier.max(m.saturating_sub(1) / 2);
+                    // формула ярусов одна — ifnode::max_tier; раньше здесь
+                    // была вторая копия, и на нечётном числе веток она
+                    // резервировала лишний ярус под рельсы
+                    max_tier = max_tier.max(super::ifnode::max_tier(m));
                     match super::ifnode::cascade_cols(scan) {
                         Some((k, c)) if k >= 2 => {
                             // ярусы каскада: рельсы «-> конец» обязаны
                             // обходить его внешние колонки
-                            max_tier = max_tier.max(c.saturating_sub(1) / 2);
+                            max_tier = max_tier.max(super::ifnode::max_tier(c));
                             // колонки каскада: да-звенья и хвост; «нет»-ветка
                             // с вложенным ромбом не рендерится как колонка
                             // и nhe не раздувает
