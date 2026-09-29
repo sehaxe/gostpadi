@@ -84,6 +84,23 @@ fn wrap(text: &str, limit: usize) -> String {
                 }
                 p.unwrap_or_else(|| next_word_break(&chars, limit))
             };
+            // Вдова: разрез по первому пробелу оставлял на строке одно
+            // слово. `if (vvedi("Vvedite chislo A: ", &a) != 1)` начинался
+            // со строки `if` — блок в две строки, из которых первая
+            // ничего не говорила. Если слева осталось меньше четверти
+            // окна, а дальше есть ещё пробел, режем по следующему.
+            let cut = if cut * 4 < limit {
+                match chars[cut + 1..]
+                    .iter()
+                    .position(|&c| c == ' ')
+                    .map(|p| p + cut + 1)
+                {
+                    Some(next) => next,
+                    None => cut,
+                }
+            } else {
+                cut
+            };
             let left: String = chars[..cut].iter().collect();
             res.push(left.trim_end().to_string());
             let rest: String = chars[cut..].iter().collect();
@@ -890,6 +907,25 @@ mod tests {
         assert!(
             w2.contains("\"%f %f\""),
             "форматная строка не должна рваться: {w2:?}"
+        );
+    }
+
+    /// Перенос не оставляет строку-вдову: разрез по первому пробелу
+    /// оставлял на строке одно слово, и блок начинался словом, которое
+    /// ничего не сообщает. Первая строка наполняется следующим словом.
+    #[test]
+    fn wrap_does_not_leave_a_widow_first_line() {
+        // короткий префикс перед длинным вызовом: при разрезе по первому
+        // пробелу на первой строке остаётся ровно `x =`
+        let wrapped = wrap(
+            "x = aaaaaaaaaaaaaaaa + bbbbbbbbbbbbbbbb + cccccccccccccccc",
+            20,
+        );
+        let lines: Vec<&str> = wrapped.lines().collect();
+        assert!(lines.len() > 1, "{wrapped:?}");
+        assert!(
+            lines[0].chars().count() > 2,
+            "первая строка — вдова: {lines:?}"
         );
     }
 

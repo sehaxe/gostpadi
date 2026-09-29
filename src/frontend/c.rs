@@ -777,12 +777,72 @@ fn ellipsize(s: &str, budget: usize) -> String {
     out
 }
 
-/// scanf("%d", &month) -> scanf(..., &month): форматная строка в условии —
-/// шум, а переменная, в которую идёт ввод, — нет. Раньше отбрасывался
-/// весь список аргументов, и две разные переменные давали одинаковый
-/// `scanf(...)`.
+/// Список аргументов вызова в условии: умещаем в `BUDGET`, ни одной
+/// переменной не выбрасывая.
+///
+/// Что режется — решает ХВОСТ, а не голова. У `scanf` хвост это адреса
+/// (`&radius, &chek, 1`): смысл там, голова — форматный шум, и режется
+/// он целиком. У `vvedi("Vvedite chislo A: ", &a)` смысл в строке, и три
+/// вызова с разными подсказками обязаны остаться разными — иначе схема
+/// не говорит, что увидит пользователь (инвариант коммита 0c6cc78).
+///
+/// Старый `ellipsize` резал середину и ронял переменную:
+/// `scanf_s("%lf%c", &radius, &chek, 1)` -> `scanf_s("%lf%c",...&chek, 1)`,
+/// то есть по схеме читалось, будто `radius` не читается. Умолчание о
+/// выброшенной переменной хуже переноса: перенос читается, а потеря
+/// переменной — нет.
+/// Строковый литерал ужимается ВНУТРИ кавычек. `ellipsize` режет
+/// середину строки, и на литерале `"\"xxxxxxx\", %d"` он давал
+/// `"\"xx..., %d"` — нечётное число кавычек, оборванный литерал и
+/// потерянный следом аргумент. Тот же приём, что в `abbrev_stmt`.
+fn shorten_literal(lit: &str, budget: usize) -> String {
+    let Some(inner) = lit.strip_prefix('"').and_then(|s| s.strip_suffix('"')) else {
+        return ellipsize(lit, budget);
+    };
+    if inner.chars().count() <= budget {
+        return lit.to_string();
+    }
+    format!("\"{}\"", ellipsize(inner, budget))
+}
+
+fn shorten_args(args: &str) -> String {
+    const BUDGET: usize = 20;
+    if args.chars().count() <= BUDGET {
+        return args.to_string();
+    }
+    // конец литерала ищем по символам, а не поиском подстроки: внутри
+    // формата встречается экранированная кавычка (`"%d\"x", %d"`), и
+    // `find("\", ")` цеплялся за неё — на схему попадал обрывок
+    // формата вроде `%d",`. Тот же обход, что в call_close.
+    let chars: Vec<char> = args.chars().collect();
+    let mut i = 1;
+    while i < chars.len() {
+        match chars[i] {
+            '\\' => i += 2,
+            '"' => break,
+            _ => i += 1,
+        }
+    }
+    // не строковый первый аргумент — нечего определять: режем середину
+    if i >= chars.len() || chars.get(i + 1) != Some(&',') {
+        return ellipsize(args, BUDGET);
+    }
+    let head: String = chars[..=i].iter().collect();
+    let tail: String = chars[i + 2..].iter().collect();
+    let tail = tail.trim_start();
+    // хвост влезает в бюджет — ужимаем строку и оставляем хвост целиком.
+    // `, ` между ними занимает два символа, не один.
+    let room = BUDGET.saturating_sub(tail.chars().count() + 2);
+    if room >= 5 {
+        return format!("{}, {tail}", shorten_literal(&head, room));
+    }
+    // хвост сам не влезает: адреса и есть смысл, строка уходит целиком.
+    // ponytail: длинный список переменных раздувает блок и жмёт лист —
+    // это видно и честно; молча выбросить переменную нельзя.
+    format!("... {tail}")
+}
+
 fn shorten_calls(cond: &str) -> String {
-    const ARG_BUDGET: usize = 20;
     let chars: Vec<char> = cond.chars().collect();
     let n = chars.len();
     let mut out = String::with_capacity(cond.len());
@@ -799,7 +859,7 @@ fn shorten_calls(cond: &str) -> String {
                     let args: String = chars[i + 1..close].iter().collect();
                     out.push_str(&name);
                     out.push('(');
-                    out.push_str(&ellipsize(&args, ARG_BUDGET));
+                    out.push_str(&shorten_args(&args));
                     out.push(')');
                     i = close + 1;
                     continue;
@@ -853,12 +913,20 @@ fn call_close(chars: &[char], open: usize) -> Option<usize> {
 fn abbrev_stmt(s: &str) -> String {
     const CONTENT_BUDGET: usize = 19;
     // аргументы после строки сохраняем: printf("%d", n) короче бюджета
-    // и должно остаться целиком
+    // и должно остаться целиком. Ведущая запятая — часть разделителя
+    // аргументов, а формат ниже ставит свою: без trim_start_matches(',')
+    // печать давала `printf("...", , n)`.
     let args = |q: usize| -> String {
-        let t = s[q + 1..s.len() - 1].trim();
-        t.to_string()
+        s[q + 1..s.len() - 1]
+            .trim()
+            .trim_start_matches(',')
+            .trim()
+            .to_string()
     };
-    for w in ["printf", "puts", "print", "echo", "write"] {
+    // суффиксные варианты MSVC (`printf_s`) — тот же вывод, значит и то же
+    // сокращение: без них длинная строка ввода/вывода занимала две строки
+    // плитки и раздувала лист ниже читаемого кегля
+    for w in ["printf", "printf_s", "puts", "print", "echo", "write"] {
         let Some(rest) = s.strip_prefix(w) else {
             continue;
         };
@@ -1246,6 +1314,94 @@ mod tests {
         let nodes = parse_ok("int main(void) { if (scanf(\"%d\", &x)) printf(\"ok\"); }");
         // форматная строка — шум, переменная — нет
         assert_eq!(nodes[0].text, "if (scanf(\"%d\", &x))");
+    }
+
+    /// scanf с несколькими переменными: усечение условия не вправе
+    /// ВЫБРОСИТЬ переменную. Раньше резалась середина списка аргументов,
+    /// и `scanf_s("%lf%c", &radius, &chek, 1)` доходил до схемы как
+    /// `scanf_s("%lf%c",...&chek, 1)` — по схеме выглядело, будто
+    /// `radius` не читается. Умолчание хуже переноса.
+    #[test]
+    fn scanf_cond_keeps_every_variable() {
+        let nodes = parse_ok(
+            "int main(void) { if (scanf_s(\"%lf%c\", &radius, &chek, 1) != 2) return 1; }",
+        );
+        let cond = &nodes[0].text;
+        assert!(cond.contains("&radius"), "потеряна &radius: {cond}");
+        assert!(cond.contains("&chek"), "потеряна &chek: {cond}");
+        assert!(!cond.contains("%lf"), "форматная строка — шум: {cond}");
+    }
+
+    /// printf_s — тот же вывод, что printf, значит и сокращается так же.
+    /// Сверяем с printf на ОДИНАКОВОЙ строке: раньше printf_s не сокращался
+    /// вовсе, и одинаковый вывод давал разные плитки.
+    #[test]
+    fn printf_s_is_abbreviated_like_printf() {
+        let arg = "plashad shara : %.2f\\n";
+        let io = |f: &str| {
+            let src = format!("int main(void) {{ {f}(\"{arg}\", s); }}");
+            texts(&parse_ok(&src), NodeKind::Io)
+        };
+        let (a, b) = (io("printf"), io("printf_s"));
+        assert_eq!(a.len(), 1, "{a:?}");
+        // различается только имя функции — сравниваем хвост плитки
+        let tail = |s: &str| s[s.find('"').unwrap_or(0)..].to_string();
+        assert_eq!(
+            tail(&b[0]),
+            tail(&a[0]),
+            "printf_s сокращён иначе, чем printf"
+        );
+        assert!(b[0].contains("..."), "строка не сокращена: {b:?}");
+    }
+
+    /// Два вызова с РАЗНЫМИ строками обязаны остаться разными: сокращать
+    /// строку до `...` нельзя. На этом стоит коммит 0c6cc78, и этим же
+    /// ловится ошибка «схема не говорит, что увидит пользователь».
+    #[test]
+    fn different_prompt_strings_stay_distinguishable() {
+        let src = "int main(void) {
+            if (vvedi(\"Vvedite chislo A: \", &a) != 1) return 1;
+            if (vvedi(\"Vvedite chislo B: \", &a) != 2) return 2;
+        }";
+        let conds: Vec<String> = parse_ok(src)
+            .iter()
+            .filter(|n| n.kind == NodeKind::Decision)
+            .map(|n| n.text.clone())
+            .collect();
+        assert_eq!(conds.len(), 2, "{conds:?}");
+        assert_ne!(conds[0], conds[1], "подсказки слились: {conds:?}");
+    }
+
+    /// Хвост аргументов не должен получить вторую запятую: разделитель
+    /// аргументов и запятая из формата складывались в `printf("...", , n)`.
+    #[test]
+    fn no_double_comma_in_abbreviated_printf() {
+        let nodes = parse_ok("int main(void) { printf(\"plashad shara : %.2f\\n\", s); }");
+        let io = texts(&nodes, NodeKind::Io);
+        assert!(!io[0].contains(", ,"), "двойная запятая: {io:?}");
+        assert!(io[0].ends_with(", s)"), "аргумент потерян: {io:?}");
+    }
+
+    /// Экранированная кавычка внутри формата: конец литерала ищется по
+    /// символам, а ужимается он ВНУТРИ кавычек. Обе ошибки рвали
+    /// литерал: поиск подстроки `", ` цеплялся за `\"`, а `ellipsize`
+    /// резал середину и давал нечётное число кавычек. Инвариант —
+    /// кавычки сбалансированы и ни одна переменная не потеряна.
+    #[test]
+    fn escaped_quote_in_format_keeps_literal_balanced() {
+        let nodes = parse_ok(
+            "int main(void) { if (scanf(\"\\\"xxxxxxx\\\", %d\", &a, &b) != 2) return 1; }",
+        );
+        let cond = &nodes[0].text;
+        assert_eq!(
+            cond.matches('"').count() % 2,
+            0,
+            "литерал разорван, кавычек нечётно: {cond}"
+        );
+        assert!(
+            cond.contains("&a") && cond.contains("&b"),
+            "аргумент потерян: {cond}"
+        );
     }
 
     #[test]
