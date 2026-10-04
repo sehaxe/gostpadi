@@ -1,8 +1,7 @@
 //! Сборка пайплайна: C -> узлы -> страницы SVG.
 //! Геометрия живёт в layout, отрисовка в generate; здесь только склейка.
 
-use crate::error::ParseError;
-use crate::frontend::c::parse_c_to_nodes;
+use crate::frontend::cts::CParser;
 use crate::generate::{fit_scale, render_svg_at};
 use crate::ir::Node;
 use crate::layout::{layout, normalize, split_scheme, uniform_sizes, Layout, Sizes};
@@ -34,32 +33,27 @@ impl Options {
     }
 }
 
-fn to_nodes(text: &str, opts: &Options) -> Result<Vec<Node>, ParseError> {
+/// C -> узлы схемы. Не падает на синтаксисе: битый код рисуется
+/// частично, а не отказывает (tree-sitter, см. frontend::cts).
+fn to_nodes(text: &str, opts: &Options) -> Vec<Node> {
     let st = opts.style();
-    let mut nodes = parse_c_to_nodes(text, &opts.labels)?;
+    let mut nodes = CParser::new().parse(text, &opts.labels);
     // Перенос — до normalize: размеры фигур считаются по тексту, и
     // однострочное условие даёт другой ромб, чем перенесённое.
     crate::layout::wrap_nodes(&mut nodes, st.max_chars);
-    Ok(nodes)
+    nodes
 }
 
 /// Разобранная схема: путь входа и её узлы.
 pub type Scheme = (String, Vec<Node>);
 
-/// Пачка входов (путь, текст) -> (путь, узлы).
-/// Ошибка разбора возвращается вместе с путём входа.
-pub fn parse_batch(
-    inputs: &[(String, String)],
-    opts: &Options,
-) -> Result<Vec<Scheme>, (String, ParseError)> {
-    let mut out = Vec::with_capacity(inputs.len());
-    for (path, text) in inputs {
-        match to_nodes(text, opts) {
-            Ok(nodes) => out.push((path.clone(), nodes)),
-            Err(e) => return Err((path.clone(), e)),
-        }
-    }
-    Ok(out)
+/// Пачка входов (путь, текст) -> (путь, узлы). Ошибок разбора нет:
+/// любой текст даёт хоть какую-то схему.
+pub fn parse_batch(inputs: &[(String, String)], opts: &Options) -> Vec<Scheme> {
+    inputs
+        .iter()
+        .map(|(path, text)| (path.clone(), to_nodes(text, opts)))
+        .collect()
 }
 
 /// Чем закончилась пачка: общий масштаб и выбранный лист. Нужно
@@ -170,11 +164,14 @@ pub fn render_batch(
 }
 
 /// Один вход (C-код) -> страницы SVG.
-pub fn render_text(text: &str, opts: &Options) -> Result<Vec<String>, ParseError> {
-    match parse_batch(&[(String::new(), text.to_string())], opts) {
-        Ok(schemes) => Ok(render_batch(schemes, &opts.style()).0.remove(0).1),
-        Err((_, e)) => Err(e),
-    }
+pub fn render_text(text: &str, opts: &Options) -> Vec<String> {
+    render_batch(
+        parse_batch(&[(String::new(), text.to_string())], opts),
+        &opts.style(),
+    )
+    .0
+    .remove(0)
+    .1
 }
 
 #[cfg(test)]
@@ -254,15 +251,14 @@ mod tests {
         let pages = render_text(
             "int main(void) {\n    int a;\n    scanf(\"%d\", &a);\n    a = a * 2;\n    printf(\"c = %d\", a);\n    return 0;\n}",
             &opts(),
-        )
-        .unwrap();
+        );
         assert_eq!(pages.len(), 1);
         assert!(pages[0].starts_with("<?xml"));
     }
 
     #[test]
     fn c_source_renders_one_page() {
-        let pages = render_text("int main(){printf(\"hi\");return 0;}", &opts()).unwrap();
+        let pages = render_text("int main(){printf(\"hi\");return 0;}", &opts());
         assert_eq!(pages.len(), 1);
         assert!(pages[0].starts_with("<?xml"));
     }
@@ -275,8 +271,7 @@ mod tests {
         let schemes = parse_batch(
             &[("a.c".into(), a.into()), ("b.c".into(), b.into())],
             &opts(),
-        )
-        .unwrap();
+        );
         let (out, _) = render_batch(schemes, &opts().style());
         assert_eq!(out.len(), 2);
         let (mut wa, mut wb) = (rect_widths(&out[0].1[0]), rect_widths(&out[1].1[0]));
@@ -305,7 +300,7 @@ mod tests {
             .iter()
             .map(|(n, t)| (n.to_string(), t.to_string()))
             .collect();
-        let schemes = parse_batch(&inputs, &opts()).unwrap();
+        let schemes = parse_batch(&inputs, &opts());
         let (out, info) = render_batch(schemes, &opts().style());
         assert!(out.len() >= 4, "каждый файл дал хотя бы один лист");
 
@@ -356,7 +351,7 @@ mod tests {
         wide.push_str("    }\n    printf(\"%d\", d);\n    return 0;\n}");
         let narrow = "int main(void) { int x; scanf(1); x = 1; return 0; }";
         let inputs = vec![("wide.c".into(), wide), ("narrow.c".into(), narrow.into())];
-        let schemes = parse_batch(&inputs, &opts()).unwrap();
+        let schemes = parse_batch(&inputs, &opts());
         let (out, info) = render_batch(schemes, &opts().style());
         assert_eq!(out.len(), 2);
         // ориентация одна на оба файла: в узкой книжная, в широкой
@@ -394,7 +389,7 @@ mod tests {
             ));
         }
         absurdly_wide.push_str("    }\n    printf(\"%d\", d);\n    return 0;\n}");
-        let schemes = parse_batch(&[("w.c".into(), absurdly_wide)], &opts()).unwrap();
+        let schemes = parse_batch(&[("w.c".into(), absurdly_wide)], &opts());
         let (_, info) = render_batch(schemes, &opts().style());
         // либо впихнулось, либо честно помечено нечитаемым
         if info.scale < 0.7 {
@@ -421,8 +416,7 @@ mod tests {
         let schemes = parse_batch(
             &[("a.c".into(), a.into()), ("b.c".into(), b.into())],
             &opts(),
-        )
-        .unwrap();
+        );
         let (out, _) = render_batch(schemes, &opts().style());
         assert_eq!(out.len(), 2);
         let sa = scales(&out[0].1[0]);

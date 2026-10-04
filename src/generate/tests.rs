@@ -1,8 +1,8 @@
 //! Тесты генератора: вид строк SVG фиксируем, идём от тестов.
 
 use super::svg::render_svg;
-use crate::frontend::c::parse_c_to_nodes;
-use crate::ir::{Node, NodeKind};
+use crate::frontend::cts::CParser;
+
 use crate::layout::{layout, normalize, Edge, Label, Layout, Shape};
 use crate::style::Style;
 
@@ -28,16 +28,11 @@ fn hand(shapes: Vec<Shape>, edges: Vec<Edge>, labels: Vec<Label>) -> Layout {
     }
 }
 
-/// Схема из тела main: терминаторы добавляет тест, дальше — раскладка,
-/// как в бою.
+/// Схема из тела main: фронтенд сам ставит терминаторы, дальше —
+/// раскладка, как в бою.
 fn render_c(body: &str) -> String {
     let st = Style::default();
-    let mut nodes = vec![Node::new(NodeKind::Term, "Start")];
-    nodes.extend(
-        parse_c_to_nodes(&format!("int main(void) {{\n{body}\n}}"), "en")
-            .expect("разбор C-фикстуры"),
-    );
-    nodes.push(Node::new(NodeKind::Term, "End"));
+    let nodes = CParser::new().parse(&format!("int main(void) {{\n{body}\n}}"), "en");
     let sizes = normalize(&nodes, &st);
     let l = layout(&nodes, &sizes, &st);
     render_svg(&l, &st)
@@ -194,11 +189,7 @@ fn examples_render_clean() {
         }
         let src = std::fs::read_to_string(&path).expect("read c");
         let st = Style::default();
-        let mut nodes = vec![Node::new(NodeKind::Term, "Start")];
-        nodes.extend(
-            parse_c_to_nodes(&src, "en").unwrap_or_else(|e| panic!("{}: {e:?}", path.display())),
-        );
-        nodes.push(Node::new(NodeKind::Term, "End"));
+        let nodes = CParser::new().parse(&src, "en");
         let svg = render_svg(&layout(&nodes, &normalize(&nodes, &st), &st), &st);
         assert!(!svg.is_empty(), "{path:?}: пустой");
         assert!(svg.starts_with("<?xml"), "{path:?}: нет шапки");

@@ -1,4 +1,4 @@
-pub mod c;
+pub mod cts;
 
 use crate::ir::{Branch, TileKind};
 

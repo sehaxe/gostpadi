@@ -28,30 +28,50 @@ fn check_ok_exits_zero() {
     fs::write(&f, OK_C).unwrap();
     let out = run(&["--check", f.to_str().unwrap()]);
     assert!(out.status.success());
-    // начало, scanf, a * 2, printf, конец — объявление `int a;` без
-    // значения не рисуется
-    assert!(String::from_utf8_lossy(&out.stdout).contains("ok: 5 blocks"));
+    // начало, конец и три оператора; объявление `int a;` без значения
+    // не рисуется
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("ok: 5 blocks"),
+        "{:?}",
+        String::from_utf8_lossy(&out.stdout)
+    );
 }
 
+/// ГЛАВНОЕ: битый C рисуется, а не отказывает. Строгий парсер на этом
+/// коде завершался ошибкой разбора и схемы не было вовсе — теперь
+/// `--check` проходит и говорит, сколько блоков получилось.
 #[test]
-fn check_bad_exits_one_with_line() {
-    let d = tmp("check-bad");
-    let f = d.join("bad.c");
-    // строка 3: `if` без скобок и условия
+fn broken_syntax_still_renders() {
+    let d = tmp("check-broken");
+    let f = d.join("broken.c");
     fs::write(
         &f,
         "int main(void) {\n    int c = 1;\n    if {\n        c = 2;\n    }\n}\n",
     )
     .unwrap();
     let out = run(&["--check", f.to_str().unwrap()]);
-    assert_eq!(out.status.code(), Some(1));
-    let err = String::from_utf8_lossy(&out.stderr);
-    // «файл:строка:столбец: сообщение» — колонка 8 это `{` после `if`
+    let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        err.starts_with(&format!("{}:3:8:", f.display())),
-        "stderr: {err}"
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
     );
-    assert!(err.contains("неожидаемый токен"), "stderr: {err}");
+    assert!(stdout.contains("blocks"), "{stdout}");
+
+    // и без --check рисуется SVG
+    let svg = run(&[
+        f.to_str().unwrap(),
+        "-o",
+        d.join("broken.svg").to_str().unwrap(),
+    ]);
+    assert!(
+        svg.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&svg.stderr)
+    );
+    let text = std::fs::read_to_string(d.join("broken.svg")).unwrap();
+    assert!(text.starts_with("<?xml"), "не SVG");
+    assert!(!text.contains("NaN"), "NaN в разметке");
 }
 
 #[test]
@@ -176,16 +196,43 @@ fn batch_skips_bad_input_exit_one() {
     let ok = d.join("ok.c");
     let bad = d.join("bad.c");
     fs::write(&ok, OK_C).unwrap();
+    // битый синтаксис: рисуется частично, но не роняет остальные
     fs::write(
         &bad,
         "int main(void) {\n    int c = 1;\n    if {\n    }\n}\n",
     )
     .unwrap();
     let out = run(&[ok.to_str().unwrap(), bad.to_str().unwrap()]);
-    assert_eq!(out.status.code(), Some(1));
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("bad.c"), "stderr: {err}");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(d.join("ok.svg").exists(), "ok.svg не создан");
+    assert!(d.join("bad.svg").exists(), "bad.svg не создан");
+}
+
+/// Нечитаемый результат обязан быть назван: кегль на листе считается и
+/// печатается, молча выдать 4 pt нельзя.
+#[test]
+fn illegible_scale_is_reported() {
+    let d = tmp("illegible");
+    let f = d.join("wide.c");
+    let mut src = String::from("int main(void) { int d = 1;\nswitch (d) {\n");
+    for k in 1..=9 {
+        src.push_str(&format!(
+            "case {k}: printf(\"очень длинный текст кейса {k}\"); break;\n"
+        ));
+    }
+    src.push_str("}\n}\n");
+    fs::write(&f, src).unwrap();
+    let out = run(&[f.to_str().unwrap()]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    // либо впихнулось читаемо, либо честно сказано про кегль
+    assert!(
+        !err.is_empty(),
+        "широкая схема дана без единого предупреждения про кегль"
+    );
 }
 
 /// `| head`: обрыв трубы не паника (SIGPIPE игнорируется std, BrokenPipe

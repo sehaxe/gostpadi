@@ -20,8 +20,9 @@ fn rd_block<'a>(b: &'a [u8], off: &mut usize, len: usize) -> Option<&'a [u8]> {
 }
 
 /// Разбор пачки: u32 count, затем для каждого входа u32 name_len,
-/// имя, u8 is_c, u32 data_len, текст. None — битый пакет.
-fn unpack(b: &[u8]) -> Option<Vec<(String, String, bool)>> {
+/// имя, u32 data_len, текст. None — битый пакет. Формат только C:
+/// байт «is_c» из прошлой версии ABI больше не читается.
+fn unpack(b: &[u8]) -> Option<Vec<(String, String)>> {
     let mut off = 0usize;
     let count = rd_u32(b, &mut off)? as usize;
     if count > 4096 {
@@ -31,10 +32,9 @@ fn unpack(b: &[u8]) -> Option<Vec<(String, String, bool)>> {
     for _ in 0..count {
         let nl = rd_u32(b, &mut off)? as usize;
         let name = String::from_utf8(rd_block(b, &mut off, nl)?.to_vec()).ok()?;
-        let is_c = *rd_block(b, &mut off, 1)?.first()? != 0;
         let dl = rd_u32(b, &mut off)? as usize;
         let text = String::from_utf8(rd_block(b, &mut off, dl)?.to_vec()).ok()?;
-        out.push((name, text, is_c));
+        out.push((name, text));
     }
     Some(out)
 }
@@ -72,48 +72,38 @@ fn site_options(ru: bool, lw: f64, font: f64) -> Options {
     }
 }
 
-/// Текст схемы -> ответ в формате JSON (листы SVG либо ошибка разбора).
-fn render_result(text: &str, is_c: bool, ru: bool, lw: f64, font: f64) -> String {
+/// Текст C -> ответ в формате JSON {"ok":true,"sheets":[...]}.
+/// Ошибки разбора нет: битый код рисуется частично. Единственный
+/// «неудачный» исход — код без `main`, о нём сообщаем полем "empty".
+fn render_result(text: &str, ru: bool, lw: f64, font: f64) -> String {
     let opts = site_options(ru, lw, font);
-    match pipeline::render_text(text, is_c, &opts) {
-        Ok(pages) => {
-            let mut out = String::with_capacity(pages.iter().map(|p| p.len()).sum::<usize>() + 32);
-            out.push_str("{\"ok\":true,\"sheets\":[");
-            for (i, p) in pages.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                json_str(&mut out, p);
-            }
-            out.push_str("]}");
-            out
+    let pages = pipeline::render_text(text, &opts);
+    let mut out = String::with_capacity(pages.iter().map(|p| p.len()).sum::<usize>() + 64);
+    out.push_str("{\"ok\":true,\"sheets\":[");
+    for (i, p) in pages.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
         }
-        Err(e) => {
-            let mut out = String::with_capacity(128);
-            out.push_str("{\"ok\":false,\"error\":{\"msg\":");
-            json_str(&mut out, &e.msg);
-            out.push_str(",\"line\":");
-            match e.line {
-                Some(l) => out.push_str(&l.to_string()),
-                None => out.push_str("null"),
-            }
-            out.push_str(",\"col\":");
-            match e.col {
-                Some(c) => out.push_str(&c.to_string()),
-                None => out.push_str("null"),
-            }
-            out.push_str(",\"src\":");
-            match &e.src {
-                Some(s) => json_str(&mut out, s),
-                None => out.push_str("null"),
-            }
-            out.push_str("}}");
-            out
-        }
+        json_str(&mut out, p);
     }
+    out.push(']');
+    if !has_body(text) {
+        out.push_str(",\"empty\":true");
+    }
+    out.push('}');
+    out
 }
 
-/// Вход: (ptr, len) в UTF-8; is_c/ru — флаги; lw/font — 0 = дефолт.
+/// Есть ли в коде `main` — по тексту, а не по разбору: битый код
+/// разбирается частично, и разбор тут не показатель.
+fn has_body(text: &str) -> bool {
+    text.split(|c: char| !c.is_alphanumeric() && c != '_')
+        .any(|w| w == "main")
+}
+
+/// Вход: (ptr, len) в UTF-8; ru — флаги; lw/font — 0 = дефолт.
+/// is_c из прошлой ABI оставлен параметром, но игнорируется: вход
+/// теперь только C.
 /// Возврат: указатель на буфер с JSON, длина записана в *out_len.
 /// Паника движка (кривой ввод недопустим по контракту парсеров) —
 /// wasm-trap: страница покажет «движок упал» и перезапустит модуль.
@@ -136,7 +126,8 @@ pub extern "C" fn gostpadi_render(
         unsafe { std::slice::from_raw_parts(ptr, len) }
     };
     let text = String::from_utf8_lossy(bytes);
-    let json = render_result(&text, is_c != 0, ru != 0, lw, font);
+    let _ = is_c;
+    let json = render_result(&text, ru != 0, lw, font);
     let boxed = json.into_bytes().into_boxed_slice();
     let p = boxed.as_ptr() as *mut u8;
     let n = boxed.len();
@@ -157,10 +148,10 @@ pub extern "C" fn gostpadi_alloc(len: usize) -> *mut u8 {
     p
 }
 
-/// Пачка файлов: единые размеры блоков и общий масштаб на все входы —
-/// как `gostpadi 1/*.gvn -o out/` в CLI. Вход — упакованный unpack();
-/// выход — JSON {"ok":true,"files":[{name,sheets}]}, сбойные входы
-/// перечислены в "errors", остальные рисуются.
+/// Пачка файлов: единые размеры блоков и общий масштаб на все входы.
+/// Вход — упакованный unpack(); выход — JSON {"ok":true,"files":[...]}.
+/// Сбойных разборов не бывает, но вход без `main` рисуется пустым —
+/// такие перечисляются в "empty", остальные рисуются.
 #[no_mangle]
 pub extern "C" fn gostpadi_render_batch(
     ptr: *const u8,
@@ -184,19 +175,7 @@ pub extern "C" fn gostpadi_render_batch(
     };
     let opts = site_options(ru != 0, lw, font);
     let st = opts.style();
-    // сбойные входы не останавливают остальные (порт CLI-пачки)
-    let mut ok: Vec<(String, Vec<crate::ir::Node>)> = Vec::new();
-    let mut errors: Vec<(String, crate::error::ParseError)> = Vec::new();
-    for (name, text, is_c) in &inputs {
-        match pipeline::parse_batch(
-            std::slice::from_ref(&(name.clone(), text.clone(), *is_c)),
-            &opts,
-        ) {
-            Ok(mut s) => ok.append(&mut s),
-            Err((_, e)) => errors.push((name.clone(), e)),
-        }
-    }
-    let (rendered, _info) = pipeline::render_batch(ok, &st);
+    let (rendered, _info) = pipeline::render_batch(pipeline::parse_batch(&inputs, &opts), &st);
     let mut out = String::with_capacity(4096);
     out.push_str("{\"ok\":true,\"files\":[");
     for (i, (name, pages)) in rendered.iter().enumerate() {
@@ -214,25 +193,13 @@ pub extern "C" fn gostpadi_render_batch(
         }
         out.push_str("]}");
     }
-    out.push_str("],\"errors\":[");
-    for (i, (name, e)) in errors.iter().enumerate() {
+    out.push_str("],\"empty\":[");
+    let empty: Vec<&(String, String)> = inputs.iter().filter(|(_, t)| !has_body(t)).collect();
+    for (i, (name, _)) in empty.iter().enumerate() {
         if i > 0 {
             out.push(',');
         }
-        out.push_str("{\"name\":");
         json_str(&mut out, name);
-        out.push_str(",\"msg\":");
-        json_str(&mut out, &e.msg);
-        out.push_str(",\"line\":");
-        out.push_str(&e.line.map_or("null".into(), |l| l.to_string()));
-        out.push_str(",\"col\":");
-        out.push_str(&e.col.map_or("null".into(), |c| c.to_string()));
-        out.push_str(",\"src\":");
-        match &e.src {
-            Some(s) => json_str(&mut out, s),
-            None => out.push_str("null"),
-        }
-        out.push('}');
     }
     out.push_str("]}");
     let boxed = out.into_bytes().into_boxed_slice();

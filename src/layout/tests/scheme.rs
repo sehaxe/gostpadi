@@ -284,12 +284,7 @@ fn examples_layout_invariants() {
             continue;
         }
         let src = std::fs::read_to_string(&path).unwrap();
-        let mut nodes = vec![node(NodeKind::Term, "начало")];
-        nodes.extend(
-            crate::frontend::c::parse_c_to_nodes(&src, "ru")
-                .unwrap_or_else(|e| panic!("{}: {e:?}", path.display())),
-        );
-        nodes.push(node(NodeKind::Term, "конец"));
+        let nodes = CParser::new().parse(&src, "ru");
         let st = Style::default();
         let sizes = normalize(&nodes, &st);
         let l = layout(&nodes, &sizes, &st);
@@ -605,7 +600,7 @@ fn empty_branch_rail_hugs_diamond() {
 #[test]
 fn if_yes_branch_goes_left() {
     let st = Style::default();
-    let text = "int x, y;\nif (x <= 0) { printf(\"bad\"); }\ny = x + 1;\n";
+    let text = "int x = 0, y = 0;\nif (x <= 0) { printf(\"bad\"); }\ny = x + 1;\n";
     let nodes = nodes(text);
     let sizes = normalize(&nodes, &st);
     let l = layout(&nodes, &sizes, &st);
@@ -1212,8 +1207,11 @@ fn rows_of_cases(l: &Layout) -> usize {
 
 /// Схема-диспетч из `cases` кейсов без завершающей плитки: в
 /// rows_of_cases попадают только кейсы.
+/// Диспетчер на N кейсов. `int d;` объявляется с инициализатором: без
+/// него это пустое объявление, которое фронтенд не рисует, и тест ловит
+/// не схему, а пустую.
 fn dispatch(cases: usize) -> String {
-    let mut t = String::from("int d;\nswitch (d) {\n");
+    let mut t = String::from("int d = 1;\nswitch (d) {\n");
     for k in 1..=cases {
         t.push_str(&format!("case {k}: printf(\"кейс {k}\"); break;\n"));
     }

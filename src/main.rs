@@ -2,7 +2,6 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process;
 
-use gostpadi::error::ParseError;
 use gostpadi::ir::Node;
 use gostpadi::layout::{crossings_ok, layout, normalize, overlaps_ok, single_entry_ok};
 use gostpadi::pipeline::{self, Options};
@@ -76,26 +75,6 @@ fn page_path(base: &Path, k: usize) -> PathBuf {
     let s = base.to_string_lossy();
     let stem = s.strip_suffix(".svg").unwrap_or(&s);
     PathBuf::from(format!("{stem}-{}.svg", k + 1))
-}
-
-/// «файл:строка: сообщение» — как render_file в gostpadi.py.
-fn report_parse(path: &str, e: &ParseError) {
-    let loc = match (e.line, e.col) {
-        (Some(l), Some(c)) => format!("{path}:{l}:{c}: "),
-        (Some(l), None) => format!("{path}:{l}: "),
-        (None, _) => format!("{path}: "),
-    };
-    let src = e
-        .src
-        .as_deref()
-        .map(|s| format!(" ({})", s.trim()))
-        .unwrap_or_default();
-    eprintln!("{loc}{}{src}", e.msg);
-}
-
-fn die_parse(path: &str, e: &ParseError) -> ! {
-    report_parse(path, e);
-    process::exit(1)
 }
 
 /// --font=N / --lw=N: число > 0, иначе usage-ошибка (exit 2).
@@ -198,10 +177,7 @@ fn main() {
     let st = opts.style();
 
     if check {
-        let schemes = match pipeline::parse_batch(&sources, &opts) {
-            Ok(s) => s,
-            Err((path, e)) => die_parse(&path, &e),
-        };
+        let schemes = pipeline::parse_batch(&sources, &opts);
         let multi = schemes.len() > 1;
         for (inp, (_, nodes)) in inputs.iter().zip(&schemes) {
             let l = layout(nodes, &normalize(nodes, &st), &st);
@@ -227,20 +203,22 @@ fn main() {
         return;
     }
 
-    // пачка: сбойный вход не останавливает остальные (порт render_many)
-    let mut schemes: Vec<(String, Vec<Node>)> = Vec::new();
-    let mut parse_failed = false;
-    for src in &sources {
-        match pipeline::parse_batch(std::slice::from_ref(src), &opts) {
-            Ok(mut s) => schemes.append(&mut s),
-            Err((path, e)) => {
-                report_parse(&path, &e);
-                parse_failed = true;
-            }
+    // Разбора с ошибкой не бывает: битый C рисуется частично. Пустой
+    // вход (нет ни одного блока) рисуем пустым листом и предупреждаем —
+    // молча выдать схему из ничего хуже, чем сказать об этом.
+    let schemes: Vec<(String, Vec<Node>)> = pipeline::parse_batch(&sources, &opts);
+    let mut empty: Vec<&str> = Vec::new();
+    for (path, nodes) in &schemes {
+        if nodes
+            .iter()
+            .all(|n| n.branches.is_empty() && n.body.is_none())
+            && nodes.len() <= 2
+        {
+            empty.push(path);
         }
     }
-    if schemes.is_empty() {
-        process::exit(1);
+    for path in &empty {
+        eprintln!("{path}: в коде не найден int main(...) — схема пустая");
     }
 
     let folder = match &output {
@@ -269,7 +247,7 @@ fn main() {
         .iter()
         .any(|s| stems.iter().filter(|t| *t == s).count() > 1);
 
-    let mut failed = parse_failed;
+    let mut failed = false;
     let (rendered, info) = pipeline::render_batch(schemes, &st);
     for ((_, pages), inp) in rendered.into_iter().zip(&inputs) {
         let base = base_for(inp, output.as_deref(), folder, inputs.len() > 1, dup);
