@@ -1,11 +1,10 @@
 pub mod c;
-pub mod gvn;
 
 use crate::ir::{Branch, TileKind};
 
-/// Единственная граница строкового распознавания ввода-вывода: оба
-/// frontend'а зовут её при строительстве плитки; layout и measure
-/// читают готовый kind и текст не смотрят.
+/// Единственная граница строкового распознавания ввода-вывода: фронтенд C
+/// зовёт её при строительстве плитки; layout и measure читают готовый
+/// kind и текст не смотрят.
 pub(crate) fn tile_kind(text: &str) -> TileKind {
     if crate::style::Style::DEFAULT.is_io(text) {
         TileKind::Io

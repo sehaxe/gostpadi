@@ -1,8 +1,8 @@
 //! Тесты генератора: вид строк SVG фиксируем, идём от тестов.
 
 use super::svg::render_svg;
-use crate::frontend::c::c_to_gvn;
-use crate::frontend::gvn::parse;
+use crate::frontend::c::parse_c_to_nodes;
+use crate::ir::{Node, NodeKind};
 use crate::layout::{layout, normalize, Edge, Label, Layout, Shape};
 use crate::style::Style;
 
@@ -28,10 +28,16 @@ fn hand(shapes: Vec<Shape>, edges: Vec<Edge>, labels: Vec<Label>) -> Layout {
     }
 }
 
-/// Схема через gvn-парсер + раскладку, как в бою.
-fn render_gvn(gvn: &str) -> String {
+/// Схема из тела main: терминаторы добавляет тест, дальше — раскладка,
+/// как в бою.
+fn render_c(body: &str) -> String {
     let st = Style::default();
-    let nodes = parse(gvn, &st, "").expect("parse gvn");
+    let mut nodes = vec![Node::new(NodeKind::Term, "Start")];
+    nodes.extend(
+        parse_c_to_nodes(&format!("int main(void) {{\n{body}\n}}"), "en")
+            .expect("разбор C-фикстуры"),
+    );
+    nodes.push(Node::new(NodeKind::Term, "End"));
     let sizes = normalize(&nodes, &st);
     let l = layout(&nodes, &sizes, &st);
     render_svg(&l, &st)
@@ -104,8 +110,10 @@ fn white_background_rect_before_g() {
 }
 
 #[test]
-fn markers_from_gvn_parse_and_layout() {
-    let svg = render_gvn(include_str!("../../examples/hello.gvn"));
+fn markers_from_c_parse_and_layout() {
+    let svg = render_c(
+        "int a;\nscanf(\"%d\", &a);\nif (a > 0) { printf(\"да\"); } else { printf(\"нет\"); }\n",
+    );
     assert!(svg.starts_with("<?xml"));
     assert!(svg.contains("<polygon"));
     assert!(!svg.contains("bold"));
@@ -181,21 +189,24 @@ fn examples_render_clean() {
     let mut n = 0;
     for entry in std::fs::read_dir(dir).expect("examples dir") {
         let path = entry.expect("dir entry").path();
-        let gvn = match path.extension().and_then(|e| e.to_str()) {
-            Some("gvn") => std::fs::read_to_string(&path).expect("read gvn"),
-            Some("c") => {
-                c_to_gvn(&std::fs::read_to_string(&path).expect("read c"), "").expect("c_to_gvn")
-            }
-            _ => continue,
-        };
-        let svg = render_gvn(&gvn);
+        if path.extension().and_then(|e| e.to_str()) != Some("c") {
+            continue;
+        }
+        let src = std::fs::read_to_string(&path).expect("read c");
+        let st = Style::default();
+        let mut nodes = vec![Node::new(NodeKind::Term, "Start")];
+        nodes.extend(
+            parse_c_to_nodes(&src, "en").unwrap_or_else(|e| panic!("{}: {e:?}", path.display())),
+        );
+        nodes.push(Node::new(NodeKind::Term, "End"));
+        let svg = render_svg(&layout(&nodes, &normalize(&nodes, &st), &st), &st);
         assert!(!svg.is_empty(), "{path:?}: пустой");
         assert!(svg.starts_with("<?xml"), "{path:?}: нет шапки");
         assert!(!svg.contains("NaN"), "{path:?}: NaN");
         assert!(!svg.contains("inf"), "{path:?}: inf");
         n += 1;
     }
-    assert!(n >= 6, "ожидались gvn-файлы + main.c, найдено {n}");
+    assert!(n >= 1, "ожидался хоть один *.c, найдено {n}");
 }
 
 #[test]

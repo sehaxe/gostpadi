@@ -1,6 +1,7 @@
 mod measure;
 mod scheme;
 
+use crate::frontend::c::parse_c_to_nodes;
 use crate::ir::{Branch, Node, NodeKind, Stmt, TileKind};
 use crate::layout::{layout, normalize, Layout, Shape, Sizes};
 use crate::style::Style;
@@ -56,6 +57,31 @@ fn lay(nodes: &[Node]) -> Layout {
     let st = Style::default();
     let sizes = normalize(nodes, &st);
     layout(nodes, &sizes, &st)
+}
+
+/// Узлы схемы из C-кода: тест пишет только тело `main`, обёртку и язык
+/// подписей добавляет помощник. Раньше тесты раскладки собирали узлы из
+/// внутреннего формата `.gvn`, которого в движке больше нет.
+///
+/// Терминаторы «начало»/«конец» добавляются здесь: `parse_c_to_nodes`
+/// отдаёт только тело main (их ставил парсер `.gvn`), а раскладка без
+/// «конца» не проверяет single-entry. Это обход дыры движка, а не
+/// контракт фронтенда.
+pub(super) fn nodes(body: &str) -> Vec<Node> {
+    with_terms(
+        parse_c_to_nodes(&format!("int main(void) {{\n{body}\n}}"), "en")
+            .expect("разбор C-фикстуры"),
+        "Start",
+        "End",
+    )
+}
+
+fn with_terms(mut body: Vec<Node>, start: &str, end: &str) -> Vec<Node> {
+    let mut v = Vec::with_capacity(body.len() + 2);
+    v.push(node(NodeKind::Term, start));
+    v.append(&mut body);
+    v.push(node(NodeKind::Term, end));
+    v
 }
 
 fn linear() -> Vec<Node> {

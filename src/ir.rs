@@ -83,18 +83,6 @@ impl Node {
         }
     }
 
-    /// Ключевое слово цикла в формате `.gvn`. Писатель C-фронтенда
-    /// возвращает его обратно в текст, а парсер `.gvn` снимает: без
-    /// этого цикл терял бы вид в IR. Одно место на оба конца.
-    pub fn gvn_keyword(&self) -> &'static str {
-        match self.loop_kind {
-            Some(LoopKind::While) => "while",
-            Some(LoopKind::For) => "for",
-            Some(LoopKind::DoWhile) => "do-while",
-            None => "for",
-        }
-    }
-
     pub fn new(kind: NodeKind, text: impl Into<String>) -> Self {
         Self {
             kind,

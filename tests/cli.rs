@@ -18,56 +18,40 @@ fn tmp(name: &str) -> PathBuf {
     d
 }
 
-const OK_GVN: &str = "input scanf(\"%d\", &a)\nc = a * 2\noutput printf(\"c\", c)\n";
+const OK_C: &str =
+    "int main(void) {\n    int a;\n    scanf(\"%d\", &a);\n    a = a * 2;\n    printf(\"c\", a);\n    return 0;\n}\n";
 
 #[test]
 fn check_ok_exits_zero() {
     let d = tmp("check-ok");
-    let f = d.join("ok.gvn");
-    fs::write(&f, OK_GVN).unwrap();
+    let f = d.join("ok.c");
+    fs::write(&f, OK_C).unwrap();
     let out = run(&["--check", f.to_str().unwrap()]);
     assert!(out.status.success());
+    // начало, scanf, a * 2, printf, конец — объявление `int a;` без
+    // значения не рисуется
     assert!(String::from_utf8_lossy(&out.stdout).contains("ok: 5 blocks"));
 }
 
 #[test]
 fn check_bad_exits_one_with_line() {
     let d = tmp("check-bad");
-    let f = d.join("bad.gvn");
-    // строка 2 с неожиданным отступом
-    fs::write(&f, "input scanf(\"%d\", &a)\n    c = 1\n").unwrap();
+    let f = d.join("bad.c");
+    // строка 3: `if` без скобок и условия
+    fs::write(
+        &f,
+        "int main(void) {\n    int c = 1;\n    if {\n        c = 2;\n    }\n}\n",
+    )
+    .unwrap();
     let out = run(&["--check", f.to_str().unwrap()]);
     assert_eq!(out.status.code(), Some(1));
     let err = String::from_utf8_lossy(&out.stderr);
+    // «файл:строка:столбец: сообщение» — колонка 8 это `{` после `if`
     assert!(
-        err.contains(&format!("{}:2:", f.display())),
+        err.starts_with(&format!("{}:3:8:", f.display())),
         "stderr: {err}"
     );
-    assert!(err.contains("indentation"), "stderr: {err}");
-}
-
-#[test]
-fn template_prints_gvn_stub() {
-    let out = run(&["--template"]);
-    assert!(out.status.success());
-    assert!(String::from_utf8_lossy(&out.stdout).contains("input scanf"));
-}
-
-/// Шаблон обязан быть рабочей схемой: --template -> файл -> --check = ok.
-/// Ловит съеденные `\`-переносом отступы веток (if без веток).
-#[test]
-fn template_roundtrips_through_check() {
-    let d = tmp("template-roundtrip");
-    let f = d.join("tpl.gvn");
-    let out = run(&["--template"]);
-    fs::write(&f, &out.stdout).unwrap();
-    let chk = run(&["--check", f.to_str().unwrap()]);
-    assert!(
-        chk.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&chk.stderr)
-    );
-    assert!(String::from_utf8_lossy(&chk.stdout).contains("ok: 6 blocks"));
+    assert!(err.contains("неожидаемый токен"), "stderr: {err}");
 }
 
 #[test]
@@ -103,8 +87,8 @@ fn help_flag_short() {
 #[test]
 fn render_to_file_creates_svg() {
     let d = tmp("render-file");
-    let src = d.join("in.gvn");
-    fs::write(&src, OK_GVN).unwrap();
+    let src = d.join("in.c");
+    fs::write(&src, OK_C).unwrap();
     let out_path = d.join("out.svg");
     let out = run(&[src.to_str().unwrap(), "-o", out_path.to_str().unwrap()]);
     assert!(
@@ -117,10 +101,10 @@ fn render_to_file_creates_svg() {
 }
 
 #[test]
-fn render_examples_board2_if_to_tmp() {
-    let d = tmp("board2");
+fn render_examples_main_c_to_tmp() {
+    let d = tmp("main-c");
     let out_path = d.join("out.svg");
-    let out = run(&["examples/board2_if.gvn", "-o", out_path.to_str().unwrap()]);
+    let out = run(&["examples/main.c", "-o", out_path.to_str().unwrap()]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -164,10 +148,10 @@ fn batch_bare_o_writes_next_to_each_input() {
     let d = tmp("bare-o");
     fs::create_dir_all(d.join("a")).unwrap();
     fs::create_dir_all(d.join("b")).unwrap();
-    fs::write(d.join("a/x.gvn"), OK_GVN).unwrap();
-    fs::write(d.join("b/y.gvn"), OK_GVN).unwrap();
+    fs::write(d.join("a/x.c"), OK_C).unwrap();
+    fs::write(d.join("b/y.c"), OK_C).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_gostpadi"))
-        .args(["a/x.gvn", "b/y.gvn", "-o", "out.svg"])
+        .args(["a/x.c", "b/y.c", "-o", "out.svg"])
         .current_dir(&d)
         .output()
         .unwrap();
@@ -189,14 +173,18 @@ fn batch_bare_o_writes_next_to_each_input() {
 #[test]
 fn batch_skips_bad_input_exit_one() {
     let d = tmp("batch-skip");
-    let ok = d.join("ok.gvn");
-    let bad = d.join("bad.gvn");
-    fs::write(&ok, OK_GVN).unwrap();
-    fs::write(&bad, "    c = 1\n").unwrap();
+    let ok = d.join("ok.c");
+    let bad = d.join("bad.c");
+    fs::write(&ok, OK_C).unwrap();
+    fs::write(
+        &bad,
+        "int main(void) {\n    int c = 1;\n    if {\n    }\n}\n",
+    )
+    .unwrap();
     let out = run(&[ok.to_str().unwrap(), bad.to_str().unwrap()]);
     assert_eq!(out.status.code(), Some(1));
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("bad.gvn"), "stderr: {err}");
+    assert!(err.contains("bad.c"), "stderr: {err}");
     assert!(d.join("ok.svg").exists(), "ok.svg не создан");
 }
 
@@ -207,8 +195,8 @@ fn broken_pipe_exits_zero() {
     let d = tmp("sigpipe");
     let mut paths: Vec<String> = Vec::new();
     for i in 0..300 {
-        let f = d.join(format!("f{i}.gvn"));
-        fs::write(&f, OK_GVN).unwrap();
+        let f = d.join(format!("f{i}.c"));
+        fs::write(&f, OK_C).unwrap();
         paths.push(f.to_str().unwrap().to_string());
     }
     let mut child = Command::new(env!("CARGO_BIN_EXE_gostpadi"))
@@ -223,8 +211,8 @@ fn broken_pipe_exits_zero() {
 }
 
 fn render_svg(d: &std::path::Path, name: &str, extra: &[&str]) -> String {
-    let src = d.join(format!("{name}.gvn"));
-    fs::write(&src, OK_GVN).unwrap();
+    let src = d.join(format!("{name}.c"));
+    fs::write(&src, OK_C).unwrap();
     let out_path = d.join(format!("{name}.svg"));
     let mut args = vec![src.to_str().unwrap(), "-o", out_path.to_str().unwrap()];
     args.extend_from_slice(extra);
@@ -300,8 +288,8 @@ fn lw_flag_sets_stroke_width() {
 #[test]
 fn invalid_font_lw_exits_two() {
     let d = tmp("bad-flags");
-    let src = d.join("in.gvn");
-    fs::write(&src, OK_GVN).unwrap();
+    let src = d.join("in.c");
+    fs::write(&src, OK_C).unwrap();
     for flag in ["--font=0", "--font=-3", "--lw=-1", "--font=abc"] {
         let out = run(&[src.to_str().unwrap(), flag]);
         assert_eq!(out.status.code(), Some(2), "{flag}");

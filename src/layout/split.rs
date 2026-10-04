@@ -93,7 +93,7 @@ pub fn split_scheme(mut items: Vec<Node>, sizes: &Sizes, st: &Style) -> Vec<Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frontend::gvn;
+    use crate::ir::NodeKind;
     use crate::layout::normalize;
 
     /// return на top-level: layout обрывается, якорей меньше, чем узлов —
@@ -101,10 +101,13 @@ mod tests {
     #[test]
     fn split_after_top_level_return_no_panic() {
         let st = Style::default();
-        let mut text = "a = 111111\n".repeat(14);
-        text.push_str("return 1\n");
-        text.push_str(&"z = 222222\n".repeat(4));
-        let nodes = gvn::parse(&text, &st, "en").unwrap();
+        // верхнеуровневый return C-фронтенд отбрасывает, поэтому узел
+        // Return ставим руками — проверяет тест раскладку
+        let mut nodes = vec![Node::new(NodeKind::Term, "Start")];
+        nodes.extend((0..14).map(|_| Node::new(NodeKind::Act, "a = 111111")));
+        nodes.push(Node::new(NodeKind::Return, "return 1"));
+        nodes.extend((0..4).map(|_| Node::new(NodeKind::Act, "z = 222222")));
+        nodes.push(Node::new(NodeKind::Term, "End"));
         let sizes = normalize(&nodes, &st);
         let parts = split_scheme(nodes, &sizes, &st);
         assert!(!parts.is_empty());

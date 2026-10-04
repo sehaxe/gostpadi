@@ -47,7 +47,14 @@ pub fn parse_c_to_nodes(src: &str, labels: &str) -> Result<Vec<Node>, ParseError
         labels,
     };
     let stmts = ctx.items(body)?;
-    let mut nodes = Vec::new();
+    // Терминаторы ставит фронтенд, а не раскладка: без них схема
+    // лишена «начала» и «конца», и по ГОСТ она не схема. Раньше их
+    // добавлял удалённый парсер `.gvn`.
+    let (start_txt, end_txt) = match labels {
+        "ru" => ("начало", "конец"),
+        _ => ("Start", "End"),
+    };
+    let mut nodes = vec![Node::new(NodeKind::Term, start_txt)];
     for s in stmts {
         match s {
             // верхнеуровневый return не рисуем: терминатор «конец» и так завершает схему
@@ -58,87 +65,13 @@ pub fn parse_c_to_nodes(src: &str, labels: &str) -> Result<Vec<Node>, ParseError
             Stmt::Node(n) => nodes.push(*n),
         }
     }
+    nodes.push(Node::new(NodeKind::Term, end_txt));
     Ok(nodes)
 }
 
-/// Код C -> текст схемы .gvn (обратная совместимость с main.rs).
-pub fn c_to_gvn(src: &str, labels: &str) -> Result<String, ParseError> {
-    let nodes = parse_c_to_nodes(src, labels)?;
-    let mut out = String::from("#gostpadi 1\n");
-    emit_nodes(&nodes, 0, &mut out);
-    Ok(out)
-}
-
-fn emit_nodes(nodes: &[Node], depth: usize, out: &mut String) {
-    for n in nodes {
-        pad(out, depth);
-        match n.kind {
-            NodeKind::Loop => {
-                // keyword добавляем обратно: парсер .gvn снимает его сам
-                out.push_str(n.gvn_keyword());
-                out.push(' ');
-                out.push_str(&n.text);
-                out.push('\n');
-                if let Some(body) = &n.body {
-                    emit_stmts(body, depth + 1, out);
-                }
-                continue;
-            }
-            _ => {
-                if n.switch_var.is_none() && n.text.starts_with("if (") && n.text.ends_with(')') {
-                    out.push_str("if ");
-                    out.push_str(&n.text[4..n.text.len() - 1]);
-                } else {
-                    out.push_str(&n.text);
-                }
-                out.push('\n');
-            }
-        }
-        for br in &n.branches {
-            pad(out, depth + 1);
-            // switch: в IR метка уже с префиксом «svar = » — в текст .gvn
-            // пишем сырое значение, иначе gvn::parse навесит префикс дважды
-            let label = match &n.switch_var {
-                Some(sv) => br
-                    .label
-                    .strip_prefix(sv.as_str())
-                    .and_then(|r| r.strip_prefix(" = "))
-                    .unwrap_or(&br.label),
-                None => br.label.as_str(),
-            };
-            out.push_str(label.trim());
-            out.push_str(":\n");
-            emit_stmts(&br.stmts, depth + 1, out);
-        }
-    }
-}
-
-fn emit_stmts(stmts: &[Stmt], depth: usize, out: &mut String) {
-    for s in stmts {
-        match s {
-            Stmt::Tile { text, .. } | Stmt::Return(text) => {
-                pad(out, depth);
-                out.push_str(text);
-                out.push('\n');
-            }
-            Stmt::Break => {
-                pad(out, depth);
-                out.push_str("break\n");
-            }
-            Stmt::Continue => {
-                pad(out, depth);
-                out.push_str("continue\n");
-            }
-            Stmt::Node(n) => emit_nodes(std::slice::from_ref(n), depth, out),
-        }
-    }
-}
-
-fn pad(out: &mut String, depth: usize) {
-    for _ in 0..depth {
-        out.push_str("    ");
-    }
-}
+// (здесь был gvn-писатель: C -> узлы -> текст -> gvn::parse -> узлы.
+// Round-trip сериализации удалён вместе с форматом .gvn: узлы из
+// parse_c_to_nodes идут в layout напрямую, без потери контекста.)
 
 struct Ctx<'a> {
     /// подготовленный исходник (spans lang-c указывают в него)
@@ -978,11 +911,16 @@ fn syntax_err(e: SyntaxError, orig: &str) -> ParseError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::Style;
 
+    /// Узлы тела main БЕЗ терминаторов: тесты этого модуля проверяют
+    /// разбор операторов, а не оформление схемы. Фронтенд добавляет
+    /// «начало»/«конец» — инвариант схемы, проверяется в layout.
     fn parse_ok(src: &str) -> Vec<Node> {
         match parse_c_to_nodes(src, "en") {
-            Ok(nodes) => nodes,
+            Ok(nodes) => nodes
+                .into_iter()
+                .filter(|n| n.kind != NodeKind::Term)
+                .collect(),
             Err(e) => panic!("parse failed: {}", e),
         }
     }
@@ -1077,38 +1015,13 @@ mod tests {
         assert!(!tiles.iter().any(|t| t.contains("return 0")));
     }
 
+    /// Метки case несут префикс переменной ровно один раз:
+    /// «month / 3 = 1», а не «month / 3 = month / 3 = 1». Склейка
+    /// алиасов (case 1: case 2:) этот префикс тоже не дублирует.
     #[test]
-    fn gvn_roundtrip_parses() {
+    fn switch_labels_single_prefix() {
         let src = include_str!("../../examples/main.c");
-        let gvn = c_to_gvn(src, "en").unwrap();
-        let style = Style::default();
-        let nodes = crate::frontend::gvn::parse(&gvn, &style, "en").unwrap();
-        assert_eq!(nodes[0].kind, NodeKind::Term);
-        assert_eq!(nodes.last().unwrap().kind, NodeKind::Term);
-        // Start + End + if + switch + 6 printf + (return 1 считается текстом ветки)
-        let decisions = nodes
-            .iter()
-            .filter(|n| n.kind == NodeKind::Decision)
-            .count();
-        assert_eq!(decisions, 2);
-        let io = gvn
-            .lines()
-            .filter(|l| l.trim().starts_with("printf("))
-            .count();
-        assert_eq!(io, 6, "{}", gvn);
-    }
-
-    /// Префикс «svar = » навешивает только gvn::parse: c_to_gvn пишет
-    /// сырые значения, иначе раундтрип даёт «month / 3 = month / 3 = 1».
-    #[test]
-    fn roundtrip_switch_labels_single_prefix() {
-        let src = include_str!("../../examples/main.c");
-        let gvn = c_to_gvn(src, "en").unwrap();
-        assert!(
-            !gvn.contains("month / 3 = month"),
-            "двойной префикс в gvn:\n{gvn}"
-        );
-        let nodes = crate::frontend::gvn::parse(&gvn, &Style::default(), "en").unwrap();
+        let nodes = parse_ok(src);
         let sw = nodes
             .iter()
             .find(|n| n.kind == NodeKind::Decision && n.switch_var.is_some())
@@ -1158,9 +1071,14 @@ mod tests {
 
     #[test]
     fn ru_labels() {
-        let nodes = parse_c_to_nodes("int main(void) { if (a > 0) printf(\"1\"); }", "ru").unwrap();
-        assert_eq!(nodes[0].branches[0].label, "да");
-        assert_eq!(nodes[0].branches[1].label, "нет");
+        let src = "int main(void) { if (a > 0) printf(\"1\"); }";
+        let nodes = parse_c_to_nodes(src, "ru").unwrap();
+        let dec = nodes
+            .iter()
+            .find(|n| n.kind == NodeKind::Decision)
+            .expect("ветвление не разобрано");
+        assert_eq!(dec.branches[0].label, "да");
+        assert_eq!(dec.branches[1].label, "нет");
     }
 
     #[test]
@@ -1200,13 +1118,9 @@ mod tests {
     }
 
     #[test]
-    fn for_header_keeps_keyword_in_gvn() {
-        let gvn = c_to_gvn(
-            "int main(void) { for (int i = 0; i < 5; i = i + 1) { } }",
-            "en",
-        )
-        .unwrap();
-        assert!(gvn.contains("for i = 0; i < 5; i = i + 1\n"), "{}", gvn);
+    fn for_header_keeps_init_cond_step() {
+        let nodes = parse_ok("int main(void) { for (int i = 0; i < 5; i = i + 1) { x = 1; } }");
+        assert_eq!(nodes[0].text, "i = 0; i < 5; i = i + 1");
     }
 
     /// do-while рисуется как цикл: тело в содержимом трапеции,
@@ -1231,34 +1145,34 @@ mod tests {
         assert_eq!(loop_node.loop_label(), "do while x < 3");
     }
 
-    /// Ключевое слово цикла возвращается в текст .gvn и снимается
-    /// парсером обратно: без этого цикл терял бы вид в IR. Одно
-    /// место на оба конца — Node::gvn_keyword.
+    /// Вид цикла виден в IR и в подписи на схеме: без этого цикл
+    /// терял бы различие между while / for / do while.
     #[test]
-    fn loop_keyword_survives_the_gvn_roundtrip() {
-        for (src, want) in [
-            ("int main(void){ do { x++; } while (x<3); }", "do-while"),
-            ("int main(void){ while (x<3) x++; }", "while"),
-            ("int main(void){ for(int i=0;i<3;i++) x++; }", "for"),
+    fn loop_kind_and_label_survive() {
+        for (src, kind, label) in [
+            (
+                "int main(void){ do { x++; } while (x<3); }",
+                LoopKind::DoWhile,
+                "do while x < 3",
+            ),
+            (
+                "int main(void){ while (x<3) x++; }",
+                LoopKind::While,
+                "while x < 3",
+            ),
+            (
+                "int main(void){ for(int i=0;i<3;i++) x++; }",
+                LoopKind::For,
+                "for i = 0; i < 3; i++",
+            ),
         ] {
-            let gvn = c_to_gvn(src, "en").unwrap();
-            assert!(
-                gvn.contains(&format!("{want} ")),
-                "в .gvn нет ключевого слова {want}:\n{gvn}"
-            );
-            // и обратно: разобранный цикл того же вида
-            let st = crate::style::Style::default();
-            let back = crate::frontend::gvn::parse(&gvn, &st, "en").unwrap();
-            let lp = back
+            let nodes = parse_ok(src);
+            let lp = nodes
                 .iter()
                 .find(|n| n.kind == NodeKind::Loop)
                 .expect("цикл не разобран");
-            let expect = match want {
-                "while" => LoopKind::While,
-                "do-while" => LoopKind::DoWhile,
-                _ => LoopKind::For,
-            };
-            assert_eq!(lp.loop_kind, Some(expect), "вид цикла потерян в .gvn");
+            assert_eq!(lp.loop_kind, Some(kind), "вид цикла потерян");
+            assert_eq!(lp.loop_label(), label);
             assert!(lp.body.is_some(), "тело цикла потерялось");
         }
     }
@@ -1525,11 +1439,10 @@ mod tests {
         assert_eq!(out.len(), src.len());
     }
 
-    /// те же примеры C, что гоняет selftest.py, — через полный
-    /// путь c_to_gvn -> gvn::parse, как это делает main.rs
+    /// те же примеры C, что гоняет selftest.py, — через полный путь
+    /// C -> узлы, как это делает main.rs
     #[test]
     fn python_selftest_c_sources() {
-        let style = Style::default();
         let cases: &[(&str, &str, &[&str])] = &[
             (
                 "switch с return в кейсе",
@@ -1553,18 +1466,20 @@ mod tests {
             ),
         ];
         for (name, src, wants) in cases {
-            let gvn = match c_to_gvn(src, "en") {
-                Ok(g) => g,
-                Err(e) => panic!("{}: c_to_gvn failed: {}", name, e),
-            };
-            for w in *wants {
-                assert!(gvn.contains(w), "{}: lost {:?} in:\n{}", name, w, gvn);
-            }
-            let nodes = match crate::frontend::gvn::parse(&gvn, &style, "en") {
+            let nodes = match parse_c_to_nodes(src, "en") {
                 Ok(n) => n,
-                Err(e) => panic!("{}: gvn reparse failed: {}\n{}", name, e, gvn),
+                Err(e) => panic!("{}: parse failed: {}", name, e),
             };
-            assert_eq!(nodes[0].kind, NodeKind::Term, "{}", name);
+            let tiles = all_tiles(&nodes);
+            for w in *wants {
+                assert!(
+                    tiles.iter().any(|t| t.contains(w)),
+                    "{}: lost {:?} in {:?}",
+                    name,
+                    w,
+                    tiles
+                );
+            }
         }
     }
 

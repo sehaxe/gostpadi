@@ -26,24 +26,10 @@ fn out(s: &str) {
 /// Версия — единственный источник истины: Cargo.toml.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Внимание: `\`-перенос внутри строкового литерала съедает отступы
-/// следующей строки — ветки шаблона обязаны остаться с отступом в 4
-/// пробела, иначе `--template | gostpadi - --check` не сойдётся.
-const TEMPLATE: &str = "\
-#gostpadi 1
-# One line = one block; top to bottom. Five words: input, output, if, yes/no.
-input scanf(\"%d\", &a)
-c = a * 2
-if c > 10
-    yes: printf(\"many\"); break
-    no: c = 0
-output printf(\"c = %d\", c)
-";
-
-const HELP: &str = "gostpadi 2.0.0 — блок-схемы по ГОСТ 19.701 из кода C или .gvn
+const HELP: &str = "gostpadi 2.0.0 — блок-схемы по ГОСТ 19.701 из C-кода
 
 ИСПОЛЬЗОВАНИЕ:
-    gostpadi схема.gvn [ещё.gvn|код.c ...] [-o out.svg|папка/] [флаги]
+    gostpadi код.c [ещё.c ...] [-o out.svg|папка/] [флаги]
 
 ФЛАГИ:
     -o <путь>       выход: файл.svg (один вход) или папка/ (пачка)
@@ -54,12 +40,11 @@ const HELP: &str = "gostpadi 2.0.0 — блок-схемы по ГОСТ 19.701 
                     вписывает общий масштаб пачки (для вставки в отчёт)
     --landscape     альбомный лист А4 297x210 вместо книжного 210x297
     --check         только проверить, не рисовать
-    --template      заготовка .gvn на stdout
     -h, --help      эта справка
     -V, --version   версия
 ";
 
-const USAGE: &str = "использование: gostpadi схема.gvn [ещё.gvn|код.c ...] [-o out.svg|папка/] [--labels=ru|en] [--font=N] [--lw=N] [--no-split] [--landscape] [--check] [--template] [-h] [-V]";
+const USAGE: &str = "использование: gostpadi код.c [ещё.c ...] [-o out.svg|папка/] [--labels=ru|en] [--font=N] [--lw=N] [--no-split] [--landscape] [--check] [-h] [-V]";
 
 /// Базовый путь результата входа: ".../stem.svg" (суффиксы листов добавит
 /// page_path). Папкой считается -o с косой чертой или существующая папка;
@@ -138,7 +123,6 @@ fn main() {
     let mut no_split = false;
     let mut landscape = false;
     let mut check = false;
-    let mut template = false;
 
     let mut i = 1;
     while i < argv.len() {
@@ -152,7 +136,6 @@ fn main() {
                 out(&format!("gostpadi {VERSION}\n"));
                 process::exit(0);
             }
-            "--template" => template = true,
             "--check" => check = true,
             "--no-split" => no_split = true,
             "--landscape" => landscape = true,
@@ -188,26 +171,16 @@ fn main() {
         i += 1;
     }
 
-    if template {
-        out(TEMPLATE);
-        process::exit(0);
-    }
     if inputs.is_empty() {
         eprintln!("{USAGE}");
         process::exit(2);
     }
 
-    // читаем входы; расширение определяет тип (.c -> C, остальное .gvn)
-    let mut sources: Vec<(String, String, bool)> = Vec::with_capacity(inputs.len());
+    // читаем входы: формат только C, тип по расширению не определяется
+    let mut sources: Vec<(String, String)> = Vec::with_capacity(inputs.len());
     for inp in &inputs {
         match std::fs::read_to_string(inp) {
-            Ok(text) => {
-                let is_c = Path::new(inp)
-                    .extension()
-                    .map(|e| e == "c")
-                    .unwrap_or(false);
-                sources.push((inp.clone(), text, is_c));
-            }
+            Ok(text) => sources.push((inp.clone(), text)),
             Err(e) => {
                 eprintln!("не удалось открыть {inp}: {e}");
                 process::exit(1);
