@@ -69,10 +69,10 @@
     height: 46px; padding: 0 16px;
     background: var(--bg2); border-bottom: 1px solid var(--line);
   }
-  .brand { font: 700 17px ui-monospace, Consolas, monospace; letter-spacing: .3px; }
-  .brand:hover { color: inherit; }
-  .brand em { color: var(--accent); font-style: normal; }
-  .brand small { font: 400 12px system-ui, sans-serif; color: var(--muted); margin-left: 10px; }
+  /* вместо надписи — знак: терминатор, стрелка, ромб */
+  .brand { display: flex; color: var(--accent); }
+  .brand svg { width: 24px; height: 24px; display: block; }
+  .brand:hover { color: var(--fg); }
   .top-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
   .top-actions a { color: var(--muted); text-decoration: none; font-size: 13px; }
   .top-actions a:hover { color: var(--ink); }
@@ -298,7 +298,12 @@
 <body>
 <a class="skip" href="#code">к редактору</a>
 <header class="top">
-  <a class="brand" href="./" title="на главную">gost<em>padi</em></a>
+  <a class="brand" href="./" title="gostpadi — на главную" aria-label="gostpadi, на главную">
+    <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.2"
+         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M16 5l10 7-10 7-10-7z"/><path d="M16 19v8"/><path d="M12 23l4 5 4-5"/>
+    </svg>
+  </a>
   <div class="top-actions">
     <span class="viewchips" role="group" aria-label="показ панелей">
       <button id="vt-files" aria-pressed="true">Файлы</button>
