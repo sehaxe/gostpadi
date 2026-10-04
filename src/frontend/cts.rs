@@ -202,11 +202,18 @@ impl Ctx<'_> {
             "do_statement" => self.loop_stmt(n, out, labels, LoopKind::DoWhile),
             "switch_statement" => self.switch_stmt(n, out, labels),
             "return_statement" => {
-                let t = named_children(n)
+                // Ключевое слово — часть текста блока: `return` без
+                // значения на схеме неотличим от числа.
+                let value = named_children(n)
                     .into_iter()
                     .find(|c| c.kind() != "return")
                     .map(|v| flatten(text(v, self.src), self.src))
                     .unwrap_or_default();
+                let t = if value.is_empty() {
+                    "return".to_string()
+                } else {
+                    format!("return {value}")
+                };
                 out.push(Node::new(NodeKind::Return, t));
             }
             "break_statement" => out.push(Node::new(NodeKind::Act, "break")),
@@ -556,27 +563,34 @@ fn flatten(s: &str, _src: &str) -> String {
     t.strip_suffix(';').unwrap_or(t).trim_end().to_string()
 }
 
-/// Оператор с отбитыми пробелами: `a=1` -> `a = 1`. Инкремент
-/// (`a++`) и двухзначные операторы (`!=`, `<=`) не трогаем.
+/// Оператор с отбитыми пробелами: `a=1` -> `a = 1`.
+///
+/// Двухзначные операторы остаются слитными: `!=`, `<=`, `>=`, `==`, `&&`,
+/// `||`, `+=`, `++`, `--`. Раньше проверка исключала `!=` из пары и
+/// разбивала его на `! =` — на схеме это читалось как отрицание
+/// присваивания, то есть совсем другой смысл.
 fn push_op(out: &mut String, chars: &mut std::iter::Peekable<std::str::Chars>, c: char) {
-    const OPS: &str = "=+-*/<>%!";
+    const OPS: &str = "=+-*/<>%!&|^";
     if !OPS.contains(c) {
         out.push(c);
         return;
     }
-    // пост/префикс инкремент: `a++`, `++a`, `a--`
-    if (c == '+' || c == '-') && (chars.peek() == Some(&c) || out.ends_with(c)) {
-        out.push(c);
-        return;
-    }
-    // `!=`, `<=`, `>=`, `==`, `&&`, `||`: второй знак пишем как есть
+    // Двухзначный оператор ПЕРВЫМ: иначе префиксная ветка ниже съест
+    // `!` у `!=`, и на схеме получится `! =`.
     if let Some(&next) = chars.peek() {
-        if OPS.contains(next) && (next == c || (next == '=' && c != '!')) {
+        if OPS.contains(next) && (next == c || next == '=') {
             out.push(c);
             out.push(next);
             chars.next();
             return;
         }
+    }
+    // Префикс `!`, `*`, `&`, `%`: `!flag`, `*p`, `&x` — без пробела справа.
+    if matches!(c, '!' | '&' | '*' | '%')
+        && !out.ends_with(|p: char| p.is_alphanumeric() || p == '_')
+    {
+        out.push(c);
+        return;
     }
     if out.ends_with(' ') {
         out.push(c);
@@ -633,6 +647,10 @@ fn to_stmts(nodes: Vec<Node>) -> Vec<Stmt> {
                 kind: tile_kind(&n.text),
                 text: n.text,
             },
+            // return обязан быть Stmt::Return, а не узлом: раскладка
+            // рисует его отдельной формой, а узел без ветвления уехал
+            // в трапеции цикла.
+            (NodeKind::Return, _) => Stmt::Return(n.text),
             _ => Stmt::Node(Box::new(n)),
         })
         .collect()
@@ -1024,5 +1042,79 @@ mod tests {
     fn cast_and_ternary_single_tile() {
         let ns = body("int main(void) { x = (int)y; z = a ? b : c; }");
         assert_eq!(texts(&ns), vec!["x = (int)y", "z = a ? b : c"]);
+    }
+
+    /// Двухзначные операторы не разваливаются: `!= 1` на схеме читалось
+    /// как `! = 1`, то есть как отрицание присваивания — другой смысл.
+    #[test]
+    fn two_char_operators_stay_joined() {
+        for (src, want) in [
+            ("x = a != 1;", "x = a != 1"),
+            ("x = a <= 1;", "x = a <= 1"),
+            ("x = a >= 1;", "x = a >= 1"),
+            ("x = a == 1;", "x = a == 1"),
+            ("x = a && b;", "x = a && b"),
+            ("x = a || b;", "x = a || b"),
+            ("a += 1;", "a += 1"),
+            ("a++;", "a++"),
+            ("a--;", "a--"),
+            ("x = a * b;", "x = a * b"),
+            ("x = a / b;", "x = a / b"),
+        ] {
+            let got = body(&format!("int main(void) {{ int a = 0, b = 0; {src} }}"))
+                .pop()
+                .unwrap_or_else(|| panic!("{src}: пустое тело"));
+            assert_eq!(got.text, want, "{src}");
+        }
+        // `a * b;` без присваивания не проверяем: tree-sitter (и сам C)
+        // читает это как объявление указателя, а не выражение.
+    }
+
+    /// Унарные не отбиваются пробелом: `!flag`, `*p`, `&x`.
+    #[test]
+    fn unary_operators_not_spaced() {
+        assert_eq!(body("int main(void) { x = !flag; }")[0].text, "x = !flag");
+    }
+
+    /// return в ветке — отдельный терминатор, не узел без ветвления.
+    /// Как узел он уезжал в трапеции цикла, и на схеме появлялась
+    /// пара блоков вместо одного.
+    #[test]
+    fn return_inside_branch_is_return_stmt() {
+        let d = body("int main(void) { if (a) return 1; }")
+            .into_iter()
+            .find(|n| n.kind == NodeKind::Decision)
+            .unwrap();
+        match d.branches[0].stmts.first() {
+            Some(Stmt::Return(t)) => assert_eq!(t, "return 1"),
+            other => panic!("ожидался Stmt::Return, получили {other:?}"),
+        }
+    }
+
+    /// return без значения сохраняет ключевое слово: голое число на
+    /// схеме неотличимо от значения, ради которого ветка закрывается.
+    #[test]
+    fn bare_return_keeps_keyword() {
+        let d = body("int main(void) { if (a) return; }")
+            .into_iter()
+            .find(|n| n.kind == NodeKind::Decision)
+            .unwrap();
+        match d.branches[0].stmts.first() {
+            Some(Stmt::Return(t)) => assert_eq!(t, "return"),
+            other => panic!("ожидался Stmt::Return, получили {other:?}"),
+        }
+    }
+
+    /// Регрессия масштаба листа: условие в три строки печаталось как
+    /// `if (scanf("%d", &month) ! = 1` / `|| month < 1 || month > 12)`.
+    #[test]
+    fn condition_keeps_operators_readable() {
+        let src = "int main(void) {\n    int month;\n    if (scanf(\"%d\", &month) != 1 || month < 1) {\n        a = 1;\n    }\n}\n";
+        let d = body(src)
+            .into_iter()
+            .find(|n| n.kind == NodeKind::Decision)
+            .unwrap();
+        assert!(d.text.contains("!= 1"), "оператор разорван: {}", d.text);
+        assert!(!d.text.contains("! ="), "оператор разорван: {}", d.text);
     }
 }
