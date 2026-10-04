@@ -344,3 +344,48 @@ fn invalid_font_lw_exits_two() {
         assert!(!err.is_empty(), "{flag}: нет сообщения");
     }
 }
+
+/// Код без main: схемы нет, и «готово» в коде выхода было бы враньём —
+/// наружу уходит лист с двумя терминаторами и больше ничего.
+#[test]
+fn no_main_exits_one_and_says_so() {
+    let d = tmp("no-main");
+    let f = d.join("helper.c");
+    fs::write(&f, "int helper(void) { return 1; }\n").unwrap();
+    let out = run(&[f.to_str().unwrap(), "-o", d.join("o.svg").to_str().unwrap()]);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "код без main должен быть провалом"
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("main"), "причина не названа: {err}");
+}
+
+/// Частично пустая пачка — норма: остальные файлы отрисованы,
+/// предупреждения достаточно, выход 0.
+#[test]
+fn batch_with_one_mainless_file_still_succeeds() {
+    let d = tmp("no-main-batch");
+    let good = d.join("good.c");
+    let bad = d.join("helper.c");
+    fs::write(&good, OK_C).unwrap();
+    fs::write(&bad, "int helper(void) { return 1; }\n").unwrap();
+    // слеш в конце: без него -o это имя файла, а не папки
+    let out_dir = format!("{}/", d.join("out").display());
+    let out = run(&[
+        good.to_str().unwrap(),
+        bad.to_str().unwrap(),
+        "-o",
+        &out_dir,
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(d.join("out/good.svg").exists(), "good.svg не создан");
+    assert!(d.join("out/helper.svg").exists(), "helper.svg не создан");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("main"), "пустой файл не помечен: {err}");
+}
