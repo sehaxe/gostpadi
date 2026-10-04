@@ -71,7 +71,7 @@
   }
   /* вместо надписи — знак: терминатор, стрелка, ромб */
   .brand { display: flex; color: var(--accent); }
-  .brand svg { width: 24px; height: 24px; display: block; }
+  .brand svg { width: 22px; height: 22px; display: block; }
   .brand:hover { color: var(--fg); }
   .top-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
   .top-actions a { color: var(--muted); text-decoration: none; font-size: 13px; }
@@ -299,9 +299,9 @@
 <a class="skip" href="#code">к редактору</a>
 <header class="top">
   <a class="brand" href="./" title="gostpadi — на главную" aria-label="gostpadi, на главную">
-    <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.2"
+    <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.4"
          stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <path d="M16 5l10 7-10 7-10-7z"/><path d="M16 19v8"/><path d="M12 23l4 5 4-5"/>
+      <rect x="9" y="2" width="14" height="8" rx="4"/><path d="M16 10v4M16 14l8 8-8 8-8-8z"/>
     </svg>
   </a>
   <div class="top-actions">
@@ -540,6 +540,16 @@ function curItems() {
   return files;
 }
 
+/* Убрать схему с экрана: после сбоя показывать прошлую схему —
+   враньё, она сделана из другого кода. */
+function dropSheets() {
+  sheets = [];
+  drawSheets();
+  drawTabs();
+  setExport(false);
+  $("errbox").classList.remove("show");
+}
+
 function renderNow() {
   if (!engineReady) return;
   syncCur();
@@ -564,12 +574,17 @@ function renderNow() {
         : callBatch(items, ru, lw);
     } catch (e) {
       $("render").disabled = false;
+      // старую схему сносим: под красной ошибкой оставалась схема
+      // предыдущего успешного рендера, и выглядело так, будто
+      // всё нарисовано из испорченного кода
+      dropSheets();
       status("движок упал: " + e, true);
       return;
     }
     $("render").disabled = false;
     if (!res.ok) {
       // мост не падает на разборе: сюда попадает только внутренняя ошибка
+      dropSheets();
       status("движок не ответил — попробуй ещё раз", true);
       return;
     }
@@ -932,8 +947,26 @@ function uniqName(base, taken) {
   return base.replace(/(\.[^.]*)?$/, `-${i}$1`);
 }
 
+/* Проверка типа файла при импорте.
+   accept=".c,.h,.txt" фильрует только диалог выбора: перетаскивание,
+   «выбрать всё» и вставка мимо него проходят. Без проверки в пачку
+   попадал бинарник (png, pdf), f.text() давал мусор, движок на нём
+   падал — и красная ошибка висела поверх старой схемы. */
+const ALLOWED_EXT = /\.(c|h|txt)$/i;
+
+function rejectReason(name, text) {
+  if (!ALLOWED_EXT.test(name)) {
+    return "не .c, .h или .txt";
+  }
+  // двоичный файл с правым расширением: f.text() отдаст мусор с NUL
+  if (text.includes("\0")) return "похоже на бинарный файл";
+  // текст без единого разумного символа C
+  if (!/[A-Za-zА-Яа-яЁё_]/.test(text)) return "в файле нет кода";
+  return null;
+}
+
 async function loadFiles(list) {
-  const added = [], failed = [];
+  const added = [], failed = [], rejected = [];
   // черновик не выбрасываем: вставленный код становится файлом пачки
   if (cur < 0) {
     const text = $("code").value;
@@ -953,6 +986,8 @@ async function loadFiles(list) {
     try {
       const text = await f.text();
       let name = f.name;
+      const why = rejectReason(name, text);
+      if (why) { rejected.push(name + " — " + why); continue; }
       // то же имя — не повод затирать: другой код получает соседнее имя
       // (main.c из другой папки → main-2.c), тот же код — пропускаем
       const same = files.find(x => x.name === name) ||
@@ -972,7 +1007,11 @@ async function loadFiles(list) {
       });
     } catch (e) { failed.push(f.name); }
   }
-  if (failed.length) status("не удалось прочитать: " + failed.join(", "), true);
+  // Именно toast, а не status: следом идёт renderNow(), и status()
+  // перезаписался бы на «готово» — отчёт о пропущенных файлах не
+  // дошёл бы до пользователя. Тост живёт 5 секунд поверх схемы.
+  if (failed.length) toast("не удалось прочитать: " + failed.join(", "));
+  if (rejected.length) toast("пропущено — " + rejected.join("; "));
   if (!added.length) {
     if (skipped.length) status("такой файл уже есть: " + skipped.join(", "));
     return;
@@ -1119,6 +1158,12 @@ $("code").addEventListener("input", () => {
     files[cur].text = $("code").value;
     files[cur].dirty = true;
     drawFileList();
+  }
+  // Пользователь правит код — прошлая ошибка больше не про него.
+  // Иначе красная строка про «движок упал» висела бы, пока он
+  // дописывает, и выглядела как текущее состояние.
+  if ($("statusline").classList.contains("err")) {
+    status("правлю код — рисую заново…");
   }
   updateMode();
   if (engineReady) scheduleRender();
