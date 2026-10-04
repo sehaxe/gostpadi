@@ -3,8 +3,12 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 
 export default defineConfig({
-  // Документация живёт по пути /docs/ рядом с приложением в корне сайта,
-  // поэтому base не нужен: собирается в site/dist и копируется в docs/docs.
+  // Куда ляжет собранное: /gostpadi/docs/ на GitHub Pages.
+  // Репозиторий sehaxe/gostpadi — это project page, поэтому перед docs
+  // стоит ещё и имя репозитория. Без base ссылки на ассеты и страницы
+  // ушли бы в корень домена, то есть на sehaxe.github.io/_astro/…
+  // мимо репозитория.
+  base: '/gostpadi/docs',
   site: 'https://sehaxe.github.io',
   trailingSlash: 'ignore',
   build: { format: 'directory' },
@@ -13,7 +17,6 @@ export default defineConfig({
       title: 'gostpadi',
       description: 'Блок-схемы по ГОСТ 19.701 из C-кода',
       logo: { light: './src/assets/logo.svg', dark: './src/assets/logo.svg' },
-      favicon: '/og.png',
       social: [
         {
           icon: 'github',

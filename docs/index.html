@@ -3,277 +3,119 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>gostpadi — блок-схемы по ГОСТ 19.701 из C-кода</title>
-<meta name="description" content="Вставь C-код — получи готовую блок-схему по ГОСТ 19.701-90 на настоящем листе А4. Считается в браузере, код никуда не отправляется.">
-<meta property="og:title" content="gostpadi — блок-схемы по ГОСТ из C-кода">
-<meta property="og:description" content="Вставь C-код — получи готовую блок-схему по ГОСТ 19.701-90 на настоящем листе А4.">
-<meta property="og:image" content="/og.png">
+<title>gostpadi — блок-схемы из C-кода</title>
+<meta name="description" content="Вставьте C-код — получите блок-схему для отчёта. Считается в браузере, код никуда не отправляется.">
+<meta property="og:title" content="gostpadi — блок-схемы из C-кода">
+<meta property="og:description" content="Вставьте C-код — получите блок-схему для отчёта.">
+<meta property="og:image" content="https://sehaxe.github.io/gostpadi/og.png">
 <meta name="theme-color" content="#09090b">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32' fill='none' stroke='%235e6ad2' stroke-width='2.4'%3E%3Crect x='9' y='2' width='14' height='8' rx='4'/%3E%3Cpath d='M16 10v4M16 14l8 8-8 8-8-8z'/%3E%3C/svg%3E">
 <style>
-/* Палитра и типографика — в :root, ниже всё на них и ссылается. */
 :root{
-  --bg:#09090b; --panel:#101013; --line:#232327;
-  --fg:#fafafa; --fg2:#a1a1aa; --fg3:#71717a;
-  --accent:#7c85f0; --accent2:#aab0ff; --ok:#46d183; --warn:#e2a33c;
-  --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  --bg:#09090b; --fg:#fafafa; --fg2:#a1a1aa; --fg3:#71717a;
+  --line:#232327; --accent:#aab0ff;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
   --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,sans-serif;
-  --w:min(1080px,100% - 3rem);
+  --w:min(720px,100% - 3rem);
 }
 *{box-sizing:border-box}
-html{scroll-behavior:smooth}
-@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
 body{
   margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);
   font-size:17px;line-height:1.6;-webkit-font-smoothing:antialiased;
 }
-a{color:var(--accent2);text-decoration:none}
+a{color:var(--accent);text-decoration:none}
 a:hover{color:var(--fg)}
-code,pre,.mono{font-family:var(--mono)}
-
-/* ---------- шапка ---------- */
-header{
-  position:sticky;top:0;z-index:10;border-bottom:1px solid var(--line);
-  background:color-mix(in srgb,var(--bg) 82%,transparent);
-  backdrop-filter:blur(12px);
-}
-.bar{width:var(--w);margin:0 auto;height:60px;display:flex;align-items:center;gap:1.5rem}
-.logo{display:flex;align-items:center;gap:.55rem;font-weight:650;letter-spacing:-.01em;color:var(--fg)}
-.logo svg{width:22px;height:22px;color:var(--accent);flex:none}
-nav{margin-left:auto;display:flex;gap:1.4rem;font-size:15px}
+code,.mono{font-family:var(--mono)}
+.wrap{width:var(--w);margin:0 auto}
+header{border-bottom:1px solid var(--line)}
+header .wrap{height:56px;display:flex;align-items:center;gap:1.2rem}
+.logo{display:flex;align-items:center;gap:.5rem;font-weight:600;color:var(--fg)}
+.logo svg{width:20px;height:20px;color:var(--accent);flex:none}
+nav{margin-left:auto;display:flex;gap:1.2rem;font-size:15px}
 nav a{color:var(--fg2)}
 nav a:hover{color:var(--fg)}
-@media (max-width:600px){nav a.nav-hide{display:none}}
+@media (max-width:520px){nav a.opt{display:none}}
 
-/* ---------- общие секции ---------- */
-main>section{width:var(--w);margin:0 auto;padding:5.5rem 0}
-@media (max-width:600px){main>section{padding:3.5rem 0}}
-h2{font-size:clamp(1.5rem,3.4vw,2.1rem);letter-spacing:-.02em;margin:0 0 .6rem;font-weight:680}
-.lead{color:var(--fg2);margin:0 0 2.6rem;max-width:60ch}
-.eyebrow{
-  font-size:12px;letter-spacing:.09em;text-transform:uppercase;
-  color:var(--fg3);margin:0 0 1.1rem;font-weight:600;
-}
-
-/* ---------- герой ---------- */
-.hero{
-  display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4rem;
-  align-items:center;padding-top:4.5rem!important;
-}
-@media (max-width:900px){.hero{grid-template-columns:1fr;gap:3rem}}
-h1{
-  font-size:clamp(2.1rem,5.6vw,3.5rem);line-height:1.08;letter-spacing:-.035em;
-  margin:0 0 1.2rem;font-weight:700;
-}
-h1 em{font-style:normal;color:var(--accent2)}
-.hero p{color:var(--fg2);font-size:1.08rem;margin:0 0 2rem;max-width:52ch}
-.cta{display:flex;flex-wrap:wrap;gap:.7rem;align-items:center}
-.btn{
-  display:inline-flex;align-items:center;gap:.5rem;padding:.7rem 1.15rem;
-  border-radius:9px;font-size:15px;font-weight:560;border:1px solid transparent;
-}
-.btn-p{background:var(--accent);color:#fff}
-.btn-p:hover{background:#8b93f4;color:#fff}
+main{padding:4rem 0 5rem}
+h1{font-size:clamp(1.9rem,5vw,2.7rem);line-height:1.15;letter-spacing:-.03em;margin:0 0 1rem;font-weight:680}
+p{color:var(--fg2);margin:0 0 1.6rem;max-width:56ch}
+.cta{display:flex;flex-wrap:wrap;gap:.6rem;margin:0 0 3.5rem}
+.btn{display:inline-flex;padding:.65rem 1.1rem;border-radius:8px;font-size:15px;border:1px solid transparent}
+.btn-p{background:var(--accent);color:#111}
+.btn-p:hover{background:#fff;color:#111}
 .btn-g{border-color:var(--line);color:var(--fg2)}
 .btn-g:hover{border-color:var(--fg3);color:var(--fg)}
-.meta{margin:1.6rem 0 0;font-size:14px;color:var(--fg3)}
-.meta b{color:var(--fg2);font-weight:560}
-
-/* лист с реальной схемой, сгенерированной движком */
-.sheet{
-  width:270px;flex:none;background:#fff;border-radius:3px;
-  box-shadow:0 18px 50px -12px rgb(0 0 0 / .75),0 0 0 1px var(--line);
-  overflow:hidden;
-}
+.sheet{width:250px;background:#fff;border-radius:2px;overflow:hidden;
+  box-shadow:0 16px 44px -12px rgb(0 0 0 / .7),0 0 0 1px var(--line)}
 .sheet svg{display:block;width:100%;height:auto}
-@media (max-width:900px){.sheet{width:210px;margin:0 auto}}
-
-/* ---------- карточки ---------- */
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(255px,1fr));gap:1rem}
-.card{
-  border:1px solid var(--line);border-radius:11px;padding:1.4rem 1.3rem;
-  background:var(--panel);
-}
-.card h3{font-size:1.02rem;margin:0 0 .5rem;font-weight:620;letter-spacing:-.01em}
-.card p{margin:0;color:var(--fg2);font-size:.945rem}
-.card .tag{
-  display:inline-block;font-size:11px;font-family:var(--mono);color:var(--fg3);
-  border:1px solid var(--line);border-radius:5px;padding:.1rem .4rem;margin-bottom:.85rem;
-}
-
-/* ---------- код против результата ---------- */
-.demo{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
-@media (max-width:820px){.demo{grid-template-columns:1fr}}
-pre{
-  margin:0;background:var(--panel);border:1px solid var(--line);border-radius:11px;
-  padding:1.1rem 1.2rem;overflow-x:auto;font-size:.83rem;line-height:1.65;color:var(--fg2);
-}
-pre .k{color:#c084fc}pre .s{color:var(--ok)}pre .c{color:var(--fg3);font-style:italic}
-.out{
-  border:1px solid var(--line);border-radius:11px;background:var(--panel);
-  padding:1.1rem 1.2rem;font-size:.83rem;line-height:1.65;
-}
-.out .cap{color:var(--fg3);font-size:12px;margin-bottom:.7rem;font-family:var(--mono)}
-.out .ok{color:var(--ok)}
-.out .bad{color:var(--warn)}
-.out .lbl{color:var(--accent2)}
-
-/* ---------- таблица конструкций ---------- */
-table{width:100%;border-collapse:collapse;font-size:.92rem}
-th,td{text-align:left;padding:.62rem .5rem;border-bottom:1px solid var(--line);vertical-align:top}
-th{color:var(--fg3);font-weight:600;font-size:13px;text-transform:uppercase;letter-spacing:.06em}
-td:first-child{font-family:var(--mono);color:var(--fg);white-space:nowrap}
-td:nth-child(2){color:var(--fg2)}
-.scroll{overflow-x:auto;border:1px solid var(--line);border-radius:11px;padding:.4rem 1rem}
-
-/* ---------- подвал ---------- */
-footer{border-top:1px solid var(--line);padding:2.6rem 0;color:var(--fg3);font-size:14px}
-footer .bar{height:auto;display:flex;flex-wrap:wrap;gap:1rem;align-items:center}
-footer .bar a{color:var(--fg2)}
+.hero{display:grid;grid-template-columns:1fr auto;gap:3rem;align-items:start}
+@media (max-width:760px){.hero{grid-template-columns:1fr}.sheet{width:190px}}
+hr{border:0;border-top:1px solid var(--line);margin:3.5rem 0}
+dl{display:grid;grid-template-columns:auto 1fr;gap:.5rem 1.4rem;margin:0;font-size:.95rem}
+dt{color:var(--fg3)}
+dd{margin:0;color:var(--fg2)}
+dd b{color:var(--fg);font-weight:600}
+footer{border-top:1px solid var(--line);padding:2rem 0;color:var(--fg3);font-size:14px}
+footer .wrap{display:flex;flex-wrap:wrap;gap:.8rem}
+footer a{color:var(--fg2)}
 </style>
 </head>
 <body>
 
 <header>
-  <div class="bar">
-    <a class="logo" href="/">
+  <div class="wrap">
+    <a class="logo" href="./">
       <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <rect x="9" y="2" width="14" height="8" rx="4"/>
-        <path d="M16 10v4M16 14l8 8-8 8-8-8z"/>
+        <rect x="9" y="2" width="14" height="8" rx="4"/><path d="M16 10v4M16 14l8 8-8 8-8-8z"/>
       </svg>
       gostpadi
     </a>
     <nav>
-      <a href="/app.html">Приложение</a>
-      <a href="/docs/">Документация</a>
-      <a class="nav-hide" href="https://github.com/sehaxe/gostpadi">GitHub</a>
+      <a href="app.html">Приложение</a>
+      <a href="docs/">Документация</a>
+      <a class="opt" href="https://github.com/sehaxe/gostpadi">GitHub</a>
     </nav>
   </div>
 </header>
 
-<main>
-
-<section class="hero">
-  <div>
-    <p class="eyebrow">ГОСТ 19.701-90 · из C-кода</p>
-    <h1>Блок-схема из кода —<br><em>за две с половиной миллисекунды</em></h1>
-    <p>
-      Вставьте <span class="mono">main.c</span> — получите настоящий лист А4 210×297 мм
-      с полями ЕСКД: ромбы 45°, циклы шестиугольником «подготовка»,
-      параллелограммы ввода-вывода, линии строго под 90°.
-      Всё считается в браузере, код никуда не отправляется.
-    </p>
-    <div class="cta">
-      <a class="btn btn-p" href="/app.html">Открыть приложение</a>
-      <a class="btn btn-g" href="/docs/cli/">Как запустить</a>
-    </div>
-    <p class="meta">
-      <b>2 мс</b> на схему · <b>138</b> тестов · <b>2</b> зависимости, обе — парсер C ·
-      MIT
-    </p>
-  </div>
-  <!-- Настоящая схема из examples/simple.c, сгенерированная движком.
-       Не макет: ровно то, что выдаёт gostpadi. -->
-  <div class="sheet" role="img" aria-label="Схема примера simple.c: начало, ввод x, ветвление x больше нуля, вывод, конец">
-    <svg xmlns="http://www.w3.org/2000/svg" width="595.276pt" height="841.89pt" viewBox="0 0 595.276 841.89"><rect x="0" y="0" width="595.276" height="841.89" fill="#ffffff"/><g transform="translate(325.984 200.506) scale(0.724)"><polyline points="0,85.02 0,127.53" fill="none" stroke="black" stroke-width="1" stroke-linejoin="miter"/><path d="M 2.711 120.984 L 0 127.53 M -2.711 120.984 L 0 127.53" fill="none" stroke="black" stroke-width="1"/><polyline points="0,170.04 0,212.55" fill="none" stroke="black" stroke-width="1" stroke-linejoin="miter"/><path d="M 2.711 206.004 L 0 212.55 M -2.711 206.004 L 0 212.55" fill="none" stroke="black" stroke-width="1"/><polyline points="-77.935,290.485 -219.635,290.485 -219.635,410.93" fill="none" stroke="black" stroke-width="1" stroke-linejoin="miter"/><path d="M -216.924 404.384 L -219.635 410.93 M -222.346 404.384 L -219.635 410.93" fill="none" stroke="black" stroke-width="1"/><polyline points="77.935,290.485 219.635,290.485 219.635,410.93" fill="none" stroke="black" stroke-width="1" stroke-linejoin="miter"/><path d="M 222.346 404.384 L 219.635 410.93 M 216.924 404.384 L 219.635 410.93" fill="none" stroke="black" stroke-width="1"/><polyline points="-219.635,453.44 -219.635,481.78" fill="none" stroke="black" stroke-width="1" stroke-linejoin="miter"/><polyline points="219.635,453.44 219.635,481.78" fill="none" stroke="black" stroke-width="1" stroke-linejoin="miter"/><polyline points="-219.635,481.78 219.635,481.78" fill="none" stroke="black" stroke-width="1" stroke-linejoin="miter"/><polyline points="0,481.78 0,524.29" fill="none" stroke="black" stroke-width="1" stroke-linejoin="miter"/><path d="M 2.711 517.744 L 0 524.29 M -2.711 517.744 L 0 524.29" fill="none" stroke="black" stroke-width="1"/><rect x="-49.595" y="42.51" width="99.19" height="42.51" rx="21.255" ry="21.255" fill="white" stroke="black" stroke-width="1" stroke-linejoin="miter"/><text x="0" y="63.765" font-family="DejaVu Sans Mono, monospace" font-size="14" font-weight="normal" text-anchor="middle" dominant-baseline="central"><tspan x="0" dy="0">Start</tspan></text><polygon points="-101.969,127.53 113.36,127.53 101.969,170.04 -113.36,170.04" fill="white" stroke="black" stroke-width="1" stroke-linejoin="miter"/><text x="0" y="148.785" font-family="DejaVu Sans Mono, monospace" font-size="14" font-weight="normal" text-anchor="middle" dominant-baseline="central"><tspan x="0" dy="0">scanf("%d", &amp;x)</tspan></text><polygon points="-77.935,290.485 0,212.55 77.935,290.485 0,368.42" fill="white" stroke="black" stroke-width="1" stroke-linejoin="miter"/><text x="0" y="290.485" font-family="DejaVu Sans Mono, monospace" font-size="14" font-weight="normal" text-anchor="middle" dominant-baseline="central"><tspan x="0" dy="0">if (x &gt; 0)</tspan></text><polygon points="-321.604,410.93 -106.275,410.93 -117.666,453.44 -332.995,453.44" fill="white" stroke="black" stroke-width="1" stroke-linejoin="miter"/><text x="-219.635" y="432.185" font-family="DejaVu Sans Mono, monospace" font-size="14" font-weight="normal" text-anchor="middle" dominant-baseline="central"><tspan x="-219.635" dy="0">printf("positive")</tspan></text><polygon points="117.666,410.93 332.995,410.93 321.604,453.44 106.275,453.44" fill="white" stroke="black" stroke-width="1" stroke-linejoin="miter"/><text x="219.635" y="432.185" font-family="DejaVu Sans Mono, monospace" font-size="14" font-weight="normal" text-anchor="middle" dominant-baseline="central"><tspan x="219.635" dy="0">printf("non-positive")</tspan></text><rect x="-49.595" y="524.29" width="99.19" height="42.51" rx="21.255" ry="21.255" fill="white" stroke="black" stroke-width="1" stroke-linejoin="miter"/><text x="0" y="545.545" font-family="DejaVu Sans Mono, monospace" font-size="14" font-weight="normal" text-anchor="middle" dominant-baseline="central"><tspan x="0" dy="0">End</tspan></text><text x="-106.275" y="276.485" font-family="DejaVu Sans Mono, monospace" font-size="14" font-weight="normal" text-anchor="middle" dominant-baseline="central">yes</text><text x="106.275" y="276.485" font-family="DejaVu Sans Mono, monospace" font-size="14" font-weight="normal" text-anchor="middle" dominant-baseline="central">no</text></g></svg>
-  </div>
-</section>
-
-<section>
-  <p class="eyebrow">Почему это работает</p>
-  <h2>Три свойства, из-за которых утилита вообще применима</h2>
-  <p class="lead">
-    Инструмент для лабораторных — это инструмент для кода, который ещё не дописан.
-  </p>
-  <div class="grid">
-    <div class="card">
-      <span class="tag">tree-sitter</span>
-      <h3>Битый код рисуется, а не отказывает</h3>
+<main class="wrap">
+  <div class="hero">
+    <div>
+      <h1>Блок-схема из C-кода — за пару миллисекунд</h1>
       <p>
-        Строгий парсер C99 на одной незакрытой скобке завершался ошибкой и
-        <em>не рисовал ничего</em>. Сейчас разбор помечает непонятное и рисует
-        то, что понял. Схема получается всегда.
+        Вставьте код — получите готовую схему для отчёта.
+        Всё считается в браузере, код никуда не отправляется.
+        Даже если код не компилируется: непонятные места попадут в
+        схему как есть.
       </p>
-    </div>
-    <div class="card">
-      <span class="tag">sheet.rs</span>
-      <h3>Настоящий лист А4</h3>
-      <p>
-        210×297 мм, поля ЕСКД 30/10/20/20 мм, текстовая зона 170×257 мм.
-        Длинные схемы режутся на листы с кружками-соединителями.
-        Размер страницы не зависит от содержимого.
-      </p>
-    </div>
-    <div class="card">
-      <span class="tag">пачка</span>
-      <h3>Один масштаб на всю лабу</h3>
-      <p>
-        <span class="mono">gostpadi 1/*.c 2/*.c -o out/</span> — размер фигур,
-        масштаб и лист общие для всех файлов, как требует п. 4.1.3 ГОСТ.
-        Если масштаб упал ниже читаемого, утилита об этом говорит.
-      </p>
-    </div>
-  </div>
-</section>
-
-<section>
-  <p class="eyebrow">Устойчивость</p>
-  <h2>Что было раньше и что стало</h2>
-  <p class="lead">
-    Один и тот же файл с ошибкой: слева — вход, справа — что получается.
-  </p>
-  <div class="demo">
-    <pre><code><span class="c">/* syntactically broken */</span>
-<span class="k">int</span> main(<span class="k">void</span>) {
-    <span class="k">int</span> a = <span class="s">1</span>;
-    <span class="k">if</span> {
-        a = <span class="s">2</span>;
-    <span class="k">for</span> (;;) {
-    <span class="k">switch</span> (a) { <span class="k">case</span>
-}</code></pre>
-    <div class="out">
-      <div class="cap">$ gostpadi broken.c -o broken.svg</div>
-      <div><span class="ok">Start</span></div>
-      <div><span class="lbl">a = 1</span></div>
-      <div><span class="lbl">if {</span></div>
-      <div><span class="lbl">a = 2</span></div>
-      <div><span class="ok">End</span></div>
-      <div class="cap" style="margin:.9rem 0 0">
-        раньше: <span class="bad">ошибка разбора, SVG не создан</span>
+      <div class="cta">
+        <a class="btn btn-p" href="app.html">Открыть приложение</a>
+        <a class="btn btn-g" href="docs/">Как пользоваться</a>
+      </div>
+      <!-- Настоящая схема из examples/simple.c с русскими надписями -->
+      <div class="sheet" role="img" aria-label="Пример схемы: начало, ввод x, проверка x больше нуля, вывод, конец">
+    <svg xmlns="http://www.w3.org/2000/svg" width="595.276pt" height="841.89pt" viewBox="0 0 595.276 841.89"><rect x="0" y="0" width="595.276" height="841.89" fill="#ffffff"/><g transform="translate(325.984 200.506) scale(0.724)"><polyline points="0,85.02 0,127.53" fill="none" stroke="black" stroke-width="1" stroke-linejoin="miter"/><path d="M 2.711 120.984 L 0 127.53 M -2.711 120.984 L 0 127.53" fill="none" stroke="black" stroke-width="1"/><polyline points="0,170.04 0,212.55" fill="none" stroke="black" stroke-width="1" stroke-linejoin="miter"/><path d="M 2.711 206.004 L 0 212.55 M -2.711 206.004 L 0 212.55" fill="none" stroke="black" stroke-width="1"/><polyline points="-77.935,290.485 -219.635,290.485 -219.635,410.93" fill="none" stroke="black" stroke-width="1" stroke-linejoin="miter"/><path d="M -216.924 404.384 L -219.635 410.93 M -222.346 404.384 L -219.635 410.93" fill="none" stroke="black" stroke-width="1"/><polyline points="77.935,290.485 219.635,290.485 219.635,410.93" fill="none" stroke="black" stroke-width="1" stroke-linejoin="miter"/><path d="M 222.346 404.384 L 219.635 410.93 M 216.924 404.384 L 219.635 410.93" fill="none" stroke="black" stroke-width="1"/><polyline points="-219.635,453.44 -219.635,481.78" fill="none" stroke="black" stroke-width="1" stroke-linejoin="miter"/><polyline points="219.635,453.44 219.635,481.78" fill="none" stroke="black" stroke-width="1" stroke-linejoin="miter"/><polyline points="-219.635,481.78 219.635,481.78" fill="none" stroke="black" stroke-width="1" stroke-linejoin="miter"/><polyline points="0,481.78 0,524.29" fill="none" stroke="black" stroke-width="1" stroke-linejoin="miter"/><path d="M 2.711 517.744 L 0 524.29 M -2.711 517.744 L 0 524.29" fill="none" stroke="black" stroke-width="1"/><rect x="-49.595" y="42.51" width="99.19" height="42.51" rx="21.255" ry="21.255" fill="white" stroke="black" stroke-width="1" stroke-linejoin="miter"/><text x="0" y="63.765" font-family="DejaVu Sans Mono, monospace" font-size="14" font-weight="normal" text-anchor="middle" dominant-baseline="central"><tspan x="0" dy="0">начало</tspan></text><polygon points="-101.969,127.53 113.36,127.53 101.969,170.04 -113.36,170.04" fill="white" stroke="black" stroke-width="1" stroke-linejoin="miter"/><text x="0" y="148.785" font-family="DejaVu Sans Mono, monospace" font-size="14" font-weight="normal" text-anchor="middle" dominant-baseline="central"><tspan x="0" dy="0">scanf("%d", &amp;x)</tspan></text><polygon points="-77.935,290.485 0,212.55 77.935,290.485 0,368.42" fill="white" stroke="black" stroke-width="1" stroke-linejoin="miter"/><text x="0" y="290.485" font-family="DejaVu Sans Mono, monospace" font-size="14" font-weight="normal" text-anchor="middle" dominant-baseline="central"><tspan x="0" dy="0">if (x &gt; 0)</tspan></text><polygon points="-321.604,410.93 -106.275,410.93 -117.666,453.44 -332.995,453.44" fill="white" stroke="black" stroke-width="1" stroke-linejoin="miter"/><text x="-219.635" y="432.185" font-family="DejaVu Sans Mono, monospace" font-size="14" font-weight="normal" text-anchor="middle" dominant-baseline="central"><tspan x="-219.635" dy="0">printf("positive")</tspan></text><polygon points="117.666,410.93 332.995,410.93 321.604,453.44 106.275,453.44" fill="white" stroke="black" stroke-width="1" stroke-linejoin="miter"/><text x="219.635" y="432.185" font-family="DejaVu Sans Mono, monospace" font-size="14" font-weight="normal" text-anchor="middle" dominant-baseline="central"><tspan x="219.635" dy="0">printf("non-positive")</tspan></text><rect x="-49.595" y="524.29" width="99.19" height="42.51" rx="21.255" ry="21.255" fill="white" stroke="black" stroke-width="1" stroke-linejoin="miter"/><text x="0" y="545.545" font-family="DejaVu Sans Mono, monospace" font-size="14" font-weight="normal" text-anchor="middle" dominant-baseline="central"><tspan x="0" dy="0">конец</tspan></text><text x="-106.275" y="276.485" font-family="DejaVu Sans Mono, monospace" font-size="14" font-weight="normal" text-anchor="middle" dominant-baseline="central">да</text><text x="106.275" y="276.485" font-family="DejaVu Sans Mono, monospace" font-size="14" font-weight="normal" text-anchor="middle" dominant-baseline="central">нет</text></g></svg>
       </div>
     </div>
   </div>
-</section>
 
-<section>
-  <p class="eyebrow">Поддержка</p>
-  <h2>Что понимается в коде</h2>
-  <p class="lead">Полный список и особые случаи — в <a href="/docs/supported/">документации</a>.</p>
-  <div class="scroll">
-    <table>
-      <thead><tr><th>Конструкция</th><th>Как рисуется</th></tr></thead>
-      <tbody>
-        <tr><td>printf, scanf, scanf_s</td><td>параллелограмм ввода-вывода</td></tr>
-        <tr><td>x = expr</td><td>прямоугольник «процесс»</td></tr>
-        <tr><td>if / else if / else</td><td>ромб, ветки «да/нет»</td></tr>
-        <tr><td>switch / case / default</td><td>ромб, кейсы на шине; 5+ — сеткой в 2 колонки</td></tr>
-        <tr><td>while / for / do-while</td><td>шестиугольник «подготовка», у do-while в заголовке «do while»</td></tr>
-        <tr><td>return</td><td>скруглённый терминатор, конец ветки</td></tr>
-        <tr><td>break</td><td>прямоугольник процесса</td></tr>
-        <tr><td>continue</td><td>рельса к выходу цикла, следующая итерация</td></tr>
-        <tr><td>int a = 5</td><td>блок с инициализатором</td></tr>
-        <tr><td>что угодно ещё</td><td>блок с исходным текстом</td></tr>
-      </tbody>
-    </table>
-  </div>
-</section>
+  <hr>
 
+  <dl>
+    <dt>Скорость</dt><dd><b>~2 мс</b> на схему</dd>
+    <dt>Тестов</dt><dd><b>138</b>, все зелёные</dd>
+    <dt>Зависимостей</dt><dd><b>2</b> — обе парсер C</dd>
+    <dt>Сборка</dt><dd><b>rustc</b> или <b>cargo</b>, без сети</dd>
+    <dt>Лицензия</dt><dd><b>MIT</b></dd>
+  </dl>
 </main>
 
 <footer>
-  <div class="bar">
-    <span>© 2026 gostpadi · MIT</span>
-    <span style="margin-left:auto"><a href="/app.html">Приложение</a> · <a href="/docs/">Документация</a> · <a href="https://github.com/sehaxe/gostpadi">GitHub</a></span>
+  <div class="wrap">
+    <span>© 2026 gostpadi</span>
+    <a href="app.html">Приложение</a>
+    <a href="docs/">Документация</a>
+    <a href="https://github.com/sehaxe/gostpadi">GitHub</a>
   </div>
 </footer>
 
