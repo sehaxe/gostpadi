@@ -2,7 +2,7 @@
 name = "gostpadi"
 version = "2.0.0"
 edition = "2021"
-description = "ГОСТ 19.701 блок-схемы из C/.gvn — Rust движок, wasm-ready"
+description = "ГОСТ 19.701 блок-схемы из C-кода — Rust движок, wasm-ready"
 repository = "https://github.com/sehaxe/gostpadi"
 license = "MIT"
 

@@ -318,7 +318,7 @@
     <div class="side-actions">
       <button id="clear" class="btn" style="width:100%">очистить всё</button>
     </div>
-    <input type="file" id="file" multiple accept=".c,.gvn,.txt" class="sr" aria-label="выбрать файлы">
+    <input type="file" id="file" multiple accept=".c,.h,.txt" class="sr" aria-label="выбрать файлы">
   </nav>
 
   <section id="edit" class="pane" aria-label="редактор">
@@ -482,10 +482,11 @@ function readOut(out, lp) {
   };
 }
 
-function callOne(text, isC, ru, lw) {
+function callOne(text, ru, lw) {
   const [ip, il] = wasmInput(new TextEncoder().encode(text));
   const lp = wasm.gostpadi_alloc(4);
-  const r = readOut(wasm.gostpadi_render(ip, il, isC ? 1 : 0, ru ? 1 : 0, lw, 0, lp), lp);
+  // аргумент is_c оставлен в ABI моста и игнорируется: вход только C
+  const r = readOut(wasm.gostpadi_render(ip, il, 1, ru ? 1 : 0, lw, 0, lp), lp);
   wasm.gostpadi_free(ip, il);
   wasm.gostpadi_free(lp, 4);
   if (r) wasm.gostpadi_free(r.out, r.n);
@@ -498,7 +499,6 @@ function callBatch(items, ru, lw) {
   for (const it of items) {
     const n = enc.encode(it.name), t = enc.encode(it.text);
     parts.push(new Uint8Array(new Uint32Array([n.length]).buffer), n,
-               new Uint8Array([it.c ? 1 : 0]),
                new Uint8Array(new Uint32Array([t.length]).buffer), t);
   }
   const all = new Uint8Array(parts.reduce((s, p) => s + p.length, 0));
@@ -528,13 +528,9 @@ function syncCur() {
 function curItems() {
   if (cur < 0) {
     const text = $("code").value;
-    return [{ name: "scheme", stem: "scheme", text, c: looksLikeC(text) }];
+    return [{ name: "черновик.c", stem: "черновик", text }];
   }
   return files;
-}
-
-function looksLikeC(text) {
-  return /#include\b|\bint\s+main\s*\(/.test(text);
 }
 
 function renderNow() {
@@ -557,7 +553,7 @@ function renderNow() {
     let res;
     try {
       res = items.length === 1
-        ? oneResult(callOne(items[0].text, items[0].c, ru, lw), items[0])
+        ? oneResult(callOne(items[0].text, ru, lw), items[0])
         : callBatch(items, ru, lw);
     } catch (e) {
       $("render").disabled = false;
@@ -566,24 +562,33 @@ function renderNow() {
     }
     $("render").disabled = false;
     if (!res.ok) {
-      // одиночный рендер падает с res.error: показываем как карточку пачки
-      const err = res.error || {};
-      const it = items[0] || { name: "scheme", text: "" };
-      showErrors([{ name: it.name, line: err.line, col: err.col, msg: err.msg || "ошибка разбора" }], items);
-      status("ошибка — см. карточку у редактора", true);
+      // мост не падает на разборе: сюда попадает только внутренняя ошибка
+      status("движок не ответил — попробуй ещё раз", true);
       return;
     }
     applyResult(res, items, performance.now() - t0);
   });
 }
 
+/* одиночный результат приводится к виду пачки, чтобы applyResult был один */
 function oneResult(json, item) {
   if (!json.ok) return json;
-  return { ok: true, files: [{ name: item.stem, sheets: json.sheets }], errors: [] };
+  return {
+    ok: true,
+    files: [{ name: item.stem, sheets: json.sheets }],
+    empty: json.empty ? [item.name] : [],
+  };
 }
 
 function applyResult(res, items, ms) {
-  const errors = res.errors || [];
+  // Ошибок разбора больше нет: код без main рисуется пустым, такие
+  // перечислены в "empty" и помечаются в списке файлов.
+  const errors = (res.empty || []).map(name => ({
+    name,
+    line: null,
+    col: null,
+    msg: "в коде не найден int main(...) — схема пустая",
+  }));
   badNames = new Set(errors.map(e => e.name));
   sheets = [];
   if (res.ok) {
@@ -610,14 +615,10 @@ function applyResult(res, items, ms) {
   const errFiles = items.filter(it => badNames.has(it.name));
   showErrors(errors, items);
   const ms_ = ms >= 1000 ? (ms / 1000).toFixed(1) + " с" : Math.round(ms) + " мс";
-  if (!res.ok) {
-    status("ошибка — см. карточку у редактора", true);
-    return;
-  }
   const pages = sheets.length;
   const batchNote = items.length > 1
     ? ' · <span class="batchnote">пачка: блоки одного размера</span>' : "";
-  const errNote = badNames.size ? ` · с ошибками: ${[...badNames].join(", ")}` : "";
+  const errNote = badNames.size ? ` · без тела main: ${[...badNames].join(", ")}` : "";
   status(`готово: ${pages} ${plural(pages, "лист", "листа", "листов")} · ${ms_}${batchNote}${errNote}`);
   if (errors.length) return;
   if (cur < 0) history.replaceState(null, "", "#c=" + b64urlEncode($("code").value));
@@ -843,7 +844,7 @@ function drawFileList() {
     if (badNames.has(f.name)) {
       const dot = document.createElement("span");
       dot.className = "fbadge";
-      dot.title = "в файле ошибка";
+      dot.title = "в файле не найден int main";
       li.appendChild(dot);
     }
     b.addEventListener("click", () => selectFile(i));
@@ -901,10 +902,8 @@ function undoRemove() {
 
 function updateMode() {
   const it = cur >= 0 ? files[cur] : null;
-  const text = it ? it.text : $("code").value;
-  const isC = it ? it.c : looksLikeC(text);
   $("editmode").textContent =
-    (it ? it.name : "черновик") + " · " + (isC ? "C" : "схема") +
+    (it ? it.name : "черновик.c") + " · C" +
     (it && it.dirty ? " · не сохранён" : "");
 }
 
@@ -923,12 +922,10 @@ async function loadFiles(list) {
     const text = $("code").value;
     if (text.trim()) {
       const taken = new Set([...files.map(f => f.name)]);
-      const name = uniqName(looksLikeC(text) ? "черновик.c" : "черновик", taken);
       added.push({
-        name,
-        stem: name.replace(/\.[^.]+$/, ""),
+        name: uniqName("черновик.c", taken),
+        stem: "черновик",
         text,
-        c: looksLikeC(text),
         dirty: false,
       });
     }
@@ -986,7 +983,7 @@ $("clear").addEventListener("click", () => {
   drawFileList(); updateMode(); renderNow();
 });
 
-/* ============================== ошибки ============================== */
+/* ============================== без тела main ============================== */
 
 function showErrors(errors, items) {
   const box = $("errbox");
