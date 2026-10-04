@@ -129,9 +129,13 @@ gostpadi 1/*.c 2/*.c 3/*.c -o out/   # вся лаба: один лист, од�
 ## Сайт
 
 **[sehaxe.github.io/gostpadi](https://sehaxe.github.io/gostpadi/)** —
-тот же движок, что и в CLI, собранный в WASM: перетащи один или несколько
+лендинг; **[приложение](https://sehaxe.github.io/gostpadi/app.html)** — тот же
+движок, что и в CLI, собранный в WASM: перетащи один или несколько
 файлов — схемы рисуются прямо в браузере за миллисекунды, код никуда
 не отправляется. Скачивание SVG и PNG, шеринг ссылкой на код.
+
+Документация — **[sehaxe.github.io/gostpadi/docs/](https://sehaxe.github.io/gostpadi/docs/)**,
+собирается из `site/` (Astro + Starlight, сборка на Bun).
 
 ## Как устроен движок
 
