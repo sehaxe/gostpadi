@@ -13,26 +13,26 @@
 <meta property="og:locale" content="ru_RU">
 <meta name="theme-color" content="#0f1211">
 <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f2f2ee">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='9' y='2' width='14' height='8' rx='4' fill='none' stroke='%2346d183' stroke-width='2.4'/%3E%3Cpath d='M16 10v4M16 14l8 8-8 8-8-8z' fill='none' stroke='%2346d183' stroke-width='2.4'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='9' y='2' width='14' height='8' rx='4' fill='none' stroke='%23aab0ff' stroke-width='2.4'/%3E%3Cpath d='M16 10v4M16 14l8 8-8 8-8-8z' fill='none' stroke='%23aab0ff' stroke-width='2.4'/%3E%3C/svg%3E">
 <style>
   :root { color-scheme: dark; }
   html[data-theme="dark"] {
-    --bg: #0f1211; --bg2: #131816; --panel: #171d1a; --panel2: #1c2320;
-    --line: #26302b; --line2: #34413a;
-    --ink: #e6ede9; --muted: #93a39b; --faint: #66756d;
-    --accent: #46d183; --accent-ink: #07130c; --accent-dim: #2e9c60;
-    --accent-soft: rgba(70, 209, 131, .12);
+    --bg: #09090b; --bg2: #101014; --panel: #131318; --panel2: #1a1a20;
+    --line: #232327; --line2: #2e2e34;
+    --ink: #fafafa; --muted: #a1a1aa; --faint: #71717a;
+    --accent: #aab0ff; --accent-ink: #0b0b12; --accent-dim: #8b93f4;
+    --accent-soft: rgba(170, 176, 255, .12);
     --err: #ff8a8b; --err-bg: #2a1719; --err-line: #7a3a3c;
     --paper: #fbfbf9; --paper-line: #d8d8d2;
     --shadow: 0 1px 3px rgba(0,0,0,.4);
     --chip: #202824; --chip-line: #2c3731;
   }
   html[data-theme="light"] {
-    --bg: #eef0ec; --bg2: #e7eae4; --panel: #ffffff; --panel2: #f6f7f4;
-    --line: #dde1db; --line2: #c9cfc6;
-    --ink: #1b201d; --muted: #5b665f; --faint: #8b958e;
-    --accent: #1f8a54; --accent-ink: #ffffff; --accent-dim: #17683f;
-    --accent-soft: rgba(31, 138, 84, .1);
+    --bg: #fafafa; --bg2: #f4f4f5; --panel: #ffffff; --panel2: #f9f9fa;
+    --line: #e4e4e7; --line2: #d4d4d8;
+    --ink: #18181b; --muted: #52525b; --faint: #a1a1aa;
+    --accent: #4f5ac9; --accent-ink: #ffffff; --accent-dim: #3d46ad;
+    --accent-soft: rgba(79, 90, 201, .1);
     --err: #b3261e; --err-bg: #fdeceb; --err-line: #e4b3b0;
     --paper: #ffffff; --paper-line: #d8d8d2;
     --shadow: 0 1px 3px rgba(0,0,0,.08);
@@ -298,7 +298,7 @@
 <body>
 <a class="skip" href="#code">к редактору</a>
 <header class="top">
-  <a class="brand" href="./" title="на главную">gost<em>padi</em><small>блок-схемы из кода — всё считается в браузере</small></a>
+  <a class="brand" href="./" title="на главную">gost<em>padi</em></a>
   <div class="top-actions">
     <span class="viewchips" role="group" aria-label="показ панелей">
       <button id="vt-files" aria-pressed="true">Файлы</button>
@@ -687,7 +687,14 @@ function viewportSize() {
   return { w: v.clientWidth - 28, h: v.clientHeight - 28 };
 }
 
+// Панель может быть скрыта (data-mtab), и тогда clientWidth = 0, то есть
+// вьюпорт «-28 на -28». Деление на нулевой размер карточки давало
+// -Infinity, scale(-Infinity) браузер отвергал — трансформация оставалась
+// пустой и схема уезжала за край, а подпись показывала «-Infinity%».
+// Нет разметки — нет и масштаба.
 function fitZoom() {
+  const { w, h } = viewportSize();
+  if (w <= 0 || h <= 0) return null;
   const cards = $("stage").children;
   if (!cards.length) return null;
   let maxX = 0, maxY = 0;
@@ -695,13 +702,16 @@ function fitZoom() {
     maxX = Math.max(maxX, c.offsetLeft + c.offsetWidth);
     maxY = Math.max(maxY, c.offsetTop + c.offsetHeight);
   }
-  const { w, h } = viewportSize();
+  if (maxX <= 0 || maxY <= 0) return null;
   return Math.min(1.6, Math.min(w / maxX, h / maxY));
 }
 
 function applyZoom() {
   const stage = $("stage");
   let z = zoom, p = pan;
+  // мусорный зафиксированный масштаб (было -Infinity) возвращаем
+  // к вписыванию, а не рисуем схему за краем экрана
+  if (!isFinite(zoom) || zoom <= 0) zoom = null;
   if (zoom === null) {
     z = fitZoom() ?? 1;
     // центр: content вписан и отцентрован в вьюпорте
@@ -1156,6 +1166,9 @@ function switchTab(name) {
   for (const b of $("tabbar").children) {
     b.setAttribute("aria-current", b.dataset.tab === name ? "true" : "false");
   }
+  // панель только что показана: размеры доступны после следующего кадра.
+  // Без этого масштаб считался по скрытой панели и ломался.
+  requestAnimationFrame(() => { if (zoom === null) applyZoom(); });
 }
 
 /* десктоп: какие панели показаны; схема видна всегда */
@@ -1173,6 +1186,13 @@ function syncChips() {
 }
 $("vt-files").addEventListener("click", () => setPane("files", !paneOn("files")));
 $("vt-editor").addEventListener("click", () => setPane("editor", !paneOn("editor")));
+
+/* Кнопки нижнего бара на телефоне. switchTab писали и вызывали из кода
+   (переход на схему после рендера), но обработчика на сам клик не
+   было: бар выглядел рабочим и не реагировал. */
+for (const b of $("tabbar").children) {
+  b.addEventListener("click", () => switchTab(b.dataset.tab));
+}
 (function initPanes() {
   let saved = null;
   try { saved = JSON.parse(store.get("gostpadi.panes") || "null"); } catch (e) {}
