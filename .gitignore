@@ -4,3 +4,8 @@
 /target/
 .playwright-mcp/
 /gallery/
+
+# Astro/Starlight: собранная документация попадает в docs/docs через CI
+site/dist/
+site/.astro/
+site/node_modules/

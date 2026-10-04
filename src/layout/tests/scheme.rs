@@ -300,10 +300,7 @@ fn examples_layout_invariants() {
         );
         checked += 1;
     }
-    assert!(
-        checked >= 1,
-        "ожидался хоть один пример, проверено {checked}"
-    );
+    assert!(checked >= 6, "ожидался набор примеров, проверено {checked}");
 }
 
 #[test]

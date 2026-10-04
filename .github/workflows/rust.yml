@@ -41,3 +41,44 @@ jobs:
           else
             echo "docs/gostpadi.wasm актуален"
           fi
+
+  # Документация: Astro + Starlight из site/, результат кладётся в
+  # docs/docs — рядом с приложением в корне сайта, ничего не ломая.
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - name: Установить зависимости
+        working-directory: site
+        run: bun install --frozen-lockfile
+
+      - name: Собрать документацию
+        working-directory: site
+        run: bun run build
+
+      # Ссылки внутри страниц абсолютные (/docs/...), поэтому base
+      # не меняем: документация лежит по этому пути и на Pages.
+      - name: Разложить в docs/docs
+        run: |
+          test -s site/dist/index.html
+          rm -rf docs/docs
+          cp -r site/dist docs/docs
+          test -s docs/docs/index.html
+
+      - name: Опубликовать документацию
+        if: github.event_name == 'push' && github.ref_name == 'main'
+        run: |
+          git config user.name "docs-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/docs
+          if git diff --cached --quiet; then
+            echo "docs/docs актуальны"
+          else
+            git commit -m "docs: пересборка документации"
+            git push
+          fi
