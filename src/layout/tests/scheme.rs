@@ -936,11 +936,15 @@ else { printf(\"?\"); }
     let zero = at("zero");
     let pos = at("pos");
     let other = at("?");
+    // Колонки каскада — ДВЕ, слева и справа, и укладываются одна под
+    // другой. Раньше каждый ярус отодвигался наружу на `pitch`, и
+    // восемь else-if давали ширину 3677 pt: общий масштаб
+    // лабораторной работы из-за одного такого файла падал до 15 %.
     for (sh, x, name) in [
-        (neg, -base, "neg L0"),
-        (zero, base, "zero R0"),
-        (pos, -(base + pitch), "pos L1"),
-        (other, base + pitch, "? R1"),
+        (neg, -base, "neg"),
+        (pos, -base, "pos — та же левая колонка, ниже"),
+        (zero, base, "zero"),
+        (other, base, "? — та же правая колонка, ниже"),
     ] {
         assert!(
             (sh.cx - x).abs() < 1e-9,
@@ -949,31 +953,42 @@ else { printf(\"?\"); }
         );
     }
     let top = |s: &Shape| s.cy - s.h / 2.0;
-    for sh in [neg, zero, pos, other] {
-        assert!(
-            (top(sh) - top(neg)).abs() < 1e-9,
-            "все колонки на одном top0"
-        );
-    }
-    // шина: ровно один горизонтальный сегмент на merge_y, через 0,
-    // накрывает крайние колонки; merge_y = низ последнего ромба + 2g
-    let dsh_last = ifs[2];
-    let my = dsh_last.cy + dsh_last.h / 2.0 + 2.0 * st.grid;
+    // вторая колонка стороны стоит ниже первой: иначе они бы наехали
+    assert!(
+        top(pos) >= top(neg) + st.vgap - 1e-9 && top(other) >= top(zero) + st.vgap - 1e-9,
+        "вторая колонка стороны должна быть ниже первой"
+    );
+    let _ = pitch;
+    // шина: ровно один горизонтальный сегмент через ось, ниже всех
+    // колонок и от крайней левой до крайней правой. Абсциссу и
+    // высоту не проверяем: колонки уложены одна под другой, и шина
+    // зависит от их высоты
+    let col_bottom = l
+        .shapes
+        .iter()
+        .filter(|s| matches!(s.kind.as_str(), "io" | "act"))
+        .map(|s| s.cy + s.h / 2.0)
+        .fold(f64::MIN, f64::max);
     let bus: Vec<&crate::layout::Edge> = l
         .edges
         .iter()
         .filter(|e| {
             e.points
                 .windows(2)
-                .any(|w| (w[0].1 - w[1].1).abs() < 1e-9 && (w[0].1 - my).abs() < 1e-9)
+                .any(|w| (w[0].1 - w[1].1).abs() < 1e-9 && w[0].0 < 0.0 && w[1].0 > 0.0)
         })
         .collect();
-    assert_eq!(bus.len(), 1, "ровно одна горизонтальная шина на merge_y");
+    assert_eq!(bus.len(), 1, "ровно одна шина через ось: {}", bus.len());
     let xs: Vec<f64> = bus[0].points.iter().map(|p| p.0).collect();
+    let lo = xs.iter().cloned().fold(f64::MAX, f64::min);
+    let hi = xs.iter().cloned().fold(f64::MIN, f64::max);
     assert!(
-        xs.iter().cloned().fold(f64::MAX, f64::min) <= -(base + pitch) + 1e-9
-            && xs.iter().cloned().fold(f64::MIN, f64::max) >= base + pitch - 1e-9,
-        "шина от крайней левой до крайней правой колонки через 0: {xs:?}"
+        lo <= -base + 1e-9 && hi >= base - 1e-9,
+        "шина не накрывает колонки: {xs:?}"
+    );
+    assert!(
+        bus[0].points[0].1 >= col_bottom - 1e-9,
+        "шина выше низа колонок"
     );
     assert_eq!(crossings_ok(&l.shapes, &l.edges), Ok(()));
     assert!(overlaps_ok(&l.shapes));
@@ -1030,20 +1045,78 @@ else if (a == 0) { printf(\"zero\"); }
         "bx = {}, ожидался -up(base + nhe) = {want}",
         rail.points[1].0
     );
-    let my = d2.cy + d2.h / 2.0 + 2.0 * st.grid;
-    let buses = l
+    // шина слияния — ровно одна, и она ниже всех колонок. Абсциссу
+    // не проверяем: колонки укладываются одна под другой, и шина
+    // зависит от их высоты, а не от кегля ромба
+    let lowest = l
+        .shapes
+        .iter()
+        .filter(|s| s.kind == "io" || s.kind == "act")
+        .map(|s| s.cy + s.h / 2.0)
+        .fold(f64::MIN, f64::max);
+    let buses: Vec<f64> = l
         .edges
         .iter()
-        .filter(|e| {
+        .filter_map(|e| {
             e.points
                 .windows(2)
-                .any(|w| (w[0].1 - w[1].1).abs() < 1e-9 && (w[0].1 - my).abs() < 1e-9)
+                .find(|w| (w[0].1 - w[1].1).abs() < 1e-9 && w[0].0 < 0.0 && w[1].0 > 0.0)
+                .map(|w| w[0].1)
         })
-        .count();
-    assert_eq!(buses, 1, "ровно одна шина на merge_y");
+        .collect();
+    assert_eq!(buses.len(), 1, "ровно одна шина через ось: {buses:?}");
+    assert!(
+        buses[0] >= lowest - 1e-9,
+        "шина на {} выше низа колонок {lowest}",
+        buses[0]
+    );
     assert_eq!(crossings_ok(&l.shapes, &l.edges), Ok(()));
     assert!(overlaps_ok(&l.shapes));
     assert!(single_entry_ok(&l));
+}
+
+/// Ширина каскада не зависит от числа веток.
+///
+/// Раньше каждый ярус да-колонок отодвигался наружу на `pitch`, и
+/// восемь else-if давали 3677 pt. Поскольку масштаб общий на всю
+/// лабораторную работу, один такой файл ронял все листы до 15 %.
+/// Колонки теперь две и уложены одна под другой — проверяем, что
+/// длина цепочки на ширину не влияет.
+#[test]
+fn cascade_width_does_not_grow_with_branches() {
+    let st = Style::default();
+    let span = |text: &str| -> f64 {
+        let nodes = nodes(text);
+        let sizes = normalize(&nodes, &st);
+        let l = layout(&nodes, &sizes, &st);
+        let hi = l
+            .shapes
+            .iter()
+            .map(|s| s.cx + s.w / 2.0)
+            .fold(f64::MIN, f64::max);
+        let lo = l
+            .shapes
+            .iter()
+            .map(|s| s.cx - s.w / 2.0)
+            .fold(f64::MAX, f64::min);
+        hi - lo
+    };
+    let two = span("int a;\nif (a < 0) { printf(\"neg\"); }\nelse { printf(\"p\"); }\n");
+    let eight = span(
+        "int a;\n\
+if (a < 0) { printf(\"1\"); }\n\
+else if (a == 1) { printf(\"2\"); }\n\
+else if (a == 2) { printf(\"3\"); }\n\
+else if (a == 3) { printf(\"4\"); }\n\
+else if (a == 4) { printf(\"5\"); }\n\
+else if (a == 5) { printf(\"6\"); }\n\
+else if (a == 6) { printf(\"7\"); }\n\
+else { printf(\"8\"); }\n",
+    );
+    assert!(
+        eight <= two + 1e-6,
+        "ширина выросла с 2 веток до 8: {two} -> {eight}"
+    );
 }
 
 /// Большой переключатель (>= 5 кейсов): кейсы сеткой по два на ряд —

@@ -116,8 +116,28 @@ fn render_to_file_creates_svg() {
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let svg = fs::read_to_string(&out_path).unwrap();
+    // Листов может быть несколько, и нумеруются они от `-01`: иначе
+    // `main.svg` в каталоге вставал после `main-02.svg`
+    let stem = d.join("out");
+    let first = ["out.svg", "out-01.svg"]
+        .iter()
+        .map(|n| stem.with_file_name(n))
+        .find(|p| p.exists())
+        .unwrap_or_else(|| {
+            panic!(
+                "нет ни одного листа: {:?}",
+                fs::read_dir(&d)
+                    .unwrap()
+                    .map(|e| e.unwrap().file_name())
+                    .collect::<Vec<_>>()
+            )
+        });
+    let svg = fs::read_to_string(&first).unwrap();
     assert!(svg.contains("<svg"));
+    assert!(
+        svg.contains("начало") || svg.contains("Start"),
+        "лист пустой"
+    );
 }
 
 #[test]
@@ -130,8 +150,28 @@ fn render_examples_main_c_to_tmp() {
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let svg = fs::read_to_string(&out_path).unwrap();
+    // Листов может быть несколько, и нумеруются они от `-01`: иначе
+    // `main.svg` в каталоге вставал после `main-02.svg`
+    let stem = d.join("out");
+    let first = ["out.svg", "out-01.svg"]
+        .iter()
+        .map(|n| stem.with_file_name(n))
+        .find(|p| p.exists())
+        .unwrap_or_else(|| {
+            panic!(
+                "нет ни одного листа: {:?}",
+                fs::read_dir(&d)
+                    .unwrap()
+                    .map(|e| e.unwrap().file_name())
+                    .collect::<Vec<_>>()
+            )
+        });
+    let svg = fs::read_to_string(&first).unwrap();
     assert!(svg.contains("<svg"));
+    assert!(
+        svg.contains("начало") || svg.contains("Start"),
+        "лист пустой"
+    );
 }
 
 #[test]

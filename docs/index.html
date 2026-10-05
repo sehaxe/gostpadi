@@ -296,70 +296,82 @@ int main(void) {
 
 <script>
 /* Проба на главной: тот же wasm, что и в приложении. Код никуда не
-   уходит — движок считает схему прямо в браузере. */
+   уходит — движок считает схему прямо в браузере.
+
+   Именно gostpadi_export_batch с режимом 1 (лист по содержимому, в
+   миллиметрах), а НЕ gostpadi_render: тот режет схему на листы A4 и
+   отдаёт их по одному, в превью попадал только первый лист — читатель
+   видел половину схемы и думал, что движок потерял остальное. */
 (function () {
   const ta = document.getElementById("trycode");
   const stage = document.getElementById("trystage");
   if (!ta || !stage) return;
   let wasm = null, ready = false, timer = null;
 
+  function u32(n) { return new Uint8Array(new Uint32Array([n]).buffer); }
+
   function pack(text) {
     const enc = new TextEncoder();
     const name = enc.encode("пример.c"), body = enc.encode(text);
-    const parts = [new Uint32Array([1]), new Uint32Array([name.length]), name,
-                   new Uint32Array([body.length]), body];
-    const total = parts.reduce((n, p) => n + p.byteLength, 0);
-    const buf = new Uint8Array(total);
+    const parts = [u32(1), u32(name.length), name, u32(body.length), body];
+    const all = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
     let o = 0;
-    for (const p of parts) { buf.set(p instanceof Uint8Array ? p : new Uint8Array(p.buffer), o); o += p.byteLength; }
-    return buf;
+    for (const p of parts) { all.set(p, o); o += p.length; }
+    return all;
   }
-  function u32(n) { return new Uint32Array([n]); }
 
-  function draw(text) {
-    if (!ready) return;
+  function exportTight(text) {
     const bytes = pack(text);
-    const mem = new Uint8Array(wasm.memory.buffer);
     const p = wasm.gostpadi_alloc(bytes.length);
     new Uint8Array(wasm.memory.buffer, p, bytes.length).set(bytes);
     const lp = wasm.gostpadi_alloc(4);
-    const out = wasm.gostpadi_render(p, bytes.length, 1, 1, 1.0, 0, lp);
+    const out = wasm.gostpadi_export_batch(p, bytes.length, 1, 1, 0, 1, lp);
     wasm.gostpadi_free(p, bytes.length);
     wasm.gostpadi_free(lp, 4);
-    if (!out) { stage.textContent = "движок не ответил"; return; }
+    if (!out) return null;
     const n = new DataView(wasm.memory.buffer).getUint32(lp, true);
     const json = JSON.parse(new TextDecoder().decode(new Uint8Array(wasm.memory.buffer, out, n)));
     wasm.gostpadi_free(out, n);
-    const svg = json && json.ok && json.sheets && json.sheets[0];
+    return json && json.ok && json.files.length ? json.files[0].sheets[0] : null;
+  }
+
+  function draw(text) {
+    if (!ready) return;
+    const svg = exportTight(text);
     if (!svg) { stage.textContent = "нечего рисовать"; return; }
-    // обрезка листа по содержимому: A4 с крошечной схемой посреди
-    // пустоты на главной выглядит пустым листом
-    const m = svg.match(/data-box="([-\d. ]+)"/);
     stage.innerHTML = svg;
     const el = stage.firstElementChild;
-    if (m && el) {
-      const v = m[1].trim().split(/\s+/).map(Number);
-      if (v.length === 4 && v[2] > 0 && v[3] > 0) {
-        const pad = 16;
-        el.setAttribute("viewBox", (v[0]-pad) + " " + (v[1]-pad) + " " + (v[2]+2*pad) + " " + (v[3]+2*pad));
-        el.removeAttribute("width"); el.removeAttribute("height");
-      }
-    }
+    // лист уже по содержимому: ни пустого поля A4, ни порезки на
+    // листы, ни обрезки — вся схема целиком, в натуральную величину
+    el.removeAttribute("width");
+    el.removeAttribute("height");
   }
 
   ta.addEventListener("input", () => {
     clearTimeout(timer);
-    timer = setTimeout(() => draw(ta.value), 350);
+    timer = setTimeout(() => {
+      try { draw(ta.value); } catch (e) { stage.textContent = "не отрисовалось: " + e; }
+    }, 350);
   });
 
-  if (!WebAssembly || !WebAssembly.instantiateStreaming) return;
-  WebAssembly.instantiateStreaming(fetch("gostpadi.wasm"), {})
+  fetch("gostpadi.wasm")
+    .then(async r => {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      // arrayBuffer() — промис, и без await в instantiate уходит он
+      return WebAssembly.instantiate(await r.arrayBuffer(), {});
+    })
     .then(({ instance }) => {
       wasm = instance.exports;
       ready = true;
-      draw(ta.value);
+      // сбой отрисовки показываем отдельно: общий catch на загрузку
+      // проглатывал настоящую причину и врал про движок
+      try {
+        draw(ta.value);
+      } catch (e) {
+        stage.textContent = "не отрисовалось: " + e;
+      }
     })
-    .catch(() => { stage.textContent = "движок не загрузился — откройте приложение"; });
+    .catch(e => { stage.textContent = "движок не загрузился: " + (e.message || e); });
 })();
 </script>
 

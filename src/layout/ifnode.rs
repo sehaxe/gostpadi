@@ -73,6 +73,21 @@ pub(super) fn cascade_cols(nd: &Node) -> Option<(usize, usize)> {
     }
 }
 
+/// До какой высоты можно опустить вертикаль на абсциссе `x`, не
+/// задев фигуры ниже `from`. Бесконечность, если ничего ниже нет.
+///
+/// Колонки укладываются одна под другой, и на одной абсциссе могут
+/// оказаться две разные конструкции: хвост колонки и ромб следующей.
+/// Спуск к шине от первой ко второй пересекал ромб. Ловим здесь, а не
+/// в каждом месте: правило одно на все слияния.
+fn clear_below(ctx: &Ctx<'_>, x: f64, from: f64) -> f64 {
+    ctx.shapes
+        .iter()
+        .filter(|s| (s.cx - x).abs() <= s.w / 2.0 + 1e-6 && s.cy - s.h / 2.0 > from + 1e-6)
+        .map(|s| s.cy - s.h / 2.0)
+        .fold(f64::INFINITY, f64::min)
+}
+
 impl Ctx<'_> {
     /// Слияние колонок на одну шину: вертикальные спуски остаются по
     /// колонкам, а горизонталь на уровне my рисуется одним отрезком от
@@ -84,7 +99,10 @@ impl Ctx<'_> {
         }
         if cols.len() == 1 {
             let (x, y) = cols[0];
-            self.edge(&[(x, y), (x, my), (target, my)], false);
+            self.edge(
+                &[(x, y), (x, clear_below(self, x, y).min(my)), (target, my)],
+                false,
+            );
             return;
         }
         let (mut lo, mut hi) = (f64::MAX, f64::MIN);
@@ -93,7 +111,7 @@ impl Ctx<'_> {
             hi = hi.max(x);
         }
         for &(x, y) in cols {
-            self.edge(&[(x, y), (x, my)], false);
+            self.edge(&[(x, y), (x, clear_below(self, x, y).min(my))], false);
         }
         self.edge(&[(lo.min(target), my), (hi.max(target), my)], false);
     }
@@ -190,6 +208,11 @@ impl Ctx<'_> {
             .iter()
             .map(|&i| self.extent(&nd.branches[i].stmts))
             .fold(self.colw / 2.0, f64::max);
+        // Вложенная цепочка else-if остаётся на build_plan: увести её
+        // в decision_cascade вносило пересечение на глубине три
+        // (zad2.1 — if внутри for внутри if, ровно то, что и ловил
+        // --check). Верхнеуровневый каскад упакован в две колонки;
+        // этого хватает для верхнего уровня лабораторной работы.
         if nd.switch_var.is_some()
             && idxs.len() >= 2
             && super::column::bus_tiers(self.st, dw, sub, idxs.len()) == 0

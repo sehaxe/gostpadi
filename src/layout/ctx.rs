@@ -172,6 +172,49 @@ impl<'a> Ctx<'a> {
                 clean.push(p);
             }
         }
+        // Вертикаль не должна идти сквозь фигуру, оказавшуюся на её
+        // абсциссе ниже. Колонки укладываются одна под другой, и на
+        // одной абсциссе оказываются хвост одной конструкции и ромб
+        // следующей; спуск к шине пересекал ромб. Обрезаем здесь, а не
+        // в каждом из мест, где вертикаль рисуется: правило одно.
+        let mut fixed: Vec<(f64, f64)> = Vec::with_capacity(clean.len());
+        for (i, &p) in clean.iter().enumerate() {
+            if i > 0 {
+                let prev = clean[i - 1];
+                if (p.0 - prev.0).abs() < 1e-6 && p.1 > prev.1 + 1e-6 {
+                    let stop = self
+                        .shapes
+                        .iter()
+                        // фигура, верх которой СТРОГО выше конца
+                        // отрезка: касание границы в конечной точке
+                        // разрешено, и иначе ствол между ромбами,
+                        // кончающийся ровно у верха следующего,
+                        // обрезался бы в ноль
+                        .filter(|s| {
+                            (s.cx - p.0).abs() <= s.w / 2.0 + 1e-6
+                                && s.cy - s.h / 2.0 > prev.1 + 1e-6
+                                && s.cy - s.h / 2.0 < p.1 - 1e-6
+                        })
+                        .map(|s| s.cy - s.h / 2.0)
+                        .fold(f64::INFINITY, f64::min);
+                    if stop.is_finite() && stop > prev.1 + 1e-6 {
+                        fixed.push((p.0, stop));
+                        fixed.push(p);
+                        continue;
+                    }
+                }
+            }
+            fixed.push(p);
+        }
+        let clean: Vec<(f64, f64)> = {
+            let mut c: Vec<(f64, f64)> = Vec::with_capacity(fixed.len());
+            for p in fixed {
+                if c.last().is_none_or(|&q| q != p) {
+                    c.push(p);
+                }
+            }
+            c
+        };
         if clean.len() >= 2 {
             self.edges.push(Edge {
                 points: clean,
@@ -181,48 +224,62 @@ impl<'a> Ctx<'a> {
     }
 
     pub(super) fn finish(self) -> Layout {
-        let mut xs = Vec::new();
-        let mut ys = Vec::new();
-        for e in &self.edges {
-            for &(x, y) in &e.points {
-                xs.push(x);
-                ys.push(y);
-            }
-        }
-        for sh in &self.shapes {
-            xs.extend([sh.cx - sh.w / 2.0, sh.cx + sh.w / 2.0]);
-            ys.extend([sh.cy - sh.h / 2.0, sh.cy + sh.h / 2.0]);
-        }
-        for l in &self.labels {
-            // Ширина подписи: глиф на символ (моноширинный). Якорь
-            // решает, откуда текст растёт: "left" -> text-anchor=start,
-            // текст идёт вправо на всю ширину; "right" -> влево. Раньше
-            // для них бралась половина ширины, и длинная подпись
-            // (например «default» у края схемы) вылезала за поля листа.
-            let w = l.text.chars().count() as f64 * self.st.char_w;
-            match l.ha.as_str() {
-                "right" => xs.push(l.x - w),
-                "left" => xs.push(l.x + w),
-                _ => {
-                    xs.push(l.x - w / 2.0);
-                    xs.push(l.x + w / 2.0);
-                }
-            }
-            ys.push(l.y);
-        }
-        // Габарит — точный, без полей: поля принадлежат листу
-        // (sheet::Sheet::origin), а не раскладке. Раньше page_pad
-        // запекался здесь и вычитался из листа ещё раз при вписывании.
-        let minx = xs.iter().cloned().fold(f64::MAX, f64::min);
-        let miny = ys.iter().cloned().fold(f64::MAX, f64::min);
-        let maxx = xs.iter().cloned().fold(f64::MIN, f64::max);
-        let maxy = ys.iter().cloned().fold(f64::MIN, f64::max);
+        let bounds = bounds_of(&self.edges, &self.shapes, &self.labels, self.st);
         Layout {
             shapes: self.shapes,
             edges: self.edges,
             labels: self.labels,
-            bounds: (minx, miny, maxx - minx, maxy - miny),
+            bounds,
             anchors: self.anchors,
         }
     }
+}
+
+/// Габарит раскладки: (x, y, ширина, высота), без полей листа.
+///
+/// Ширина подписи — глиф на символ (шрифт моноширинный), а якорь
+/// решает, откуда текст растёт: "left" -> текст идёт вправо на всю
+/// ширину, "right" -> влево. Раньше для них бралась половина ширины,
+/// и длинная подпись («default» у края схемы) вылезала за поля листа.
+///
+/// Вынесено отдельно, потому что тем же считаются полосы при
+/// разрезе раскладки по высоте: у каждой полосы свой габарит.
+pub(crate) fn bounds_of(
+    edges: &[super::types::Edge],
+    shapes: &[super::types::Shape],
+    labels: &[super::types::Label],
+    st: &crate::style::Style,
+) -> (f64, f64, f64, f64) {
+    let mut xs: Vec<f64> = Vec::new();
+    let mut ys: Vec<f64> = Vec::new();
+    for e in edges {
+        for &(x, y) in &e.points {
+            xs.push(x);
+            ys.push(y);
+        }
+    }
+    for sh in shapes {
+        xs.extend([sh.cx - sh.w / 2.0, sh.cx + sh.w / 2.0]);
+        ys.extend([sh.cy - sh.h / 2.0, sh.cy + sh.h / 2.0]);
+    }
+    for l in labels {
+        let w = l.text.chars().count() as f64 * st.char_w;
+        match l.ha.as_str() {
+            "right" => xs.push(l.x - w),
+            "left" => xs.push(l.x + w),
+            _ => {
+                xs.push(l.x - w / 2.0);
+                xs.push(l.x + w / 2.0);
+            }
+        }
+        ys.push(l.y);
+    }
+    if xs.is_empty() {
+        return (0.0, 0.0, 0.0, 0.0);
+    }
+    let minx = xs.iter().cloned().fold(f64::MAX, f64::min);
+    let miny = ys.iter().cloned().fold(f64::MAX, f64::min);
+    let maxx = xs.iter().cloned().fold(f64::MIN, f64::max);
+    let maxy = ys.iter().cloned().fold(f64::MIN, f64::max);
+    (minx, miny, maxx - minx, maxy - miny)
 }

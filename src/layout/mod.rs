@@ -1,5 +1,6 @@
 //! Основной проход раскладки: главная линия по оси x=0.
 
+pub mod band;
 mod column;
 mod ctx;
 mod geometry;

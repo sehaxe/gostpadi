@@ -260,6 +260,42 @@
     justify-content: center; text-align: center; color: var(--muted);
     padding: 20px; pointer-events: none;
   }
+  /* ---------- полный просмотр схемы ---------- */
+  #zoomcard{position:absolute;right:10px;bottom:10px;z-index:4;
+    background:rgba(16,18,24,.82);border-color:var(--line)}
+  #zoomcard:hover{background:rgba(28,31,40,.95)}
+  /* position:fixed ломается внутри трансформированного предка, поэтому
+     лайтбокс живёт прямо в body и перекрывает страницу слоем */
+  #lightbox{position:fixed;inset:0;z-index:60;display:flex;flex-direction:column;
+    background:var(--bg)}
+  #lightbox[hidden]{display:none}
+  .lbbar{flex:none;display:flex;align-items:center;gap:.6rem;padding:.6rem .9rem;
+    border-bottom:1px solid var(--line);background:var(--bg)}
+  .lbtitle{font-size:14px;color:var(--fg2);max-width:40vw;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  #lbval{min-width:42px;text-align:center;font-size:12px;color:var(--muted)}
+  #lbview{flex:1;min-height:0;position:relative;overflow:hidden;cursor:grab;
+    background:
+      linear-gradient(45deg, var(--bg2) 25%, transparent 25%, transparent 75%, var(--bg2) 75%),
+      linear-gradient(45deg, var(--bg2) 25%, transparent 25%, transparent 75%, var(--bg2) 75%);
+    background-size:22px 22px;background-position:0 0,11px 11px}
+  #lbstage{position:absolute;transform-origin:0 0}
+  #lbpager{flex:none;display:flex;align-items:center;justify-content:center;gap:1rem;
+    padding:.7rem 0 1.1rem}
+  #lbpager[hidden]{display:none}
+  #lbdots{display:flex;gap:7px;background:rgba(16,18,24,.82);border:1px solid var(--line);
+    border-radius:999px;padding:7px 11px}
+  #lbdots i{width:8px;height:8px;border-radius:50%;cursor:pointer;
+    background:rgba(255,255,255,.45);border:0;padding:0;display:block}
+  #lbdots i:hover{background:rgba(255,255,255,.75)}
+  #lbdots i[aria-current="true"]{background:var(--accent);width:18px;border-radius:4px}
+  #lbdots i:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  #lbpager button{width:34px;height:34px;border-radius:50%;
+    border:1px solid var(--paper-line);background:rgba(20,22,28,.62);color:var(--fg);
+    font-size:18px;line-height:1;cursor:pointer}
+  #lbpager button:disabled{opacity:.28;cursor:default}
+  #lbpager button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  @media (max-width:640px){.lbtitle{max-width:22vw}}
   #statusline {
     flex: none; padding: 7px 12px; border-top: 1px solid var(--line);
     font-size: 12.5px; color: var(--muted); min-height: 32px;
@@ -432,7 +468,9 @@
         <span id="dots" role="tablist" aria-label="листы"></span>
         <button id="next" aria-label="следующий лист">›</button>
       </div>
+      <button id="zoomcard" class="btn" hidden title="открыть во весь экран">⤢ во весь экран</button>
     </div>
+
     <div id="statusline">движок загружается…</div>
   </section>
 </main>
@@ -445,6 +483,26 @@
 
 <div id="dragover" hidden><div>бросай — добавлю в пачку</div></div>
 <div id="toast" class="toast" hidden></div>
+
+<div id="lightbox" hidden aria-modal="true" role="dialog" aria-label="схема">
+<div class="lbbar">
+  <span id="lbtitle" class="lbtitle"></span>
+  <span class="spacer"></span>
+  <span class="tools" title="масштаб">
+    <button id="lbout" class="btn" aria-label="уменьшить">−</button>
+    <span id="lbval">100%</span>
+    <button id="lbin" class="btn" aria-label="увеличить">+</button>
+    <button id="lbfit" class="btn">вписать</button>
+  </span>
+  <button id="lbclose" class="btn" aria-label="закрыть">✕</button>
+</div>
+<div id="lbview"><div id="lbstage"></div></div>
+<div id="lbpager" hidden>
+  <button id="lbprev" aria-label="предыдущий лист">‹</button>
+  <span id="lbdots" role="tablist" aria-label="листы"></span>
+  <button id="lbnext" aria-label="следующий лист">›</button>
+</div>
+</div>
 
 <script>
 "use strict";
@@ -865,7 +923,7 @@ function drawCollage(stage) {
     if (sameFn.length > 1) cap += " · лист " + (sameFn.indexOf(s) + 1);
     if (manyFiles) cap += " · " + s.file;
     const tile = tileFor(s, w, h, cap, true);
-    tile.addEventListener("click", () => openSheet(i));
+    tile.addEventListener("click", () => openLightbox(i));
     stage.appendChild(tile);
   });
 }
@@ -891,6 +949,7 @@ function drawSheets() {
     return;
   }
   stage.className = "";
+  $("zoomcard").hidden = false;
   const s = sheets[Math.min(activeSheet, sheets.length - 1)];
   const card = document.createElement("div");
   card.className = "sheet";
@@ -908,6 +967,154 @@ function drawSheets() {
 
 $("prev").addEventListener("click", () => stepSheet(-1));
 $("next").addEventListener("click", () => stepSheet(1));
+
+/* ============================== полный просмотр ============================== */
+
+/* В панели схема всегда мелкая: колонка узкая, и на листе А4 блоки
+   не прочесть. Полный просмотр — лист во весь экран, с масштабом,
+   листанием и закрытием по Esc. Открывается кликом по плитке в
+   коллаже или кнопкой на схеме в режиме просмотра. */
+let lbZoom = null, lbPan = { x: 0, y: 0 }, lbOpen = false;
+
+function lbSheet() {
+  return sheets[Math.min(activeSheet, sheets.length - 1)] || sheets[0];
+}
+
+function openLightbox(idx) {
+  if (idx !== undefined && idx !== null) {
+    const own = ownSheets();
+    if (!own.length) return;
+    activeSheet = sheets.indexOf(own[Math.max(0, Math.min(idx, own.length - 1))]);
+  }
+  if (!lbSheet()) return;
+  lbOpen = true;
+  lbZoom = null;
+  $("lightbox").hidden = false;
+  $("zoomcard").hidden = true;
+  lbDraw();
+  $("lbclose").focus();
+}
+
+/* Плитка коллажа ведёт в полный просмотр, а не в узкую панель: клик
+   по схеме должен показывать схему. */
+function closeLightbox() {
+  lbOpen = false;
+  $("lightbox").hidden = true;
+  $("zoomcard").hidden = sheets.length === 0 || !viewing;
+}
+
+function lbSize() {
+  const v = $("lbview");
+  return { w: v.clientWidth - 48, h: v.clientHeight - 48 };
+}
+
+function lbFit() {
+  const { w, h } = lbSize();
+  const s = lbSheet();
+  if (!s || w <= 0 || h <= 0) return null;
+  return Math.max(0.05, Math.min(1.6, Math.min(w / s.w, h / s.h)));
+}
+
+function lbApply() {
+  const stage = $("lbstage");
+  const s = lbSheet();
+  if (!s) return;
+  if (!isFinite(lbZoom) || lbZoom <= 0) lbZoom = lbFit() ?? 1;
+  const z = lbZoom;
+  if (lbZoom === null || lbPan === null) {
+    const { w, h } = lbSize();
+    lbPan = { x: Math.max(8, (w - s.w * z) / 2 + 8), y: Math.max(8, (h - s.h * z) / 2 + 8) };
+  }
+  stage.style.transform = `translate(${lbPan.x}px, ${lbPan.y}px) scale(${z})`;
+  $("lbval").textContent = Math.round(z * 100) + "%";
+}
+
+function lbDraw() {
+  const stage = $("lbstage");
+  stage.innerHTML = "";
+  const s = lbSheet();
+  if (!s) { closeLightbox(); return; }
+  const card = document.createElement("div");
+  card.className = "sheet";
+  card.style.width = s.w + "px";
+  card.style.height = s.h + "px";
+  const holder = document.createElement("div");
+  holder.innerHTML = s.svg;
+  const svg = holder.firstElementChild;
+  svg.style.width = "100%"; svg.style.height = "100%";
+  card.appendChild(svg);
+  stage.appendChild(card);
+  const own = ownSheets();
+  $("lbtitle").textContent = (s.fn || s.file) + (s.file !== (s.fn || s.file) ? " · " + s.file : "");
+  const multi = own.length > 1;
+  $("lbpager").hidden = !multi;
+  if (multi) {
+    const at = own.indexOf(s);
+    $("lbprev").disabled = at <= 0;
+    $("lbnext").disabled = at >= own.length - 1;
+    const dots = $("lbdots");
+    dots.innerHTML = "";
+    own.forEach((x, i) => {
+      const b = document.createElement("i");
+      b.title = x.name;
+      b.setAttribute("role", "tab");
+      b.setAttribute("aria-current", i === at ? "true" : "false");
+      b.addEventListener("click", () => { openSheet(i); lbDraw(); });
+      dots.appendChild(b);
+    });
+  }
+  lbZoom = null;
+  lbPan = null;
+  lbApply();
+}
+
+function lbStep(d) {
+  const own = ownSheets();
+  if (own.length < 2) return;
+  const at = own.indexOf(lbSheet());
+  openSheet(at + d);
+  lbDraw();
+}
+
+$("lbclose").addEventListener("click", closeLightbox);
+$("lbout").addEventListener("click", () => { lbZoom = (lbZoom ?? lbFit() ?? 1) / 1.25; lbPan = null; lbApply(); });
+$("lbin").addEventListener("click", () => { lbZoom = (lbZoom ?? lbFit() ?? 1) * 1.25; lbPan = null; lbApply(); });
+$("lbfit").addEventListener("click", () => { lbZoom = null; lbPan = null; lbApply(); });
+$("lbprev").addEventListener("click", () => lbStep(-1));
+$("lbnext").addEventListener("click", () => lbStep(1));
+$("zoomcard").addEventListener("click", () => openLightbox());
+addEventListener("resize", () => { if (lbOpen) { lbZoom = null; lbPan = null; lbApply(); } });
+
+// колесо — масштаб, перетаскивание — сдвиг
+$("lbview").addEventListener("wheel", e => {
+  if (!lbOpen) return;
+  e.preventDefault();
+  const z = (lbZoom ?? lbFit() ?? 1) * (e.deltaY < 0 ? 1.12 : 1 / 1.12);
+  lbZoom = Math.max(0.05, Math.min(6, z));
+  lbPan = null;
+  lbApply();
+}, { passive: false });
+
+let lbDrag = null;
+$("lbview").addEventListener("pointerdown", e => {
+  if (!lbOpen || e.target.closest("button")) return;
+  lbDrag = { x: e.clientX, y: e.clientY, px: lbPan.x, py: lbPan.y };
+  $("lbview").setPointerCapture(e.pointerId);
+});
+$("lbview").addEventListener("pointermove", e => {
+  if (!lbDrag) return;
+  lbPan = { x: lbDrag.px + (e.clientX - lbDrag.x), y: lbDrag.py + (e.clientY - lbDrag.y) };
+  lbApply();
+});
+const lbDragEnd = () => { lbDrag = null; };
+$("lbview").addEventListener("pointerup", lbDragEnd);
+$("lbview").addEventListener("pointercancel", lbDragEnd);
+
+// dblclick по схеме в панели — тоже полный просмотр
+$("viewport").addEventListener("dblclick", e => {
+  if (!e.target.closest(".sheet")) return;
+  openLightbox();
+});
 $("dcollage").addEventListener("click", () => {
   viewing = false;
   zoom = null;
@@ -1028,13 +1235,22 @@ function setExport(on) {
   for (const id of ["dcollage", "dsvg", "dpng", "ddrawio", "dall", "copy"]) $(id).disabled = !on;
 }
 
-function save(url, name) {
+/* Принимает и URL, и Blob. Раньше принимала только URL, и кнопка
+   draw.io отдавала Blob — в href попадал «[object Blob]», и файл не
+   сохранялся вовсе. */
+function save(what, name) {
   const a = document.createElement("a");
-  a.href = url; a.download = name; a.click();
+  const url = typeof what === "string" ? what : URL.createObjectURL(what);
+  a.href = url;
+  a.download = name;
+  a.click();
+  // освобождать сразу нельзя: браузер успевает начать только после
+  // возврата в цикл событий, и отзыв URL обрывает загрузку
+  if (typeof what !== "string") setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
 function saveSvg(svgText, name) {
-  save(URL.createObjectURL(new Blob([svgText], { type: "image/svg+xml" })), name + ".svg");
+  save(new Blob([svgText], { type: "image/svg+xml" }), name + ".svg");
 }
 
 function downloadPng(svgText, name) {
@@ -1061,6 +1277,20 @@ function exportStem(s) {
   return s ? s.name.replace(/-\d+$/, "") : "схема";
 }
 
+/* Ответ движка — по схеме на функцию, а кнопка одна. Брать files[0]
+   нельзя: открыт может быть не main, и молча скачался бы другой файл.
+   Ищем по имени схемы, а если не нашлось — берём первую (и это
+   единственный случай, когда ответ может быть не тем). */
+function pickExport(json, sheet) {
+  if (!json || !json.ok || !json.files || !json.files.length) return null;
+  if (sheet) {
+    const want = sheet.fn ? sheet.file + "#" + sheet.fn : sheet.file;
+    const hit = json.files.find(f => f.name === want);
+    if (hit) return hit;
+  }
+  return json.files[0];
+}
+
 function withBusy(btn, label, fn) {
   const was = btn.textContent;
   btn.textContent = label;
@@ -1077,7 +1307,7 @@ $("dsvg").addEventListener("click", () => withBusy($("dsvg"), "…", () => {
   const s = sheets[activeSheet];
   if (!s) return;
   const r = callExport(curItems().filter(it => it.text.trim()), $("ru").checked, +$("lw").value, 1);
-  const f = r && r.ok && r.files[0];
+  const f = pickExport(r, s);
   if (!f) return toast("движок не отдал файл");
   saveSvg(f.sheets[0], exportStem(s));
 }));
@@ -1093,7 +1323,7 @@ $("ddrawio").addEventListener("click", () => withBusy($("ddrawio"), "…", () =>
   const s = sheets[activeSheet];
   if (!s) return;
   const r = callExport(curItems().filter(it => it.text.trim()), $("ru").checked, +$("lw").value, 2);
-  const f = r && r.ok && r.files[0];
+  const f = pickExport(r, s);
   if (!f) return toast("движок не отдал файл");
   save(new Blob([f.sheets[0]], { type: "application/xml" }), exportStem(s) + ".drawio");
 }));
@@ -1109,7 +1339,7 @@ $("copy").addEventListener("click", () => {
   const s = sheets[activeSheet];
   if (!s) return;
   const r = callExport(curItems().filter(it => it.text.trim()), $("ru").checked, +$("lw").value, 1);
-  const f = r && r.ok && r.files[0];
+  const f = pickExport(r, s);
   if (!f) return toast("движок не отдал файл");
   navigator.clipboard.writeText(f.sheets[0]).then(() => {
     $("copy").textContent = "скопировано";
@@ -1126,6 +1356,12 @@ function stemOf(name) {
    когда открыт просмотр: в коллаже стрелки должны двигать курсор
    по тексту, а не перелистывать схему. */
 addEventListener("keydown", e => {
+  if (lbOpen) {
+    if (e.key === "Escape") { closeLightbox(); e.preventDefault(); }
+    else if (e.key === "ArrowLeft") { lbStep(-1); e.preventDefault(); }
+    else if (e.key === "ArrowRight") { lbStep(1); e.preventDefault(); }
+    return;
+  }
   if (!viewing || sheets.length < 2) return;
   const t = e.target;
   if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
@@ -1581,5 +1817,9 @@ loadEngine().catch(e => {
   status("движок не загрузился: " + e.message, true);
 });
 </script>
+    <!-- Полный просмотр: клик по схеме в коллаже. В панели схема
+   всегда мелкая — колонка узкая, и на листе А4 блоки не прочесть.
+   Здесь лист занимает весь экран и читается. -->
+
 </body>
 </html>
