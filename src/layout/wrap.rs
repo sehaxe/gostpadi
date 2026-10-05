@@ -9,13 +9,28 @@
 //! Перенос нужен ДО `normalize`: размеры фигур считаются по тексту, и
 //! однострочный текст даёт другой размер, чем перенесённый.
 
-use crate::ir::{Branch, Node, NodeKind, Stmt};
+use crate::ir::{Branch, Node, Stmt, TileKind};
+use crate::style::Style;
+
+use super::measure::{kind_name, measure};
 
 /// Перенос текста: режем по последнему пробелу внутри окна, но не сразу
 /// после оператора — `a *` / `b / 2` отрывает оператор от операнда.
 /// Пробелов нет (длинный идентификатор) — режем по границе слова после
 /// окна: жёсткий рез по лимиту склеивал `a =` и `long_name`.
 pub fn wrap(text: &str, limit: usize) -> String {
+    wrap_with(text, limit, false)
+}
+
+/// Перенос без разрубания слов: если единственный пробел окна оторвал бы
+/// оператор от операнда, берём предыдущий пробел, а если пробелов в окне
+/// нет — ищем за окном. Строка может выйти на пару символов длиннее
+/// лимита, зато `month` не превращается в `m` / `onth`.
+fn wrap_soft(text: &str, limit: usize) -> String {
+    wrap_with(text, limit, true)
+}
+
+fn wrap_with(text: &str, limit: usize, soft: bool) -> String {
     if limit == 0 {
         return text.to_string();
     }
@@ -31,14 +46,27 @@ pub fn wrap(text: &str, limit: usize) -> String {
             // окно на один символ шире лимита: строка длиной ровно
             // `limit + 1` переносится по этому пробелу, а не по лимиту
             let window = &chars[start..(start + limit).min(chars.len())];
-            let cut = match window.iter().rposition(|&c| c == ' ') {
+            let last = window.iter().rposition(|&c| c == ' ');
+            let cut = match last {
                 Some(at) if at > 0 && !after_op(&chars, start + at) => at,
-                // за границей окна ищем следующий пробел, чтобы не резать слово
-                _ => chars[start..]
-                    .iter()
-                    .position(|&c| c == ' ')
-                    .filter(|&p| p > limit && p < chars.len() - start)
-                    .unwrap_or(limit),
+                _ if soft => {
+                    // ищем влево последний пробел, не отрывающий оператор
+                    // от операнда; годится любой пробел; нет пробелов
+                    // вовсе — берём следующий за окном
+                    let alt = window
+                        .iter()
+                        .enumerate()
+                        .rev()
+                        .find(|&(i, &c)| c == ' ' && i > 0 && !after_op(&chars, start + i))
+                        .map(|(i, _)| i);
+                    alt.or(last.filter(|&at| at > 0)).unwrap_or_else(|| {
+                        chars[start + limit..]
+                            .iter()
+                            .position(|&c| c == ' ')
+                            .map_or(limit, |p| p + limit)
+                    })
+                }
+                _ => limit,
             };
             // последняя строка: режем по границе слова, чтобы не рубить
             // идентификатор и не оставлять строку длиннее лимита
@@ -88,41 +116,91 @@ fn after_op(chars: &[char], at: usize) -> bool {
 }
 
 /// Перенос по всем текстам схемы: узлы, тела, ветки, метки кейсов.
-pub fn wrap_nodes(nodes: &mut [Node], limit: usize) {
+pub fn wrap_nodes(nodes: &mut [Node], st: &Style) {
     for nd in nodes.iter_mut() {
-        wrap_node(nd, limit);
+        wrap_node(nd, st);
     }
 }
 
-fn wrap_node(nd: &mut Node, limit: usize) {
-    if nd.kind == NodeKind::Loop {
-        // заголовок цикла несёт ключевое слово: переносим его вместе
-        // с текстом, иначе «while» и условие окажутся на разных строках
-        nd.text = wrap(&nd.text, limit);
+/// Перенос, при котором фигура выходит самой узкой.
+///
+/// Лимит в символах — это и есть ширина фигуры: одна длинная строка
+/// распирает блок вбок, слишком короткая тянет его в высоту, а блок не
+/// бывает уже двух своих высот (`measure`: `w.max(2h)`). Минимум у
+/// каждой подписи свой, и угадать его одним числом нельзя: `printf` на
+/// 40 символов ужимается до 11 модулей при переносе по 14, а короткая
+/// подпись от того же лимита только вырастает. Поэтому перебираем
+/// лимиты и берём тот, где фигура уже; при равной ширине — тот, где
+/// строк меньше.
+fn wrap_best(kind: &str, text: &str, st: &Style) -> String {
+    let mut best = wrap_soft(text, st.max_chars);
+    let mut best_w = measure(st, kind, &best).0;
+    // Слово длиннее лимита перенос всё равно разрежет — тогда перебираем
+    // все лимиты; иначе держимся не ниже самого длинного слова, чтобы
+    // `month` не превратилось в `m` / `onth`.
+    let longest = longest_word(text);
+    let floor = if longest >= st.max_chars {
+        1
     } else {
-        nd.text = wrap(&nd.text, limit);
+        longest.max(1)
+    };
+    // от длинных лимитов к коротким: при равной ширине остаётся
+    // первое найденное, то есть лимит побольше и строк поменьше
+    for limit in (floor..st.max_chars).rev() {
+        let cand = wrap_soft(text, limit);
+        if cand == best {
+            continue;
+        }
+        let w = measure(st, kind, &cand).0;
+        if w < best_w - 1e-9 {
+            best_w = w;
+            best = cand;
+        }
     }
+    best
+}
+
+/// Длина самого длинного слова: перенос по более короткому лимиту
+/// разрубит его пополам.
+fn longest_word(text: &str) -> usize {
+    text.split(|c: char| c.is_whitespace())
+        .map(|w| w.chars().count())
+        .max()
+        .unwrap_or(0)
+}
+
+fn wrap_node(nd: &mut Node, st: &Style) {
+    // заголовок цикла несёт ключевое слово: переносим его вместе
+    // с текстом, иначе «while» и условие окажутся на разных строках
+    nd.text = wrap_best(kind_name(&nd.kind), &nd.text, st);
     if let Some(sv) = &nd.switch_var {
-        nd.switch_var = Some(wrap(sv, limit));
+        nd.switch_var = Some(wrap(sv, st.max_chars));
     }
     for br in nd.branches.iter_mut() {
-        wrap_branch(br, limit);
+        wrap_branch(br, st);
     }
     if let Some(body) = nd.body.as_mut() {
-        wrap_stmts(body, limit);
+        wrap_stmts(body, st);
     }
 }
 
-fn wrap_branch(br: &mut Branch, limit: usize) {
-    br.label = wrap(&br.label, limit);
-    wrap_stmts(&mut br.stmts, limit);
+fn wrap_branch(br: &mut Branch, st: &Style) {
+    br.label = wrap(&br.label, st.max_chars);
+    wrap_stmts(&mut br.stmts, st);
 }
 
-fn wrap_stmts(stmts: &mut [Stmt], limit: usize) {
+fn wrap_stmts(stmts: &mut [Stmt], st: &Style) {
     for s in stmts.iter_mut() {
         match s {
-            Stmt::Tile { text, .. } | Stmt::Return(text) => *text = wrap(text, limit),
-            Stmt::Node(nd) => wrap_node(nd, limit),
+            Stmt::Tile { kind, text } => {
+                let k = match kind {
+                    TileKind::Io => "io",
+                    TileKind::Act => "act",
+                };
+                *text = wrap_best(k, text, st);
+            }
+            Stmt::Return(text) => *text = wrap_best("ret", text, st),
+            Stmt::Node(nd) => wrap_node(nd, st),
             Stmt::Break | Stmt::Continue => {}
         }
     }
@@ -194,6 +272,24 @@ mod tests {
     #[test]
     fn zero_limit_is_passthrough() {
         assert_eq!(wrap("a b c", 0), "a b c");
+    }
+
+    /// Мягкий перенос (его берёт подбор лимита) не рубит слова: если
+    /// единственный годный пробел окна оторвал бы оператор от операнда,
+    /// он уступает место предыдущему. Жёсткий `wrap` на этом же входе
+    /// режет по лимиту — и `month` распадается на `m` / `onth`.
+    #[test]
+    fn soft_wrap_keeps_words_whole() {
+        let src = "scanf(\"%d\", &month) != 1 || month < 1 || month > 12";
+        let words = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+        let soft = wrap_soft(src, 17);
+        assert_eq!(words(&soft.replace('\n', " ")), words(src), "{soft:?}");
+        let hard = wrap(src, 17);
+        assert_ne!(
+            words(&hard.replace('\n', " ")),
+            words(src),
+            "жёсткий перенос обязан остаться жёстким: {hard:?}"
+        );
     }
 
     /// Перенос не теряет символы: сумма длин строк равна исходной

@@ -266,12 +266,30 @@ fn illegible_scale_is_reported() {
     }
     src.push_str("}\n}\n");
     fs::write(&f, src).unwrap();
-    let out = run(&[f.to_str().unwrap()]);
+    let outdir = d.join("out");
+    fs::create_dir_all(&outdir).unwrap();
+    let out = run(&[f.to_str().unwrap(), "-o", outdir.to_str().unwrap()]);
+    assert!(out.status.success(), "{:?}", out);
     let err = String::from_utf8_lossy(&out.stderr);
-    // либо впихнулось читаемо, либо честно сказано про кегль
+    // Масштаб страницы — из её `<g transform="translate(...) scale(s)"`.
+    // Вписалось — предупреждения нет и масштаб не ниже порога; не
+    // вписалось — про кегль сказано. Молча мелкий лист и был дефектом.
+    let mut min_s = f64::INFINITY;
+    for e in fs::read_dir(&outdir).unwrap() {
+        let p = e.unwrap().path();
+        if p.extension().and_then(|s| s.to_str()) != Some("svg") {
+            continue;
+        }
+        let svg = fs::read_to_string(&p).unwrap();
+        let at = svg.find("scale(").expect("в листе нет <g transform>");
+        let rest = &svg[at + "scale(".len()..];
+        let s: f64 = rest[..rest.find(')').unwrap()].parse().unwrap();
+        min_s = min_s.min(s);
+    }
+    assert!(min_s.is_finite(), "ни одного листа не нарисовано");
     assert!(
-        !err.is_empty(),
-        "широкая схема дана без единого предупреждения про кегль"
+        min_s >= 0.7 || !err.is_empty(),
+        "масштаб {min_s:.3} ниже порога, а предупреждения нет"
     );
 }
 

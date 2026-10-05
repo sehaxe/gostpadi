@@ -41,7 +41,7 @@ fn to_nodes(text: &str, opts: &Options) -> Vec<Node> {
     let mut nodes = CParser::new().parse(text, &opts.labels);
     // Перенос — до normalize: размеры фигур считаются по тексту, и
     // однострочное условие даёт другой ромб, чем перенесённое.
-    crate::layout::wrap_nodes(&mut nodes, st.max_chars);
+    crate::layout::wrap_nodes(&mut nodes, &st);
     nodes
 }
 
@@ -98,7 +98,7 @@ pub fn parse_functions(inputs: &[(String, String)], opts: &Options) -> Vec<Schem
             continue;
         }
         for (name, mut nodes) in fns {
-            crate::layout::wrap_nodes(&mut nodes, st.max_chars);
+            crate::layout::wrap_nodes(&mut nodes, &st);
             let scheme_path = if name == "main" {
                 path.clone()
             } else {
@@ -583,20 +583,29 @@ mod tests {
             ));
         }
         absurdly_wide.push_str("    }\n    printf(\"%d\", d);\n    return 0;\n}");
+        let st = opts().style();
         let schemes = parse_batch(&[("w.c".into(), absurdly_wide)], &opts());
-        let (_, info) = render_batch(schemes, &opts().style());
-        // либо впихнулось, либо честно помечено нечитаемым
-        if info.scale < 0.7 {
-            assert!(
-                info.is_illegible(),
-                "масштаб {:.3} -> кегль {:.1} pt должен быть помечен нечитаемым",
-                info.scale,
-                info.font_on_page
-            );
-        }
+        let (_, info) = render_batch(schemes, &st);
+        // Флаг нечитаемости — ровно «масштаб ниже порога», ни больше ни
+        // меньше: молча выданный мелкий лист и есть тот дефект, ради
+        // которого флаг заведён.
+        assert_eq!(
+            info.is_illegible(),
+            info.scale < 0.7,
+            "флаг нечитаемости расходится с масштабом {:.3}",
+            info.scale
+        );
+        // лист не растягивает схему и не увеличивает кегль
         assert!(
-            info.font_on_page <= 12.0 + 1e-9,
-            "лист не может увеличить кегль"
+            info.scale <= 1.0 + 1e-9,
+            "масштаб {:.3} больше единицы",
+            info.scale
+        );
+        assert!(
+            info.font_on_page <= st.font + 1e-9,
+            "лист увеличил кегль: {:.1} pt против {:.1}",
+            info.font_on_page,
+            st.font
         );
     }
 
