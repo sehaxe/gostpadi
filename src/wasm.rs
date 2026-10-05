@@ -3,6 +3,12 @@
 //! {"ok":true,"sheets":[...]} либо {"ok":false,"error":{...}}.
 //! Память: буфер выдаёт Rust, освобождение — gostpadi_free.
 
+// Экспорты C-ABI: указатели приходят из JS, каждый проверяется на null
+// перед разыменованием. Помечать их `unsafe fn` нельзя — из JS всё
+// равно зовётся как обычная функция, а контракт «null = ошибка»
+// проверяется внутри.
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
+
 use crate::pipeline::{self, Options};
 
 /// Чтение u32 little-endian из буфера с проверкой границ.
@@ -183,13 +189,14 @@ pub extern "C" fn gostpadi_render_batch(
     // все функции файла, а не только main: по схеме на функцию, имя
     // после `#` разбирает сайт
     let schemes = pipeline::parse_functions(&inputs, &opts);
-    let empty: Vec<&str> = schemes
+    let empty: Vec<String> = schemes
         .iter()
         .filter(|(_, nodes)| scheme_is_empty(nodes))
-        .map(|(p, _)| p.as_str())
+        .map(|(p, _)| p.clone())
         .collect();
+    let empty: Vec<&str> = empty.iter().map(String::as_str).collect();
     let rendered = pipeline::render_batch(schemes, &opts.style()).0;
-    pack_json(&rendered, &inputs, out_len)
+    pack_json(&rendered, &empty, out_len)
 }
 
 /// Тот же вход и тот же JSON, но другой выход на файл:
@@ -234,15 +241,11 @@ pub extern "C" fn gostpadi_export_batch(
             .map(|(p, x)| (p, vec![x]))
             .collect()
     };
-    pack_json(&produced, &inputs, out_len)
+    pack_json(&produced, &[], out_len)
 }
 
 /// Отдача буфера наружу: содержимое забываем, длину пишем в out_len.
-fn pack_json(
-    rendered: &[(String, Vec<String>)],
-    inputs: &[(String, String)],
-    out_len: *mut usize,
-) -> *mut u8 {
+fn pack_json(rendered: &[(String, Vec<String>)], empty: &[&str], out_len: *mut usize) -> *mut u8 {
     let mut out = String::with_capacity(4096);
     out.push_str("{\"ok\":true,\"files\":[");
     for (i, (name, pages)) in rendered.iter().enumerate() {
