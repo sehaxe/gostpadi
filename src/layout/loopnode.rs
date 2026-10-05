@@ -28,24 +28,43 @@ impl Ctx<'_> {
     pub(super) fn sub_loop(&mut self, nd: &Node, tx: f64, top: f64) -> (f64, ColEnd) {
         let (lw, lh) = self.sizes["loop"];
         let cy1 = top + lh / 2.0;
-        self.add("loop_begin", tx, cy1, &nd.loop_label());
+        // Цикл, разорванный по листам: на продолжении верхняя
+        // трапеция уже нарисована на прошлом листе, а при уходе тела
+        // дальше нижняя не рисуется вовсе — её заменяет кружок.
+        // Иначе на листе с разрывом цикл выглядел бы замкнутым, и
+        // читатель не видел бы, что он не кончился.
+        if !nd.cont {
+            self.add("loop_begin", tx, cy1, &nd.loop_label());
+        }
         self.loop_depth += 1;
         let num = self.loop_depth;
         // коридор: шире половины трапеции и любого вложенного содержимого,
         // чтобы рельсы break/continue не задевали фигуры
         let chan = up(self.nhe.max(lw / 2.0) + 2.0 * self.st.grid, self.st.grid);
-        let top0 = cy1 + lh / 2.0 + self.st.vgap;
+        let top0 = if nd.cont {
+            top
+        } else {
+            cy1 + lh / 2.0 + self.st.vgap
+        };
         let mark_c = self.continues.len();
         let saved_direct = self.case_direct;
         self.case_direct = false;
         let (yend, end) = match &nd.body {
             Some(body) => {
-                self.edge(&[(tx, cy1 + lh / 2.0), (tx, top0)], true);
+                if !nd.cont {
+                    self.edge(&[(tx, cy1 + lh / 2.0), (tx, top0)], true);
+                }
                 self.render_column(body, tx, top0)
             }
-            None => (cy1 + lh / 2.0, ColEnd::Flow),
+            None => (top0, ColEnd::Flow),
         };
         self.case_direct = saved_direct;
+        if nd.cont_out {
+            // тело продолжится на следующем листе: нижней трапеции
+            // нет, поток просто идёт в кружок-соединитель
+            self.loop_depth -= 1;
+            return (yend + self.st.vgap, ColEnd::Flow);
+        }
         // нижняя трапеция: вход сверху (из тела), штатный выход вниз
         let cy2 = yend + self.st.vgap + lh / 2.0;
         self.add("loop_end", tx, cy2, &num.to_string());

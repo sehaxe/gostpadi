@@ -57,6 +57,59 @@ pub fn parse_batch(inputs: &[(String, String)], opts: &Options) -> Vec<Scheme> {
         .collect()
 }
 
+/// Разбор пути схемы `файл.c#функция` на (путь входа, имя функции).
+/// Имя после `#` ставит [`parse_functions`], и по нему же собираются
+/// имена файлов на выходе.
+pub fn scheme_parts(path: &str) -> (&str, Option<&str>) {
+    path.split_once('#')
+        .map_or((path, None), |(a, b)| (a, Some(b)))
+}
+
+/// Имя файла для схемы: `util.c` -> `util`, `util.c#fib` -> `util-fib`.
+pub fn scheme_stem(path: &str) -> String {
+    let (file, fun) = scheme_parts(path);
+    let stem = Path::new(file)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| file.to_string());
+    match fun {
+        Some(f) if !f.is_empty() => format!("{stem}-{f}"),
+        _ => stem,
+    }
+}
+
+/// Вход -> схемы всех его функций.
+///
+/// Лабораторный файл обычно не про функцию `main`: в нём десяток
+/// функций, а старая версия рисовала только `main`, и остальные
+/// терялись целиком. `main` идёт первым, дальше функции по порядку в
+/// исходнике. Имя функции попадает в путь схемы, поэтому файл на
+/// выходе один на функцию: `util.c` -> `util.c` (main) и
+/// `util.c#fib` (остальные).
+pub fn parse_functions(inputs: &[(String, String)], opts: &Options) -> Vec<Scheme> {
+    let st = opts.style();
+    let mut out: Vec<Scheme> = Vec::new();
+    for (path, text) in inputs {
+        let fns = CParser::new().functions(text, &opts.labels);
+        if fns.is_empty() {
+            // ни одной функции с телом (или битый код): прежнее
+            // поведение — main либо чёрная метка «main не найден»
+            out.push((path.clone(), to_nodes(text, opts)));
+            continue;
+        }
+        for (name, mut nodes) in fns {
+            crate::layout::wrap_nodes(&mut nodes, st.max_chars);
+            let scheme_path = if name == "main" {
+                path.clone()
+            } else {
+                format!("{path}#{name}")
+            };
+            out.push((scheme_path, nodes));
+        }
+    }
+    out
+}
+
 /// Чем закончилась пачка: общий масштаб и выбранный лист. Нужно
 /// вызывающему, чтобы честно сказать, когда кегль на листе упал
 /// ниже читаемого: раньше пачка из пяти схем с одним широким

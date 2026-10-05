@@ -345,21 +345,35 @@ fn invalid_font_lw_exits_two() {
     }
 }
 
-/// Код без main: схемы нет, и «готово» в коде выхода было бы враньём —
-/// наружу уходит лист с двумя терминаторами и больше ничего.
+/// Файл БЕЗ main, но с функцией, рисуется: тело функции и есть схема.
+/// Раньше такой файл давал пустой лист и отказ, хотя рисовать было что.
 #[test]
-fn no_main_exits_one_and_says_so() {
-    let d = tmp("no-main");
+fn file_without_main_but_with_function_is_drawn() {
+    let d = tmp("no-main-fn");
     let f = d.join("helper.c");
-    fs::write(&f, "int helper(void) { return 1; }\n").unwrap();
+    fs::write(&f, "int helper(int x) { return x + 1; }\n").unwrap();
     let out = run(&[f.to_str().unwrap(), "-o", d.join("o.svg").to_str().unwrap()]);
-    assert_eq!(
-        out.status.code(),
-        Some(1),
-        "код без main должен быть провалом"
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
     );
+    assert!(d.join("o.svg").exists(), "схема не создана");
+    let svg = fs::read_to_string(d.join("o.svg")).unwrap();
+    assert!(svg.contains("x + 1"), "тело функции не нарисовано: {svg}");
+}
+
+/// Рисовать нечего: ни одной функции с телом. «Готово» в коде выхода
+/// было бы враньём — наружу уходит лист с двумя терминаторами.
+#[test]
+fn nothing_to_draw_exits_one_and_says_so() {
+    let d = tmp("no-main");
+    let f = d.join("decls.c");
+    fs::write(&f, "int a;\nstruct S { int x; };\n").unwrap();
+    let out = run(&[f.to_str().unwrap(), "-o", d.join("o.svg").to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(1), "рисовать нечего — это провал");
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("main"), "причина не названа: {err}");
+    assert!(err.contains("рисовать нечего"), "причина не названа: {err}");
 }
 
 /// Частично пустая пачка — норма: остальные файлы отрисованы,
@@ -385,7 +399,19 @@ fn batch_with_one_mainless_file_still_succeeds() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(d.join("out/good.svg").exists(), "good.svg не создан");
-    assert!(d.join("out/helper.svg").exists(), "helper.svg не создан");
+    // файл без main рисуется по своей функции, а не пустым листом:
+    // имя файла получает суффикс функции — helper-helper.svg
+    assert!(
+        d.join("out/helper-helper.svg").exists(),
+        "схема функции helper не создана: {:?}",
+        std::fs::read_dir(d.join("out"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect::<Vec<_>>()
+    );
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("main"), "пустой файл не помечен: {err}");
+    assert!(
+        !err.contains("main не найден"),
+        "файл без main разбирается как функция, а не как пустой: {err}"
+    );
 }

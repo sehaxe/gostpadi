@@ -1,6 +1,6 @@
 //! Разбивка длинной схемы на листы А4 с кружками-соединителями.
 
-use crate::ir::{Branch, Node, NodeKind};
+use crate::ir::{Branch, Node, NodeKind, Stmt};
 use crate::layout::{layout, Sizes};
 use crate::style::Style;
 
@@ -30,7 +30,9 @@ pub fn split_scheme(mut items: Vec<Node>, sizes: &Sizes, st: &Style) -> Vec<Vec<
             // следующий лист за кружком-соединителем.
             if !fits {
                 let l = letter(li);
-                if let Some((head, tail)) = cut_decision(&items, sizes, st, l) {
+                if let Some((head, tail)) =
+                    cut_decision(&items, sizes, st, l).or_else(|| cut_loop(&items, sizes, st, l))
+                {
                     li += 1;
                     parts.push(head);
                     items = tail;
@@ -165,6 +167,56 @@ pub fn split_scheme(mut items: Vec<Node>, sizes: &Sizes, st: &Style) -> Vec<Vec<
     /// резать нельзя, ветки у него не независимы.
     fn is_cascade(nd: &Node) -> bool {
         matches!(crate::layout::ifnode::cascade_cols(nd), Some((k, _)) if k >= 2)
+    }
+
+    /// Разрез цикла телом: (голова, хвост).
+    ///
+    /// Цикл с пятью вложенными циклами — один верхнеуровневый узел, и он
+    /// точно так же не режется порезкой по узлам, как ромб по ветвям.
+    /// Такой цикл давал лист с кеглем 6.3 pt; теперь тело делится
+    /// пополам, а листы склеивает кружок с буквой.
+    ///
+    /// Разбивка честная: на первом листе верхняя трапеция без нижней, на
+    /// последнем нижняя без верхней. Цикл нигде не выглядит замкнутым.
+    fn cut_loop(
+        items: &[Node],
+        sizes: &Sizes,
+        st: &Style,
+        letter: char,
+    ) -> Option<(Vec<Node>, Vec<Node>)> {
+        let at = items.iter().rposition(|nd| {
+            nd.kind == NodeKind::Loop
+                && nd.body.as_ref().is_some_and(|b| b.len() >= 4)
+                && !nd.cont
+                && !nd.cont_out
+        })?;
+        let nd = &items[at];
+        let body = nd.body.as_ref().unwrap();
+        let conn = || Node::new(NodeKind::Conn, letter.to_string());
+        let limit = st.sheet.text_h();
+
+        for keep in (1..body.len() - 1).rev() {
+            // `continue` этого цикла на первом листе уводит к нижней
+            // трапеции, которой там нет: такой разрез не рисуем
+            if body[..keep].iter().any(|s| matches!(s, Stmt::Continue)) {
+                continue;
+            }
+            let mut head = items[..at].to_vec();
+            let mut head_loop = nd.clone();
+            head_loop.body = Some(body[..keep].to_vec());
+            head.push(head_loop.continued(false, true));
+            head.push(conn());
+            if layout(&head, sizes, st).bounds.3 >= limit {
+                continue;
+            }
+            let mut tail = vec![conn()];
+            let mut tail_loop = nd.clone();
+            tail_loop.body = Some(body[keep..].to_vec());
+            tail.push(tail_loop.continued(true, false));
+            tail.extend_from_slice(&items[at + 1..]);
+            return Some((head, tail));
+        }
+        None
     }
 
     // ветки «-> конец» в не-последних частях кончаются кружком:

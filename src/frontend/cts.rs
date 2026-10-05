@@ -35,7 +35,6 @@ impl CParser {
             .parser
             .parse(src, None)
             .expect("tree-sitter вернул None без таймаута");
-        let mut nodes: Vec<Node> = Vec::new();
         let root = tree.root_node();
 
         // При битом коде грамматика может не собрать function_definition
@@ -51,19 +50,13 @@ impl CParser {
             })
             .or_else(|| salvage_body(root, src));
         let ctx = Ctx { src };
+        let mut nodes: Vec<Node> = Vec::new();
         match body {
             Some(body) => {
                 for child in named_children(body) {
                     ctx.statement(child, &mut nodes, labels);
                 }
-                // Верхнеуровневый return не рисуем: терминатор «конец» и
-                // так завершает схему. Внутри if/цикла он остаётся —
-                // там он конец ветки, и без него она не закрыта.
-                if let Some(pos) = nodes.iter().rposition(|n| n.kind == NodeKind::Return) {
-                    if nodes[pos + 1..].iter().all(|n| n.kind == NodeKind::Term) {
-                        nodes.remove(pos);
-                    }
-                }
+                drop_trailing_return(&mut nodes);
             }
             None => {
                 // main найден, но тело не разобралось: рисуем хоть что
@@ -77,17 +70,85 @@ impl CParser {
                 }
             }
         }
+        with_terminators(nodes, labels)
+    }
 
-        // Терминаторы ставит фронтенд: без них схема по ГОСТ не схема.
-        let (start, end) = match labels {
-            "ru" => ("начало", "конец"),
-            _ => ("Start", "End"),
-        };
-        let mut out = vec![Node::new(NodeKind::Term, start)];
-        out.append(&mut nodes);
-        out.push(Node::new(NodeKind::Term, end));
+    /// Все функции с телом в исходнике: (имя, узлы схемы), `main`
+    /// первой. Файл лабораторной работы обычно содержит не одну
+    /// функцию, а десяток, и старая версия рисовала только `main`:
+    /// остальные терялись целиком, а файл без `main` выходил пустым
+    /// листом с текстом «main не найден».
+    ///
+    /// Прототипы из `#include` и объявления без тела пропускаются —
+    /// рисовать нечего. Функций без тела, но с распознанным телом
+    /// после битого кода, в список не попадают: там `main` уже есть,
+    /// а мусор лучше не плодить листами.
+    pub fn functions(&mut self, src: &str, labels: &str) -> Vec<(String, Vec<Node>)> {
+        let tree = self
+            .parser
+            .parse(src, None)
+            .expect("tree-sitter вернул None без таймаута");
+        let root = tree.root_node();
+        let ctx = Ctx { src };
+        let mut out: Vec<(String, Vec<Node>)> = Vec::new();
+        for f in named_children(root) {
+            if f.kind() != "function_definition" {
+                continue;
+            }
+            let Some(name) = declarator_name(f, src) else {
+                continue;
+            };
+            let Some(body) = f
+                .child_by_field_name("body")
+                .or_else(|| child_of_kind(f, "compound_statement"))
+            else {
+                continue; // прототип из .h: тела нет, рисовать нечего
+            };
+            let mut nodes: Vec<Node> = Vec::new();
+            for child in named_children(body) {
+                ctx.statement(child, &mut nodes, labels);
+            }
+            drop_trailing_return(&mut nodes);
+            out.push((name, with_terminators(nodes, labels)));
+        }
+        // main первым: он точка входа, с него начинают смотреть
+        if let Some(i) = out.iter().position(|(n, _)| n == "main") {
+            let m = out.remove(i);
+            out.insert(0, m);
+        }
         out
     }
+}
+
+/// Верхнеуровневый `return` не рисуем: терминатор «конец» и так
+/// завершает схему. Внутри if/цикла он остаётся — там он конец
+/// ветки, и без него она не закрыта.
+///
+/// Исключение — когда это ЕДИНСТВЕННЫЙ оператор функции. Тогда
+/// вырезать нечего: `int fib(int n){ return n < 2 ? n : ...; }`
+/// превращался в два терминатора, и на выход шёл ложный отказ
+/// «main не найден» вместо схемы из одного блока.
+fn drop_trailing_return(nodes: &mut Vec<Node>) {
+    if nodes.len() <= 1 {
+        return;
+    }
+    if let Some(pos) = nodes.iter().rposition(|n| n.kind == NodeKind::Return) {
+        if nodes[pos + 1..].iter().all(|n| n.kind == NodeKind::Term) {
+            nodes.remove(pos);
+        }
+    }
+}
+
+/// Терминаторы ставит фронтенд: без них схема по ГОСТ не схема.
+fn with_terminators(mut nodes: Vec<Node>, labels: &str) -> Vec<Node> {
+    let (start, end) = match labels {
+        "ru" => ("начало", "конец"),
+        _ => ("Start", "End"),
+    };
+    let mut out = vec![Node::new(NodeKind::Term, start)];
+    out.append(&mut nodes);
+    out.push(Node::new(NodeKind::Term, end));
+    out
 }
 
 /// Что разбирать, когда main не собрался функцией. При битом коде

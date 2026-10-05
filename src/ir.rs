@@ -60,6 +60,12 @@ pub struct Node {
     pub body: Option<Vec<Stmt>>,
     pub loop_kind: Option<LoopKind>,
     pub switch_var: Option<String>,
+    /// Продолжение цикла с прошлого листа: верхняя трапеция уже
+    /// нарисована там, рисуем только тело и нижнюю.
+    pub cont: bool,
+    /// Тело уходит на следующий лист: нижнюю трапецию не рисуем,
+    /// вместо неё кружок-соединитель.
+    pub cont_out: bool,
 }
 
 impl From<TileKind> for NodeKind {
@@ -91,6 +97,15 @@ impl Node {
             body: None,
             loop_kind: None,
             switch_var: None,
+            cont: false,
+            cont_out: false,
         }
+    }
+
+    /// Кусок цикла, разорванного по листам.
+    pub fn continued(mut self, from_prev: bool, to_next: bool) -> Self {
+        self.cont = from_prev;
+        self.cont_out = to_next;
+        self
     }
 }

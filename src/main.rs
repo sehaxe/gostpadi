@@ -52,11 +52,24 @@ const USAGE: &str = "использование: gostpadi код.c [ещё.c ...
 /// page_path). Папкой считается -o с косой чертой или существующая папка;
 /// пачка с голым именем кладёт результат рядом с каждым входом; у
 /// одинаковых stem имя родительской папки — префикс.
-fn base_for(inp: &str, output: Option<&str>, folder: bool, batch: bool, dup: bool) -> PathBuf {
+/// То же плюс имя функции: `util.c` с функциями main и fib даёт
+/// `util.svg` и `util-fib.svg`. Без суффикса функции затирали друг
+/// друга — все писали в один и тот же файл.
+fn base_for_fn(
+    inp: &str,
+    fun: Option<&str>,
+    output: Option<&str>,
+    folder: bool,
+    batch: bool,
+    dup: bool,
+) -> PathBuf {
     let mut stem = Path::new(inp)
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default();
+    if let Some(f) = fun.filter(|f| !f.is_empty()) {
+        stem = format!("{stem}-{}", sanitize(f));
+    }
     if folder && dup {
         if let Some(parent) = Path::new(inp).parent().and_then(|p| p.file_name()) {
             stem = format!("{}-{}", parent.to_string_lossy(), stem);
@@ -67,6 +80,26 @@ fn base_for(inp: &str, output: Option<&str>, folder: bool, batch: bool, dup: boo
         Some(o) if batch => Path::new(inp).parent().unwrap_or(Path::new("")).join(o),
         Some(o) => PathBuf::from(o),
         None => Path::new(inp).with_file_name(format!("{stem}.svg")),
+    }
+}
+
+/// Имя функции в имени файла: только буквы, цифры, дефис и подчёркивание.
+/// Имя из исходника может быть чем угодно (`ф$1`, `..`).
+fn sanitize(name: &str) -> String {
+    let s: String = name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if s.is_empty() || s.chars().all(|c| c == '_') {
+        "_".into()
+    } else {
+        s
     }
 }
 
@@ -220,7 +253,9 @@ fn main() {
     // Разбора с ошибкой не бывает: битый C рисуется частично. Пустой
     // вход (нет ни одного блока) рисуем пустым листом и предупреждаем —
     // молча выдать схему из ничего хуже, чем сказать об этом.
-    let schemes: Vec<(String, Vec<Node>)> = pipeline::parse_batch(&sources, &opts);
+    // все функции файла, а не только main: лабораторная работа это
+    // десяток функций, и раньше они терялись целиком
+    let schemes: Vec<(String, Vec<Node>)> = pipeline::parse_functions(&sources, &opts);
     let mut empty: Vec<&str> = Vec::new();
     for (path, nodes) in &schemes {
         if nodes
@@ -232,7 +267,7 @@ fn main() {
         }
     }
     for path in &empty {
-        eprintln!("{path}: в коде не найден int main(...) — схема пустая");
+        eprintln!("{path}: в коде нет ни одной функции с телом — рисовать нечего");
     }
     // Если пуст ВСЁ — схем не получилось вовсе, и «готово» в коде выхода
     // враньё: наружу ушёл бы лист с двумя терминаторами и ничего
@@ -282,10 +317,10 @@ fn main() {
             pipeline::render_tight_batch(schemes, &st)
         };
         let ext = if drawio { "drawio" } else { "svg" };
-        for ((path, data), inp) in produced.into_iter().zip(&inputs) {
-            let _ = path;
-            let base =
-                base_for(inp, output.as_deref(), folder, inputs.len() > 1, dup).with_extension(ext);
+        for (path, data) in produced {
+            let (inp, fun) = pipeline::scheme_parts(&path);
+            let base = base_for_fn(inp, fun, output.as_deref(), folder, inputs.len() > 1, dup)
+                .with_extension(ext);
             if let Err(e) = std::fs::write(&base, data) {
                 eprintln!("не удалось записать {}: {e}", base.display());
                 failed = true;
@@ -300,8 +335,11 @@ fn main() {
     }
 
     let (rendered, info) = pipeline::render_batch(schemes, &st);
-    for ((_, pages), inp) in rendered.into_iter().zip(&inputs) {
-        let base = base_for(inp, output.as_deref(), folder, inputs.len() > 1, dup);
+    for (scheme_path, pages) in rendered {
+        // схема на функцию: путь схемы несёт и вход, и имя функции,
+        // zip по inputs больше не годится — их число разошлось
+        let (inp, fun) = pipeline::scheme_parts(&scheme_path);
+        let base = base_for_fn(inp, fun, output.as_deref(), folder, inputs.len() > 1, dup);
         for (k, svg) in pages.iter().enumerate() {
             let target = page_path(&base, k, pages.len());
             if let Err(e) = std::fs::write(&target, svg) {
@@ -317,12 +355,12 @@ fn main() {
     // не может разрезать (резать можно только между узлами).
     if info.is_illegible() {
         eprintln!(
-            "внимание: общий масштаб {:.3} — кегль на листе {:.1} pt вместо {} pt, \
-             схема читается с трудом. Порезка идёт только между блоками верхнего \
-             уровня, поэтому мешает один слишком широкий блок: разнесите его \
-             (например поделите кейсы switch на два блока) либо уберите длинные \
-             подписи кейсов.",
-            info.scale, info.font_on_page, st.font
+            "внимание: масштаб {:.0} %, кегль на листе {:.1} pt вместо {} pt — \
+             не вырезайте такую схему из отчёта. Для отчёта есть --trim: \
+             лист по содержимому, размер в миллиметрах, без ужатия.",
+            info.scale * 100.0,
+            info.font_on_page,
+            st.font
         );
     }
     if failed {
