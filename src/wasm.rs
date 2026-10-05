@@ -87,18 +87,24 @@ fn render_result(text: &str, ru: bool, lw: f64, font: f64) -> String {
         json_str(&mut out, p);
     }
     out.push(']');
-    if !has_body(text) {
+    if pages.iter().all(|p| p.matches("<rect").count() <= 1) {
         out.push_str(",\"empty\":true");
     }
     out.push('}');
     out
 }
 
-/// Есть ли в коде `main` — по тексту, а не по разбору: битый код
-/// разбирается частично, и разбор тут не показатель.
-fn has_body(text: &str) -> bool {
-    text.split(|c: char| !c.is_alphanumeric() && c != '_')
-        .any(|w| w == "main")
+/// Пустая ли схема: в ней только терминаторы, рисовать нечего.
+///
+/// Проверка по разобранным узлам, а не по тексту на «main»: движок
+/// рисует все функции файла, и файл без `main`, но с функцией —
+/// полноценная схема. Поиск слова `main` в тексте давал ложное
+/// предупреждение ровно на таких файлах.
+fn scheme_is_empty(nodes: &[crate::ir::Node]) -> bool {
+    nodes.len() <= 2
+        && nodes
+            .iter()
+            .all(|n| n.branches.is_empty() && n.body.is_none())
 }
 
 /// Вход: (ptr, len) в UTF-8; ru — флаги; lw/font — 0 = дефолт.
@@ -176,8 +182,13 @@ pub extern "C" fn gostpadi_render_batch(
     let opts = site_options(ru != 0, lw, font);
     // все функции файла, а не только main: по схеме на функцию, имя
     // после `#` разбирает сайт
-    let rendered =
-        pipeline::render_batch(pipeline::parse_functions(&inputs, &opts), &opts.style()).0;
+    let schemes = pipeline::parse_functions(&inputs, &opts);
+    let empty: Vec<&str> = schemes
+        .iter()
+        .filter(|(_, nodes)| scheme_is_empty(nodes))
+        .map(|(p, _)| p.as_str())
+        .collect();
+    let rendered = pipeline::render_batch(schemes, &opts.style()).0;
     pack_json(&rendered, &inputs, out_len)
 }
 
@@ -250,8 +261,7 @@ fn pack_json(
         out.push_str("]}");
     }
     out.push_str("],\"empty\":[");
-    let empty: Vec<&(String, String)> = inputs.iter().filter(|(_, t)| !has_body(t)).collect();
-    for (i, (name, _)) in empty.iter().enumerate() {
+    for (i, name) in empty.iter().enumerate() {
         if i > 0 {
             out.push(',');
         }
