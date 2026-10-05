@@ -205,25 +205,40 @@
 
   /* Коллаж: все листы сразу, чтобы было видно, сколько их и какой
      где. Один клик — режим просмотра этого листа. */
+  /* Коллаж-лента: листы в ряд, лента тянется колесом и пальцем,
+     крайние по глубине бледнее — как стопка бумаги на столе, а не
+     галерея одинаковых картинок. Полупрозрачный лист виден вместе
+     с фоном приложения: видно, что это снимок схемы, а не страница. */
   #stage.collage {
     position: absolute; inset: 0; transform: none !important;
-    overflow-y: auto; padding: 14px;
-    display: flex; flex-wrap: wrap; gap: 14px; align-content: flex-start;
-    justify-content: center;
+    overflow-x: auto; overflow-y: hidden;
+    padding: 16px 16px 10px;
+    display: flex; flex-wrap: nowrap; align-items: center; gap: 16px;
+    scroll-snap-type: x proximity;
   }
   #stage.collage .tile {
     flex: 0 0 auto; display: flex; flex-direction: column; gap: 6px;
     background: none; border: 0; padding: 0; cursor: zoom-in;
+    scroll-snap-align: center;
+    /* параллакс: чем дальше плитка от центра ленты, тем бледнее */
+    opacity: var(--depth, 1);
+    transition: opacity .18s ease;
   }
   #stage.collage .tile .sheet {
     position: relative; box-shadow: 0 2px 10px rgba(0,0,0,.3);
+    background: color-mix(in srgb, var(--paper) 82%, transparent);
   }
   #stage.collage .tile .cap {
     font-size: 12px; color: var(--muted); text-align: center;
     max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
+  #stage.collage .tile:hover,
+  #stage.collage .tile:focus-visible { opacity: 1; }
   #stage.collage .tile:hover .cap,
   #stage.collage .tile:focus-visible .cap { color: var(--ink); }
+  @media (prefers-reduced-motion: reduce) {
+    #stage.collage .tile { transition: none; }
+  }
 
   /* Точки и стрелки — только когда лист больше одного. */
   #pager {
@@ -895,6 +910,7 @@ function tileFor(s, w, h, cap, crop) {
 /* Коллаж: все листы файла сразу мелкими плитками. Раньше лист был
    один, а остальные прятались за вкладками с цифрами — вкладки не
    говорят, сколько их, и где ты сейчас. */
+let suppressClick = false;
 function drawCollage(stage) {
   const own = ownSheets();
   stage.className = "collage";
@@ -902,6 +918,7 @@ function drawCollage(stage) {
   // коллаж читается коллажем, когда плиток видно сразу несколько, а не
   // одна во весь экран: держим плитку мелкой
   const maxH = Math.max(110, Math.min(230, vh / 2));
+  // лента горизонтальная, поэтому плитка ограничена шириной панели
   const maxW = Math.max(110, Math.min(240, (stage.clientWidth || 480) / 2 - 20));
   const manyFiles = new Set(own.map(s => s.file)).size > 1;
   own.forEach((s, i) => {
@@ -923,9 +940,66 @@ function drawCollage(stage) {
     if (sameFn.length > 1) cap += " · лист " + (sameFn.indexOf(s) + 1);
     if (manyFiles) cap += " · " + s.file;
     const tile = tileFor(s, w, h, cap, true);
-    tile.addEventListener("click", () => openLightbox(i));
+    tile.addEventListener("click", () => { if (!suppressClick) openLightbox(i); });
     stage.appendChild(tile);
   });
+  suppressClick = false;
+  depthPass(stage);
+  wireCollageScroll(stage);
+}
+
+/* Параллакс: плитка на расстоянии d плиток от центра ленты бледнеет.
+   Расстояние считаем по прокрутке, а не по индексу, — иначе при
+   прокрутке вбок глубина не менялась бы и эффект стоял на месте. */
+function depthPass(stage) {
+  const tiles = [...stage.children];
+  if (tiles.length < 3) return;
+  const paint = () => {
+    const mid = stage.scrollLeft + stage.clientWidth / 2;
+    const step = tiles[1].offsetLeft - tiles[0].offsetLeft || 1;
+    for (const t of tiles) {
+      const d = Math.abs(t.offsetLeft + t.offsetWidth / 2 - mid) / step;
+      t.style.setProperty("--depth", Math.max(0.42, 1 - d * 0.16).toFixed(3));
+    }
+  };
+  paint();
+  stage.addEventListener("scroll", paint, { passive: true });
+  // Панель может быть скрыта в момент отрисовки — на узком экране
+  // видна только активная вкладка, ширина нулевая, и все плитки
+  // получают глубину 1. Пересчитываем, когда лента обретает размер.
+  new ResizeObserver(paint).observe(stage);
+}
+
+/* Лента листается: колесо горизонтально, перетаскивание мышью и
+   пальцем. Без этого половина схем в лабе не видна — их десяток, а
+   панель узкая. */
+function wireCollageScroll(stage) {
+  stage.addEventListener("wheel", e => {
+    if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+    // вертикальное колесо листает ленту, а не страницу под ней
+    if (stage.scrollWidth <= stage.clientWidth + 1) return;
+    e.preventDefault();
+    stage.scrollLeft += e.deltaY;
+  }, { passive: false });
+  let drag = null;
+  stage.addEventListener("pointerdown", e => {
+    suppressClick = false;
+    if (stage.scrollWidth <= stage.clientWidth + 1) return;
+    drag = { x: e.clientX, left: stage.scrollLeft, moved: 0 };
+  });
+  stage.addEventListener("pointermove", e => {
+    if (!drag) return;
+    const d = e.clientX - drag.x;
+    drag.moved = Math.max(drag.moved, Math.abs(d));
+    stage.scrollLeft = drag.left - d;
+  });
+  const stop = () => {
+    // клик после перетаскивания — не клик по плитке
+    if (drag && drag.moved > 6) suppressClick = true;
+    drag = null;
+  };
+  stage.addEventListener("pointerup", stop);
+  stage.addEventListener("pointercancel", stop);
 }
 
 function drawSheets() {
@@ -1196,6 +1270,10 @@ function curZoom() {
 (() => {
   const v = $("viewport");
   v.addEventListener("wheel", e => {
+    // коллаж листается сам (см. wireCollageScroll), а масштаб у него
+    // всё равно отключён CSS: transform: none !important. Без этой
+    // проверки колесо над коллажем уводило бы в зум, которого не видно
+    if (e.target.closest("#stage.collage")) return;
     e.preventDefault();
     const rect = v.getBoundingClientRect();
     const cx = e.clientX - rect.left, cy = e.clientY - rect.top;
@@ -1214,6 +1292,13 @@ function curZoom() {
   }, { passive: false });
   let drag = null;
   v.addEventListener("pointerdown", e => {
+    // Плитка коллажа — кнопка: нажатие по ней должно открывать полный
+    // просмотр, а не начинать панораму. setPointerCapture перенаправляет
+    // последующие события указателя (и click) на вьюпорт, и плитка их
+    // не получала вовсе — схема не открывалась. Захват берём только
+    // когда тянуть действительно есть что: по фону или по схеме в
+    // режиме просмотра.
+    if (e.target.closest("button")) return;
     drag = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y };
     v.classList.add("panning");
     v.setPointerCapture(e.pointerId);
