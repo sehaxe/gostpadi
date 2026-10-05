@@ -708,11 +708,17 @@ function applyResult(res, items, ms) {
   const errFiles = items.filter(it => badNames.has(it.name));
   showErrors(errors, items);
   const ms_ = ms >= 1000 ? (ms / 1000).toFixed(1) + " с" : Math.round(ms) + " мс";
+  // схема — это файл+функция, а не лист: у файла с пятью функциями
+  // листов десять, а схем пять
+  const schemes = new Set(sheets.map(x => x.file + "#" + (x.fn || ""))).size;
   const pages = sheets.length;
   const batchNote = items.length > 1
     ? ' · <span class="batchnote">пачка: блоки одного размера</span>' : "";
   const errNote = badNames.size ? ` · без тела main: ${[...badNames].join(", ")}` : "";
-  status(`готово: ${pages} ${plural(pages, "лист", "листа", "листов")} · ${ms_}${batchNote}${errNote}`);
+  const what = schemes === pages
+    ? `${pages} ${plural(pages, "лист", "листа", "листов")}`
+    : `${schemes} ${plural(schemes, "схема", "схемы", "схем")}`;
+  status(`готово: ${what} · ${ms_}${batchNote}${errNote}`);
   if (errors.length) return;
   if (cur < 0) history.replaceState(null, "", "#c=" + b64urlEncode($("code").value));
   persist();
@@ -835,21 +841,30 @@ function drawCollage(stage) {
   const own = ownSheets();
   stage.className = "collage";
   const vh = stage.clientHeight - 60 || 320;
-  const H = Math.max(140, Math.min(360, vh));
+  // коллаж читается коллажем, когда плиток видно сразу несколько, а не
+  // одна во весь экран: держим плитку мелкой
+  const maxH = Math.max(110, Math.min(230, vh / 2));
+  const maxW = Math.max(110, Math.min(240, (stage.clientWidth || 480) / 2 - 20));
   const manyFiles = new Set(own.map(s => s.file)).size > 1;
   own.forEach((s, i) => {
     // пропорции берём у содержимого, а не у листа: иначе плитка A4
     // с пятистрочной схемой посреди пустоты
     const box = contentBox(s.svg);
     const ar = box ? box.w / box.h : s.w / s.h;
-    const w = Math.max(90, Math.round(H * ar));
+    // Обе границы, а не только высота: у схемы из трёх блоков габарит
+    // низкий и широкий, и по одной высоте плитка выходила в 1400 px.
+    let w = Math.round(maxH * ar);
+    let h = maxH;
+    if (w > maxW) { w = maxW; h = Math.max(90, Math.round(w / ar)); }
     // подпись: функция важнее номера листа. Без неё десяток схем
     // одного файла выглядит как десяток безымянных картинок.
     let cap = s.fn || s.file;
-    if (own.length > 1 && s.file === activeName() && s.fn === null) cap += " · лист " + (i + 1);
-    else if (own.filter(x => x.fn === s.fn).length > 1) cap += " · лист " + (i + 1);
+    // номер листа — только если у ЭТОЙ функции их несколько: у main
+    // один лист, а «лист 1» рядом с именем функции был бы шумом
+    const sameFn = own.filter(x => x.fn === s.fn);
+    if (sameFn.length > 1) cap += " · лист " + (sameFn.indexOf(s) + 1);
     if (manyFiles) cap += " · " + s.file;
-    const tile = tileFor(s, w, H, cap, true);
+    const tile = tileFor(s, w, h, cap, true);
     tile.addEventListener("click", () => openSheet(i));
     stage.appendChild(tile);
   });
