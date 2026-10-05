@@ -58,7 +58,13 @@ pub(super) fn extent(sizes: &Sizes, st: &Style, colw: f64, items: &[Stmt]) -> f6
             let tiers = bus_tiers(st, dw2, sub, n);
             let pitch2 = 2.0 * sub + st.colgap;
             he = he
-                .max(dw2 / 2.0 + st.hgap + sub + tiers as f64 * pitch2)
+                // + sub в конце обязателен: колонка ветки стоит на
+                // расстоянии base2 = dw2/2 + hgap + sub от оси, а её
+                // собственная полуширина — ещё sub. Без этого nhe
+                // занижался, и рельса continue уходила по блокам
+                // (ловил --check на реальной лабе: while с if/else и
+                // switch внутри).
+                .max(dw2 / 2.0 + st.hgap + sub + tiers as f64 * pitch2 + sub)
                 .max(super::geometry::up(
                     dw2 / 2.0 + 2.0 * st.grid + tiers as f64 * pitch2 + sub,
                     st.grid,

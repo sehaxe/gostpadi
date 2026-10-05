@@ -194,7 +194,11 @@ impl Ctx<'_> {
             && idxs.len() >= 2
             && super::column::bus_tiers(self.st, dw, sub, idxs.len()) == 0
         {
-            let (_, cursor) = self.switch_rows(nd, None, top - dh / 2.0, tx);
+            // switch_rows сам ставит ромб на `cursor + vgap + dh/2`, а мы
+            // передаём `top` — верхнюю кромку, как и все остальные
+            // раскладки. Со сдвигом на пол-трапеции ромб въезжал
+            // на пол-листа выше и ствол уходил в его середину.
+            let (_, cursor) = self.switch_rows(nd, None, top - self.st.vgap, tx);
             // кейсы переключателя заканчиваются `break`, колонка за ними
             // пуста: поток из этой ветки наружу не идёт
             return (cursor, ColEnd::Flow);

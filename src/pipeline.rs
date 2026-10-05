@@ -793,3 +793,83 @@ mod tight_tests {
         assert!(xml.contains("value=\""), "нет подписей блоков");
     }
 }
+
+/// Регрессия из реальной лабы: `while` с `if/else` и `switch` внутри.
+/// `column::extent` для ромба не добавлял полуширину самой колонки,
+/// из-за чего общая полуширина `nhe` занижалась, и рельса `continue`
+/// уходила прямо по блокам. Нашлось через `--check` на файлах
+/// пользователя, а не в тестах — тесты на этот класс не смотрели.
+#[cfg(test)]
+mod rail_tests {
+    use super::*;
+
+    const LAB: &str = r#"#include <stdio.h>
+int main() {
+  bool keep = true;
+  while (keep) {
+    int a;
+    printf("Vvedite luboe chslo ot 0 do 10: ");
+    if (scanf_s("%d", &a) != 1) {
+      while (getchar() != '\n');
+      printf("Oshibka vvoda. Poprobuyte eshche raz.\n");
+      continue;
+    }
+    if (a > 10 || a < 0) { printf("Chislo ne v diapazone\n "); }
+    switch (a) {
+      case 0: printf("Chislo nol\n"); break;
+      case 1: printf("Chislo odin\n"); break;
+      case 2: printf("Chislo dva\n"); break;
+      case 3: printf("Chislo tri\n"); break;
+      case 4: printf("Chislo chetiri\n"); break;
+      case 5: printf("Chislo piat\n"); break;
+      case 6: printf("Chislo shest\n"); break;
+      case 7: printf("Chislo sem\n"); break;
+      case 8: printf("Chislo vosem\n"); break;
+      case 9: printf("Chislo deviat\n"); break;
+      case 10: printf("Chislo desiat\n"); break;
+    }
+  }
+  return 0;
+}"#;
+
+    #[test]
+    fn continue_rail_does_not_cross_blocks() {
+        let opts = Options {
+            labels: "en".into(),
+            font: None,
+            lw: None,
+            no_split: false,
+            landscape: false,
+        };
+        let st = opts.style();
+        let nodes = to_nodes(LAB, &opts);
+        let l = layout(&nodes, &normalize(&nodes, &st), &st);
+        assert!(
+            crate::layout::crossings_ok(&l.shapes, &l.edges).is_ok(),
+            "рельса continue идёт по блокам"
+        );
+    }
+
+    /// Та же схема после порезки: части раскладываются независимо, и
+    /// заниженная полуwidth проявилась бы иначе.
+    #[test]
+    fn no_crossings_after_split_too() {
+        let opts = Options {
+            labels: "en".into(),
+            font: None,
+            lw: None,
+            no_split: false,
+            landscape: false,
+        };
+        let st = opts.style();
+        let nodes = to_nodes(LAB, &opts);
+        let sizes = normalize(&nodes, &st);
+        for part in crate::layout::split_scheme(nodes, &sizes, &st) {
+            let l = layout(&part, &sizes, &st);
+            assert!(
+                crate::layout::crossings_ok(&l.shapes, &l.edges).is_ok(),
+                "после порезки линии заходят на блоки"
+            );
+        }
+    }
+}
