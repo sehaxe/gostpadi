@@ -310,7 +310,8 @@ mod band_tests {
              case 7: printf(\"g\"); break; case 8: printf(\"h\"); break;\n\
              case 9: printf(\"i\"); break; case 10: printf(\"j\"); break;\n\
              case 11: printf(\"k\"); break; default: printf(\"z\"); }\n\
-             for(int i=0;i<4;i++) printf(\"%d\", i); return 0; }",
+             for(int i=0;i<9;i++){ a=i; b=i*2; c=i*3; d=i*4;\n\
+             e=i*5; f=i*6; g=i*7; h=i*8; } return 0; }",
         );
         let sizes = normalize(&nodes, &st);
         let l = layout(&nodes, &sizes, &st);

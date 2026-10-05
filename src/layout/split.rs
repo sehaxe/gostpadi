@@ -107,20 +107,19 @@ pub fn split_scheme(mut items: Vec<Node>, sizes: &Sizes, st: &Style) -> Vec<Vec<
         let nd = &items[at];
         let n_ne = nd.branches.iter().filter(|b| !b.stmts.is_empty()).count();
         let conn = || Node::new(NodeKind::Conn, letter.to_string());
-        let limit = st.sheet.text_h();
 
         // Сколько кейсов помещается на лист, формулой не выводится: высота
-        // зависит от переноса подписей в плитках, от `merge_y` в сетке и
-        // от того, уместился ли ряд кейсов на шину или встал в два ряда.
-        // Поэтому перебираем от большего к меньшему и берём первый,
-        // который влез. Чётность нужна, чтобы не разорвать ряд сетки.
-        let mut halves: Vec<usize> = (1..=(n_ne - 2) / 2).map(|k| k * 2).collect();
-        halves.reverse();
-        for keep in halves {
+        // зависит от переноса подписей в плитках, от `merge_y` и от того,
+        // влез ли ряд. Поэтому перебираем от большего к меньшему и берём
+        // первый, который влез ЦЕЛИКОМ. Раньше сверялась только высота —
+        // и диспетч в один ряд уезжал на лист шириной 1317 pt при
+        // текстовой зоне 728: порезка считала такой лист годным.
+        for keep in (1..n_ne).rev() {
             let Some((head, tail)) = split_at(nd, at, keep, items, &conn) else {
                 continue;
             };
-            if layout(&head, sizes, st).bounds.3 < limit {
+            let (_, _, w, h) = layout(&head, sizes, st).bounds;
+            if st.sheet.fits(w, h, st.split_scale) {
                 return Some((head, tail));
             }
         }

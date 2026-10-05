@@ -196,11 +196,6 @@ impl Ctx<'_> {
     pub(super) fn sub_if(&mut self, nd: &Node, tx: f64, top: f64) -> (f64, ColEnd) {
         let (dw, dh) = self.sizes["if"];
         let cy = top + dh / 2.0;
-        // Вложенный переключатель с десятком кейсов шёл «шиной» — все
-        // кейсы в один ряд, ширина 3600 pt, лист ужимался до 13 %.
-        // Верхнеуровневый для того же случая давно раскладывается сеткой
-        // (см. `decision_top`), поэтому вложенный уводим туда же.
-        // Приём тот же: `switch` внутри `else` рисуется на своей оси.
         let idxs: Vec<usize> = (0..nd.branches.len())
             .filter(|&i| !nd.branches[i].stmts.is_empty())
             .collect();
@@ -213,19 +208,6 @@ impl Ctx<'_> {
         // (zad2.1 — if внутри for внутри if, ровно то, что и ловил
         // --check). Верхнеуровневый каскад упакован в две колонки;
         // этого хватает для верхнего уровня лабораторной работы.
-        if nd.switch_var.is_some()
-            && idxs.len() >= 2
-            && super::column::bus_tiers(self.st, dw, sub, idxs.len()) == 0
-        {
-            // switch_rows сам ставит ромб на `cursor + vgap + dh/2`, а мы
-            // передаём `top` — верхнюю кромку, как и все остальные
-            // раскладки. Со сдвигом на пол-трапеции ромб въезжал
-            // на пол-листа выше и ствол уходил в его середину.
-            let (_, cursor) = self.switch_rows(nd, None, top - self.st.vgap, tx);
-            // кейсы переключателя заканчиваются `break`, колонка за ними
-            // пуста: поток из этой ветки наружу не идёт
-            return (cursor, ColEnd::Flow);
-        }
         self.add("if", tx, cy, &nd.text);
         let empty: Vec<String> = nd
             .branches

@@ -27,20 +27,6 @@ pub(super) fn rail_only(items: &[Stmt]) -> bool {
 ///
 /// Тот же предикат использует рендер (`sub_if`), поэтому габарит и
 /// реальная раскладка считаются по одним числам.
-pub(super) fn bus_tiers(st: &Style, dw: f64, sub: f64, n: usize) -> usize {
-    let tiers = super::ifnode::max_tier(n);
-    if tiers == 0 {
-        return 0;
-    }
-    let pitch = 2.0 * sub + st.colgap;
-    let half = dw / 2.0 + st.hgap + sub + tiers as f64 * pitch + sub;
-    if 2.0 * half <= st.sheet.text_w() / st.split_scale {
-        tiers
-    } else {
-        0
-    }
-}
-
 /// Полуширина содержимого колонки вокруг её оси: плитки, вложенные
 /// ромбы с их под-колонками, вложенные циклы с каналами возврата.
 pub(super) fn extent(sizes: &Sizes, st: &Style, colw: f64, items: &[Stmt]) -> f64 {
@@ -55,7 +41,12 @@ pub(super) fn extent(sizes: &Sizes, st: &Style, colw: f64, items: &[Stmt]) -> f6
                 .map(|b| extent(sizes, st, colw, &b.stmts))
                 .fold(colw / 2.0, f64::max);
             let n = ne.len();
-            let tiers = bus_tiers(st, dw2, sub, n);
+            // Диспетч всегда раскладывается одной шиной: кейсы в один ряд,
+            // число ярусов — `max_tier`. Раньше здесь стоял `bus_tiers`,
+            // который при нехватке ширины возвращал 0 (кейсы уходили в
+            // сетку), и полуширина колонки занижалась вдвое — рельса
+            // continue уходила по блокам.
+            let tiers = super::ifnode::max_tier(n);
             let pitch2 = 2.0 * sub + st.colgap;
             he = he
                 // + sub в конце обязателен: колонка ветки стоит на

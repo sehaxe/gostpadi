@@ -1120,147 +1120,38 @@ else { printf(\"8\"); }\n",
     );
 }
 
-/// Большой переключатель (>= 5 кейсов): кейсы сеткой по два на ряд —
-/// все колонки на ±base, второй ряд ниже первого; ряды слиты в ствол.
+/// Диспетч: все кейсы на ОДНОЙ шине, в один ряд — и на трёх, и на
+/// пяти, и на двенадцати. Ряд на два кейса и столбик по одному кейсу в
+/// ряду пробовались ради ширины, но оба читаются хуже: пары ничего не
+/// значат, а столбик — не переключатель, а список. Ширину добирает лист
+/// (он альбомный), а слишком широкий диспетч режет порезка по ветвям —
+/// на каждом листе всё равно один ряд.
 #[test]
-fn switch_rows_grid_for_five_cases() {
+fn switch_cases_share_one_line() {
     let st = Style::default();
-    let text = "\
-int d;
-switch (d) {
-case 1: printf(\"один\"); break;
-case 2: printf(\"два\"); break;
-case 3: printf(\"три\"); break;
-case 4: printf(\"четыре\"); break;
-case 5: printf(\"пять\"); break;
-}
-printf(\"%d\", d);
-";
-    let nodes = nodes(text);
-    let sizes = normalize(&nodes, &st);
-    let l = layout(&nodes, &sizes, &st);
-    let nhe = super::nhe_of(&sizes, &nodes, &st);
-    let dsh = l.shapes.iter().find(|s| s.kind == "if").unwrap();
-    let base = dsh.w / 2.0 + st.hgap + nhe;
-    let ios: Vec<&Shape> = l
-        .shapes
-        .iter()
-        .filter(|s| s.kind == "io" && s.cx != 0.0)
-        .collect();
-    assert_eq!(ios.len(), 5, "пять кейсов");
-    // все колонки строго на ±base — ширина сетки постоянна
-    for io in &ios {
-        assert!(
-            ((io.cx - base).abs() < 1e-9) || ((io.cx + base).abs() < 1e-9),
-            "кейс на ±base = ±{base}, а он в {}",
-            io.cx
+    for cases in [3usize, 4, 5, 12] {
+        let text = dispatch(cases);
+        let nodes = nodes(&text);
+        let sizes = normalize(&nodes, &st);
+        let l = layout(&nodes, &sizes, &st);
+        assert_eq!(
+            rows_of_cases(&l),
+            1,
+            "{cases} кейсов: кейсы обязаны стоять на одной линии"
         );
+        assert!(
+            crossings_ok(&l.shapes, &l.edges).is_ok(),
+            "{cases} кейсов: пересечения"
+        );
+        assert!(overlaps_ok(&l.shapes), "{cases} кейсов: фигуры наехали");
     }
-    // ряды: три кейса слева (1, 3, 5), два справа (2, 4); ряд 1 ниже ряда 0
-    let mut lefts: Vec<f64> = ios.iter().filter(|s| s.cx < 0.0).map(|s| s.cy).collect();
-    lefts.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    assert_eq!(lefts.len(), 3);
-    // кейсы больше не таскают плитки break, поэтому ряды опираются на
-    // высоту самой плитки кейса, а не ромба
-    let (_, io_h) = measure(&st, "io", "printf(\"один\")");
-    assert!(
-        lefts[1] > lefts[0] + io_h && lefts[2] > lefts[1] + io_h,
-        "каждый следующий ряд ниже предыдущего: {:?}",
-        lefts
-    );
-    // ширина схемы меньше, чем была бы одной шиной (2 яруса вширь)
-    let (minx, ..) = l.bounds;
-    let w = {
-        let xs: Vec<f64> = l
-            .shapes
-            .iter()
-            .flat_map(|s| [s.cx - s.w / 2.0, s.cx + s.w / 2.0])
-            .collect();
-        xs.iter().cloned().fold(f64::MAX, f64::min)
-    };
-    let _ = (minx, w);
-    assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
-    assert!(overlaps_ok(&l.shapes));
-    assert!(single_entry_ok(&l));
-}
-
-/// ЧЕТЫРЕ кейса идут сеткой, а не шиной — и это не «5+», а ширина.
-///
-/// Шина растёт линейно: 4 кейса = два яруса от оси, и она выходила
-/// 808 pt, на 63% шире сетки при пяти кейсах (496 pt). На А4 (текстовая
-/// зона 481.9 pt) четыре кейса на шине ужимали лист до 0.60 и кегля
-/// 7 pt, а сетка даёт 0.98 и 12 pt. Прежний порог «5+» делал четыре
-/// кейса хуже пяти; этот тест фиксировал именно то.
-#[test]
-fn switch_four_cases_use_grid_because_bus_is_too_wide() {
-    let st = Style::default();
-    let text = dispatch(4);
-    let nodes = nodes(&text);
-    let sizes = normalize(&nodes, &st);
-    let l = layout(&nodes, &sizes, &st);
-    let nhe = super::nhe_of(&sizes, &nodes, &st);
-    let dsh = l.shapes.iter().find(|s| s.kind == "if").unwrap();
-    let pitch = 2.0 * nhe + st.colgap;
-    let base = dsh.w / 2.0 + st.hgap + nhe;
-
-    assert_eq!(
-        rows_of_cases(&l),
-        2,
-        "четыре кейса — два ряда сетки, не один ряд шины"
-    );
-
-    // шина была бы шире порога читаемости, иначе правило решило бы
-    // в пользу шины и тест не проверял бы ничего
-    let bus_w = 2.0 * (base + pitch + nhe);
-    assert!(
-        bus_w > st.sheet.text_w() / st.split_scale,
-        "шина 4 кейсов ({bus_w:.0} pt) должна быть шире порога читаемости ({:.0} pt)",
-        st.sheet.text_w() / st.split_scale
-    );
-
-    let (_, _, w, h) = l.bounds;
-    let s = st.sheet.scale_for(w, h);
-    assert!(
-        s >= st.split_scale,
-        "масштаб {s:.3} ниже порога {}: схема обязана быть читаемой",
-        st.split_scale
-    );
-    assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
-    assert!(overlaps_ok(&l.shapes));
-    assert!(single_entry_ok(&l));
-}
-
-/// Три кейса остаются на шине: шина трёх кейсов — один ярус, и она
-/// читаема. Порог «влезает при масштабе 1.0» увёл бы их в сетку
-/// на ровном месте, где читать хуже.
-#[test]
-fn switch_three_cases_stay_on_bus() {
-    let st = Style::default();
-    let text = dispatch(3);
-    let nodes = nodes(&text);
-    let sizes = normalize(&nodes, &st);
-    let l = layout(&nodes, &sizes, &st);
-    assert_eq!(rows_of_cases(&l), 1, "три кейса — одна шина, сетка лишняя");
-    assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
-}
-
-/// Пять кейсов — тоже сетка, но по другой причине: два яруса, и шина
-/// была бы такой же широкой, как при четырёх.
-#[test]
-fn switch_five_cases_use_grid() {
-    let st = Style::default();
-    let text = dispatch(5);
-    let nodes = nodes(&text);
-    let sizes = normalize(&nodes, &st);
-    let l = layout(&nodes, &sizes, &st);
-    assert_eq!(rows_of_cases(&l), 3, "пять кейсов — три ряда сетки");
-    assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
 }
 
 /// Сколько рядов заняли кейсы диспетча: одна шина — один ряд,
-/// сетка по два на ряд — несколько. Ряд опознаём по ВЕРХНЕЙ кромке:
-/// плитки в ряду могут быть разной высоты (разная длина текста), и по
-/// центру они разъезжаются, хотя стоят на одной линии.
+/// столбик по одному кейсу в ряду — столько рядов, сколько кейсов. Ряд
+/// опознаём по ВЕРХНЕЙ кромке: плитки в ряду могут быть разной высоты
+/// (разная длина текста), и по центру они разъезжаются, хотя стоят на
+/// одной линии.
 ///
 /// Считает ВСЕ плитки ввода-вывода, поэтому тестовые схемы не должны
 /// заканчиваться ещё одной `output`-плиткой — иначе она добавит ряд.

@@ -63,23 +63,6 @@ impl Ctx<'_> {
     /// Помещается ли шина диспетча (все кейсы в один ряд) в лист
     /// читаемо, то есть без ухода масштаба листа ниже порога.
     ///
-    /// Шина раскладывает кейсы ярусами от оси (`build_plan`): кейс
-    /// яруса `t` стоит на расстоянии `base + t * pitch`, а сам ряд
-    /// занимает `nhe` в каждую сторону. Порог — не «влезает при
-    /// масштабе 1.0», а «влезает не хуже, чем режет порезка»: иначе
-    /// три кейса, которым не хватало трёх процентов, уезжали в сетку
-    /// и читались хуже, чем на шине.
-    pub(super) fn bus_fits(&self, cases: usize) -> bool {
-        if cases < 2 {
-            return true;
-        }
-        let dw = self.sizes["if"].0;
-        let pitch = 2.0 * self.nhe + self.st.colgap;
-        let base = dw / 2.0 + self.st.hgap + self.nhe;
-        let half = base + super::ifnode::max_tier(cases) as f64 * pitch + self.nhe;
-        2.0 * half <= self.st.sheet.text_w() / self.st.split_scale
-    }
-
     /// Ромб «если»/переключатель на основной линии.
     pub(super) fn decision_top(
         &mut self,
@@ -90,16 +73,10 @@ impl Ctx<'_> {
         if matches!(cascade_cols(nd), Some((k, _)) if k >= 2) {
             return self.decision_cascade(nd, prev, cursor, 0.0);
         }
-        // Диспетч: кейсы либо на одной шине (bus), либо сеткой по два
-        // на ряд. Выбор — по ширине, а не по числу кейсов: шина растёт
-        // линейно, и при 4 кейсах она оказывалась ШИРЕ, чем сетка при
-        // 5 (808 pt против 496 pt), то есть четыре кейса читались хуже
-        // пяти, а порог «5+» этого не замечал. Решает лист: если шина
-        // не помещается в текстовую зону, кладём кейсы сеткой.
-        let n_ne = nd.branches.iter().filter(|b| !b.stmts.is_empty()).count();
-        if nd.switch_var.is_some() && n_ne >= 2 && !self.bus_fits(n_ne) {
-            return self.switch_rows(nd, prev, cursor, 0.0);
-        }
+        // Диспетч: все кейсы на одной шине, в один ряд. Ряд на два кейса
+        // и столбик по одному кейсу в ряду пробовались ради ширины, но
+        // оба читаются хуже: пары ничего не значат, а столбик — не
+        // переключатель, а список. Ширину добирает лист: он альбомный.
         let (dw, dh) = self.sizes["if"];
         let cy = cursor + self.st.vgap + dh / 2.0;
         self.add("if", 0.0, cy, &nd.text);
@@ -279,186 +256,6 @@ impl Ctx<'_> {
         let cursor = merge_y.max(col_bottom).max(link_bottom);
         self.anchors.push(Anchor { y: cursor });
         (Some((0.0, merge_y)), cursor)
-    }
-
-    /// Большой переключатель: кейсы сеткой — по два на ряд, ряды друг
-    /// под другом. Ширина постоянная (две колонки на ±base), растёт
-    /// только вниз — одна длинная шина кейсов ужимала всю страницу.
-    /// Шины рядов соединяет ствол на оси; слияние живых колонок —
-    /// одна шина под последним рядом.
-    pub(super) fn switch_rows(
-        &mut self,
-        nd: &Node,
-        prev: Option<(f64, f64)>,
-        cursor: f64,
-        axis: f64,
-    ) -> (Option<(f64, f64)>, f64) {
-        let (dw, dh) = self.sizes["if"];
-        let cy = cursor + self.st.vgap + dh / 2.0;
-        self.add("if", axis, cy, &nd.text);
-        if let Some(p) = prev {
-            self.edge(&[p, (axis, cy - dh / 2.0)], true);
-        }
-        let base = dw / 2.0 + self.st.hgap + self.nhe;
-        let saved_direct = self.case_direct;
-        self.switch_depth += 1;
-        self.case_direct = true;
-        let empty: Vec<String> = nd
-            .branches
-            .iter()
-            .filter(|b| b.stmts.is_empty())
-            .map(|b| b.label.clone())
-            .collect();
-        let cases: Vec<&Branch> = nd.branches.iter().filter(|b| !b.stmts.is_empty()).collect();
-        // коридоры за сеткой: сначала рельсы пустых кейсов, потом
-        // «-> конец» — чтобы вертикали не накладывались
-        let bx0 = super::geometry::up(
-            (base + self.nhe + self.st.grid).max(dw / 2.0 + 2.0 * self.st.grid),
-            self.st.grid,
-        );
-        // шина первого ряда: от нижней вершины ромба по стволу
-        let mut y_bus = cy + dh / 2.0 + self.st.vgap;
-        let mut trunk_from = cy + dh / 2.0;
-        self.edge(&[(axis, trunk_from), (axis, y_bus)], false);
-        let mut col_bottom = y_bus;
-        let mut merge_y = y_bus;
-        let mut link_bottom = y_bus;
-        let mut merged = false;
-        for (ri, row) in cases.chunks(2).enumerate() {
-            if ri > 0 {
-                // ствол от слияния предыдущего ряда к шине следующего
-                y_bus = merge_y + self.st.vgap;
-                self.edge(&[(axis, trunk_from), (axis, y_bus)], false);
-            }
-            let mut live: Vec<f64> = Vec::new();
-            let mut gone: Vec<(f64, f64, bool, Option<char>)> = Vec::new(); // x, yend, to_end, link
-            for (ci, b) in row.iter().enumerate() {
-                let left = ci == 0;
-                let sgn: f64 = if left { -1.0 } else { 1.0 };
-                let cx0 = axis + sgn * base;
-                let top = y_bus + self.st.vgap;
-                // шина ряда: от ствола до колонки (два сегмента без
-                // наложения — вместе образуют шину через ось)
-                self.edge(&[(axis, y_bus), (cx0, y_bus)], false);
-                self.edge(&[(cx0, y_bus), (cx0, top)], !rail_only(&b.stmts));
-                self.labels.push(Label {
-                    x: cx0
-                        + if left {
-                            -self.st.label_dx
-                        } else {
-                            self.st.label_dx
-                        },
-                    y: top - self.st.label_dy,
-                    text: b.label.clone(),
-                    ha: if left { "right" } else { "left" }.into(),
-                });
-                let (yend, end) = self.render_column(&b.stmts, cx0, top);
-                col_bottom = col_bottom.max(yend);
-                if end != ColEnd::Flow {
-                    // тупик return или рельса break: слияния от колонки
-                    // нет — break дорисует дренаж switch
-                    continue;
-                }
-                if b.to_end {
-                    gone.push((cx0, yend, true, b.link));
-                } else {
-                    live.push(cx0);
-                    gone.push((cx0, yend, false, None));
-                }
-            }
-            // слияние ряда: уровень ниже содержимого ряда; капли колонок
-            // не могут спускаться ниже — под ними следующие ряды сетки
-            merge_y = gone
-                .iter()
-                .map(|g| g.1)
-                .fold(y_bus + 2.0 * self.st.grid, f64::max)
-                + self.st.mgap;
-            for g in &gone {
-                if g.2 {
-                    continue; // «-> конец» уходит своим коридором ниже
-                }
-                self.edge(&[(g.0, g.1), (g.0, merge_y)], false);
-            }
-            if !live.is_empty() {
-                let lo = live.iter().cloned().fold(f64::MAX, f64::min);
-                let hi = live.iter().cloned().fold(f64::MIN, f64::max);
-                self.edge(&[(lo.min(axis), merge_y), (hi.max(axis), merge_y)], false);
-                merged = true;
-            }
-            trunk_from = merge_y;
-            // «-> конец»: спуск до уровня слияния ряда, наружу за сетку,
-            // дальше рельсу дорисует layout() над «концом»
-            for &(cx0, yend, _, link) in gone.iter().filter(|g| g.2) {
-                let sgn: f64 = if cx0 > axis { 1.0 } else { -1.0 };
-                let key = usize::from(cx0 > axis);
-                let out = axis + sgn * (bx0 + empty.len() as f64 * 2.0 * self.st.grid);
-                self.edge(&[(cx0, yend), (cx0, merge_y), (out, merge_y)], false);
-                let pitch = 2.0 * self.nhe + self.st.colgap;
-                let rail = axis
-                    + sgn
-                        * super::geometry::up(
-                            base + self.max_tier as f64 * pitch
-                                + self.colw / 2.0
-                                + self.st.rail
-                                + self.pend_count[key] as f64 * self.st.rail_step,
-                            self.st.grid,
-                        );
-                self.pend_count[key] += 1;
-                if let Some(letter) = link {
-                    let ccy = col_bottom + self.st.jog + self.st.vgap + self.st.conn_r;
-                    self.add("conn", rail, ccy, &letter.to_string());
-                    self.edge(
-                        &[
-                            (out, merge_y),
-                            (out, col_bottom + self.st.jog),
-                            (rail, col_bottom + self.st.jog),
-                            (rail, ccy - self.st.conn_r),
-                        ],
-                        true,
-                    );
-                    link_bottom = link_bottom.max(ccy + self.st.conn_r);
-                } else {
-                    self.pend.push(Pend {
-                        x: out,
-                        y: merge_y,
-                        cb: col_bottom,
-                        rail,
-                    });
-                }
-            }
-        }
-        // пустые кейсы: рельсы справа, чистят сетку, сливаются на стволе
-        if !empty.is_empty() {
-            for (k, lbl) in empty.iter().enumerate() {
-                let bx = bx0 + k as f64 * 2.0 * self.st.grid;
-                self.edge(
-                    &[
-                        (axis + dw / 2.0, cy),
-                        (bx, cy),
-                        (bx, merge_y),
-                        (axis, merge_y),
-                    ],
-                    false,
-                );
-                self.labels.push(Label {
-                    x: dw / 2.0 + self.st.label_exit_dx + k as f64 * 2.0 * self.st.grid,
-                    y: cy - self.st.label_dy,
-                    text: lbl.clone(),
-                    ha: "center".into(),
-                });
-            }
-            merged = true;
-        }
-        if !merged {
-            // все живые кейсы в тупиках/«-> конец»: формальное
-            // продолжение ствола до точки выхода
-            self.edge(&[(axis, trunk_from), (axis, merge_y)], false);
-        }
-        self.switch_depth -= 1;
-        self.case_direct = saved_direct;
-        let cursor = merge_y.max(col_bottom).max(link_bottom);
-        self.anchors.push(Anchor { y: cursor });
-        (Some((axis, merge_y)), cursor)
     }
 
     /// Каскад else-if: вертикальный ствол с одной шиной. Ромбы цепочки
