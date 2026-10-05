@@ -16,10 +16,12 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 INDEX = ROOT / "docs" / "index.html"
 OUT = pathlib.Path("/tmp/gostpadi-examples")
-CROPPED = pathlib.Path("/tmp/gostpadi-cropped")
 
 # Подпись карточки: ключ в index.html -> (файл примера, заголовок, текст)
 CARDS = [
+    # герой: та же схема, что и в последней карточке, — он и был её
+    # источником, пока карточки не стали отдельными слотами
+    ("fig-hero", "simple.c", "", ""),
     ("fig-nested", "nested_loops.c", "Цикл в цикле",
      "for внутри while — оба возвращают поток в начало"),
     ("fig-switch", "switch_case.c", "Диспетчер",
@@ -32,7 +34,14 @@ CARDS = [
 
 
 def run(binary: pathlib.Path, src: pathlib.Path, dest: pathlib.Path) -> pathlib.Path:
-    """Один пример -> один SVG с русскими надписями, обрезанный по габариту."""
+    """Один пример -> один SVG с русскими надписями, ровно по содержимому.
+
+    Через `--trim`, а не через лист A4 с последующей обрезкой: trim уже
+    отдаёт viewBox по габариту схемы и без `<g transform>`, а обрезка
+    листа A4 этот transform разворачивает — и портит viewBox, отрезав
+    схему по половине. Три схемы на главной выглядели порубленными
+    именно из-за этого.
+    """
     dest.mkdir(parents=True, exist_ok=True)
     out = dest / (src.stem + ".svg")
     subprocess.run(
@@ -43,29 +52,17 @@ def run(binary: pathlib.Path, src: pathlib.Path, dest: pathlib.Path) -> pathlib.
     return out
 
 
-def crop(src: pathlib.Path, dest: pathlib.Path, pad: float = 14.0) -> None:
-    subprocess.run(
-        [sys.executable, str(ROOT / "site" / "crop.py"), str(src), str(dest), str(pad)],
-        check=True,
-        capture_output=True,
-    )
-
-
 def main() -> int:
     binary = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "target" / "release" / "gostpadi"
     if not binary.exists():
         print(f"нет бинаря {binary}, собери cargo build --release", file=sys.stderr)
         return 1
-    CROPPED.mkdir(parents=True, exist_ok=True)
     html = INDEX.read_text(encoding="utf-8")
     changed = 0
 
     # Герой и карточки помечены комментариями с ключом.
     for key, name, title, caption in CARDS:
-        src = run(binary, ROOT / "examples" / name, OUT)
-        dst = CROPPED / f"{key}.svg"
-        crop(src, dst)
-        svg = dst.read_text(encoding="utf-8").strip()
+        svg = run(binary, ROOT / "examples" / name, OUT).read_text(encoding="utf-8").strip()
         html, n = re.subn(
             rf'(<div class="(?:fig|sheet)" data-key="{key}">).*?(</div>)',
             lambda m: m.group(1) + svg + m.group(2),
@@ -77,12 +74,13 @@ def main() -> int:
             print(f"не найден слот {key}", file=sys.stderr)
             return 1
         changed += n
-        html = re.sub(
-            rf'(<figcaption data-key="{key}"><b>).*?(</b>).*?(</figcaption>)',
-            lambda m: m.group(1) + title + m.group(2) + caption + m.group(3),
-            html,
-            flags=re.S,
-        )
+        if title:
+            html = re.sub(
+                rf'(<figcaption data-key="{key}"><b>).*?(</b>).*?(</figcaption>)',
+                lambda m: m.group(1) + title + m.group(2) + caption + m.group(3),
+                html,
+                flags=re.S,
+            )
 
     INDEX.write_text(html, encoding="utf-8")
     print(f"подставлено схем: {changed}")
