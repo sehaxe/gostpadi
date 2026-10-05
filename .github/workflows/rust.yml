@@ -36,9 +36,17 @@ jobs:
           W=target/wasm32-unknown-unknown/release/gostpadi.wasm
           before=$(stat -c%s "$W")
           # сбой wasm-opt не должен ронять сборку: без сжатия движок
-          # просто тяжелее на килобайты
-          wasm-opt -Oz "$W" -o "$W.opt" && test -s "$W.opt" && mv "$W.opt" "$W" \
-            || echo "wasm-opt не справился, едем без сжатия"
+          # просто тяжелее на килобайты. Вывод wasm-opt не гасим —
+          # иначе «сжатия нет» нечем отличить от «сжатие есть».
+          # Флаги включения — потому что binaryen из Ubuntu старее
+          # LLVM, которым собран движок.
+          if wasm-opt -Oz --enable-bulk-memory --enable-sign-ext \
+               --enable-mutable-globals --enable-nontrapping-float-to-int \
+               "$W" -o "$W.opt"; then
+            mv "$W.opt" "$W"
+          else
+            echo "wasm-opt не справился, едем без сжатия"
+          fi
           echo "wasm: $before -> $(stat -c%s "$W") байт"
           if [ "$GITHUB_EVENT_NAME" != "push" ] || [ "$GITHUB_REF_NAME" != "main" ]; then
             echo "не main — docs/gostpadi.wasm не трогаем"
