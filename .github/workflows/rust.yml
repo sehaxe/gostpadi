@@ -21,22 +21,25 @@ jobs:
       - run: cargo build --release
       # сайт: docs/gostpadi.wasm — движок для страницы. На main CI сам
       # пересобирает и коммитит его, если исходники ушли вперёд.
-      # wasm-opt -Oz: opt-level=z уже ужимает, но -Oz вырезает ещё и
-      # мёртвые сегменты данных. Главная грузит движок сразу, поэтому
-      # каждый килобайт заметен.
-      - name: Ужать движок wasm-opt
-        uses: webassemblyjs/action-wasm-opt@v1.4
-        with:
-          path: ./target/wasm32-unknown-unknown/release/gostpadi.wasm
-          version: latest
-          flags: -Oz
-          skipTests: true
 
       - name: Свежий gostpadi.wasm для сайта
         run: |
           CARGO_PROFILE_RELEASE_OPT_LEVEL=z cargo build --release \
             --lib --target wasm32-unknown-unknown
           test -s target/wasm32-unknown-unknown/release/gostpadi.wasm
+          # wasm-opt -Oz: opt-level=z уже ужимает, но -Oz вырезает ещё и
+          # мёртвые сегменты данных. Главная грузит движок сразу, поэтому
+          # каждый килобайт заметен. Пакет binaryen из Ubuntu — без
+          # внешних экшенов: их репозитории с wasm-opt закрыты.
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq binaryen
+          W=target/wasm32-unknown-unknown/release/gostpadi.wasm
+          before=$(stat -c%s "$W")
+          # сбой wasm-opt не должен ронять сборку: без сжатия движок
+          # просто тяжелее на килобайты
+          wasm-opt -Oz "$W" -o "$W.opt" && test -s "$W.opt" && mv "$W.opt" "$W" \
+            || echo "wasm-opt не справился, едем без сжатия"
+          echo "wasm: $before -> $(stat -c%s "$W") байт"
           if [ "$GITHUB_EVENT_NAME" != "push" ] || [ "$GITHUB_REF_NAME" != "main" ]; then
             echo "не main — docs/gostpadi.wasm не трогаем"
             exit 0
