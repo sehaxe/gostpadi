@@ -174,8 +174,61 @@ pub extern "C" fn gostpadi_render_batch(
         _ => return std::ptr::null_mut(),
     };
     let opts = site_options(ru != 0, lw, font);
+    let rendered = pipeline::render_batch(pipeline::parse_batch(&inputs, &opts), &opts.style()).0;
+    pack_json(&rendered, &inputs, out_len)
+}
+
+/// Тот же вход и тот же JSON, но другой выход на файл:
+/// mode 1 — SVG по содержимому, в миллиметрах (для отчёта),
+/// mode 2 — draw.io с редактируемыми блоками.
+///
+/// Отдельный вызов, а не поле в `gostpadi_render_batch`: файлы draw.io
+/// и SVG по содержимому нужны по кнопке, а не при каждой отрисовке,
+/// и в JSON на все три вида весили бы втрое.
+#[no_mangle]
+pub extern "C" fn gostpadi_export_batch(
+    ptr: *const u8,
+    len: usize,
+    ru: u8,
+    lw: f64,
+    font: f64,
+    mode: u8,
+    out_len: *mut usize,
+) -> *mut u8 {
+    if ptr.is_null() || out_len.is_null() {
+        return std::ptr::null_mut();
+    }
+    let bytes = if len == 0 {
+        &[][..]
+    } else {
+        unsafe { std::slice::from_raw_parts(ptr, len) }
+    };
+    let Some(inputs) = unpack(bytes).filter(|v| !v.is_empty()) else {
+        return std::ptr::null_mut();
+    };
+    let opts = site_options(ru != 0, lw, font);
     let st = opts.style();
-    let (rendered, _info) = pipeline::render_batch(pipeline::parse_batch(&inputs, &opts), &st);
+    let nodes = pipeline::parse_batch(&inputs, &opts);
+    let produced: Vec<(String, Vec<String>)> = if mode == 2 {
+        pipeline::render_drawio_batch(nodes, &st)
+            .into_iter()
+            .map(|(p, x)| (p, vec![x]))
+            .collect()
+    } else {
+        pipeline::render_tight_batch(nodes, &st)
+            .into_iter()
+            .map(|(p, x)| (p, vec![x]))
+            .collect()
+    };
+    pack_json(&produced, &inputs, out_len)
+}
+
+/// Отдача буфера наружу: содержимое забываем, длину пишем в out_len.
+fn pack_json(
+    rendered: &[(String, Vec<String>)],
+    inputs: &[(String, String)],
+    out_len: *mut usize,
+) -> *mut u8 {
     let mut out = String::with_capacity(4096);
     out.push_str("{\"ok\":true,\"files\":[");
     for (i, (name, pages)) in rendered.iter().enumerate() {

@@ -15,6 +15,32 @@ pub(super) fn rail_only(items: &[Stmt]) -> bool {
     !items.is_empty() && items.iter().all(|s| matches!(s, Stmt::Continue))
 }
 
+/// Сколько ярусов вправо от оси занимает разлёт веток ромба: столько,
+/// сколько даёт шина, но только если шина вообще влезает в лист.
+///
+/// Решение по ширине листа, а не по числу кейсов, — но по **локальной**
+/// полуширине колонки ветки, а не по общей `nhe`. Общая в этом месте
+/// давала круг: `nhe` растёт от ярусов, ярусы считаются от `nhe`... и
+/// на реальной лабе (`switch` на 12 кейсов внутри `else`) `nhe`
+/// разъезжался до 1445 pt, после чего сетка кейсов раскладывалась по
+/// колонкам шириной 1563 pt и лист ужимался до 13 %.
+///
+/// Тот же предикат использует рендер (`sub_if`), поэтому габарит и
+/// реальная раскладка считаются по одним числам.
+pub(super) fn bus_tiers(st: &Style, dw: f64, sub: f64, n: usize) -> usize {
+    let tiers = super::ifnode::max_tier(n);
+    if tiers == 0 {
+        return 0;
+    }
+    let pitch = 2.0 * sub + st.colgap;
+    let half = dw / 2.0 + st.hgap + sub + tiers as f64 * pitch + sub;
+    if 2.0 * half <= st.sheet.text_w() / st.split_scale {
+        tiers
+    } else {
+        0
+    }
+}
+
 /// Полуширина содержимого колонки вокруг её оси: плитки, вложенные
 /// ромбы с их под-колонками, вложенные циклы с каналами возврата.
 pub(super) fn extent(sizes: &Sizes, st: &Style, colw: f64, items: &[Stmt]) -> f64 {
@@ -29,7 +55,7 @@ pub(super) fn extent(sizes: &Sizes, st: &Style, colw: f64, items: &[Stmt]) -> f6
                 .map(|b| extent(sizes, st, colw, &b.stmts))
                 .fold(colw / 2.0, f64::max);
             let n = ne.len();
-            let tiers = super::ifnode::max_tier(n);
+            let tiers = bus_tiers(st, dw2, sub, n);
             let pitch2 = 2.0 * sub + st.colgap;
             he = he
                 .max(dw2 / 2.0 + st.hgap + sub + tiers as f64 * pitch2)

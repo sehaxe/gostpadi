@@ -3,6 +3,7 @@
 // `clippy::all` (корректность, подозрительное, сложность, скорость) НЕ
 // выключаем: иначе `cargo clippy -- -D warnings` в CI ничего не проверяет.
 #![allow(clippy::pedantic, clippy::nursery)]
+pub mod drawio;
 pub mod frontend;
 pub mod generate;
 pub mod ir;

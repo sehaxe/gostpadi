@@ -39,11 +39,14 @@ const HELP: &str = "gostpadi 2.0.0 — блок-схемы по ГОСТ 19.701 
                     вписывает общий масштаб пачки (для вставки в отчёт)
     --landscape     альбомный лист А4 297x210 вместо книжного 210x297
     --check         только проверить, не рисовать
+    --trim          без листа A4: схема ровно по содержимому, размер
+                    в миллиметрах — для вставки в отчёт
+    --drawio        файл draw.io (.drawio) с редактируемыми блоками
     -h, --help      эта справка
     -V, --version   версия
 ";
 
-const USAGE: &str = "использование: gostpadi код.c [ещё.c ...] [-o out.svg|папка/] [--labels=ru|en] [--font=N] [--lw=N] [--no-split] [--landscape] [--check] [-h] [-V]";
+const USAGE: &str = "использование: gostpadi код.c [ещё.c ...] [-o out.svg|папка/] [--labels=ru|en] [--font=N] [--lw=N] [--no-split] [--landscape] [--check] [--trim] [--drawio] [-h] [-V]";
 
 /// Базовый путь результата входа: ".../stem.svg" (суффиксы листов добавит
 /// page_path). Папкой считается -o с косой чертой или существующая папка;
@@ -100,6 +103,8 @@ fn main() {
     let mut font: Option<f64> = None;
     let mut lw: Option<f64> = None;
     let mut no_split = false;
+    let mut trim = false;
+    let mut drawio = false;
     let mut landscape = false;
     let mut check = false;
 
@@ -117,6 +122,8 @@ fn main() {
             }
             "--check" => check = true,
             "--no-split" => no_split = true,
+            "--trim" => trim = true,
+            "--drawio" => drawio = true,
             "--landscape" => landscape = true,
             "-o" | "--output" => {
                 i += 1;
@@ -255,6 +262,36 @@ fn main() {
         .any(|s| stems.iter().filter(|t| *t == s).count() > 1);
 
     let mut failed = false;
+
+    // --trim и --drawio отдают по одному файлу на вход, без листа A4:
+    // лист удобен для печати, но в отчёт его не вставишь — схема
+    // занимает часть страницы, а вокруг пустое поле. Размер задаётся
+    // в миллиметрах, вписывания нет, поэтому у всех файлов пачки
+    // физический размер совпадает.
+    if trim || drawio {
+        let produced = if drawio {
+            pipeline::render_drawio_batch(schemes, &st)
+        } else {
+            pipeline::render_tight_batch(schemes, &st)
+        };
+        let ext = if drawio { "drawio" } else { "svg" };
+        for ((path, data), inp) in produced.into_iter().zip(&inputs) {
+            let _ = path;
+            let base =
+                base_for(inp, output.as_deref(), folder, inputs.len() > 1, dup).with_extension(ext);
+            if let Err(e) = std::fs::write(&base, data) {
+                eprintln!("не удалось записать {}: {e}", base.display());
+                failed = true;
+                continue;
+            }
+            out(&format!("{}\n", base.display()));
+        }
+        if failed {
+            process::exit(1);
+        }
+        return;
+    }
+
     let (rendered, info) = pipeline::render_batch(schemes, &st);
     for ((_, pages), inp) in rendered.into_iter().zip(&inputs) {
         let base = base_for(inp, output.as_deref(), folder, inputs.len() > 1, dup);

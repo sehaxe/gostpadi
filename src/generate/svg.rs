@@ -43,6 +43,54 @@ pub fn render_svg(l: &Layout, st: &Style) -> String {
     render_svg_at(l, st, fit_scale(l.bounds, st))
 }
 
+/// Пункт в миллиметре.
+const PT_PER_MM: f64 = 72.0 / 25.4;
+
+/// SVG для вставки в отчёт: ровно по содержимому, без пустого листа.
+///
+/// Лист А4 удобен для печати, но в отчёт его вставлять нельзя —
+/// схема занимает треть страницы, а вокруг пустое поле. Здесь
+/// `viewBox` равен габариту содержимого, а `width`/`height` заданы
+/// в миллиметрах из тех же пунктов, поэтому в Word и LaTeX схема
+/// встаёт физического размера «миллиметр в миллиметр».
+///
+/// Никакого вписывания и `<g transform>`: содержимое рисуется в своих
+/// же координатах 1:1. Из-за этого и у всех файлов пачки размер
+/// совпадает — вписывания, которое ломало бы единообразие, тут нет.
+pub fn render_svg_tight(l: &Layout, st: &Style) -> String {
+    let (x, y, w, h) = l.bounds;
+    let whisker = WHISKER_FRAC * 2.0 * st.grid;
+    let mut body = String::new();
+    for e in &l.edges {
+        edge_svg(&mut body, e, st.edge_lw, whisker);
+    }
+    for sh in &l.shapes {
+        shape_svg(&mut body, sh, st.edge_lw);
+        shape_text(&mut body, &sh.lines, sh.cx, sh.cy, st);
+    }
+    for lb in &l.labels {
+        label_text(&mut body, lb, st);
+    }
+
+    let mut out = String::with_capacity(body.len() + 256);
+    out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"");
+    put(&mut out, w / PT_PER_MM);
+    out.push_str("mm\" height=\"");
+    put(&mut out, h / PT_PER_MM);
+    out.push_str("mm\" viewBox=\"");
+    put(&mut out, x);
+    out.push(' ');
+    put(&mut out, y);
+    out.push(' ');
+    put(&mut out, w);
+    out.push(' ');
+    put(&mut out, h);
+    out.push_str("\">\n");
+    out.push_str(&body);
+    out.push_str("</svg>\n");
+    out
+}
+
 /// То же с внешним масштабом: пачка схем рисуется одним общим s,
 /// чтобы фигуры во всех файлах пачки были одного визуального размера.
 /// Всё рисуется в координатах раскладки,

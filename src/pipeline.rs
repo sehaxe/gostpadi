@@ -2,10 +2,11 @@
 //! Геометрия живёт в layout, отрисовка в generate; здесь только склейка.
 
 use crate::frontend::cts::CParser;
-use crate::generate::{fit_scale, render_svg_at};
+use crate::generate::{fit_scale, render_svg_at, render_svg_tight};
 use crate::ir::Node;
 use crate::layout::{layout, normalize, split_scheme, uniform_sizes, Layout, Sizes};
 use crate::style::Style;
+use std::path::Path;
 
 pub struct Options {
     pub labels: String, // "en" | "ru"
@@ -104,13 +105,28 @@ fn lay_out(
         .collect()
 }
 
-/// Единый масштаб пачки: минимальный из постраничных вписываний.
-/// Общий по всем файлам намеренно — ГОСТ 19.701-90 п. 4.1.3 требует,
-/// чтобы символы были одного размера, и страницы лабы обязаны совпадать.
+/// Масштаб одного файла: минимальный из вписываний его страниц.
+///
+/// Раньше масштаб был общим на всю пачку, и один тяжёлый файл утягивал
+/// остальные: на реальной лабе (18 файлов, из них один с диспетчем на
+/// 12 кейсов) все 18 листов печатались на 30 % от кегля, включая
+/// десятистрочные программы, которые на листе занимали треть страницы.
+/// Общими остаются РАЗМЕРЫ фигур (`uniform_sizes`) — этого требует
+/// ГОСТ 19.701-90 п. 4.1.3; масштаб листа к символам не относится, это
+/// просто сколько блоков влезет на страницу.
+fn file_scale(pages: &[Layout], st: &Style) -> f64 {
+    pages
+        .iter()
+        .map(|l| fit_scale(l.bounds, st))
+        .fold(1.0_f64, f64::min)
+}
+
+/// Общий масштаб пачки: решение об ориентации листа принимается по
+/// худшему файлу — иначе половина пачки выйдет в книжной, а другая
+/// в альбомной, и страницы лабы перестанут совпадать.
 fn shared_scale(laid: &[(String, Vec<Layout>)], st: &Style) -> f64 {
     laid.iter()
-        .flat_map(|(_, pages)| pages)
-        .map(|l| fit_scale(l.bounds, st))
+        .map(|(_, pages)| file_scale(pages, st))
         .fold(1.0_f64, f64::min)
 }
 
@@ -156,7 +172,13 @@ pub fn render_batch(
     let out = laid
         .into_iter()
         .map(|(path, pages)| {
-            let pages = pages.iter().map(|l| render_svg_at(l, &st, s)).collect();
+            // масштаб свой у каждого файла: маленькая программа не
+            // должна платить за широкий диспетчер соседа по пачке
+            let s_file = file_scale(&pages, &st);
+            let pages = pages
+                .iter()
+                .map(|l| render_svg_at(l, &st, s_file))
+                .collect();
             (path, pages)
         })
         .collect();
@@ -172,6 +194,103 @@ pub fn render_text(text: &str, opts: &Options) -> Vec<String> {
     .0
     .remove(0)
     .1
+}
+
+/// Узлы пачки -> раскладки, общие на все файлы: размеры фигур и
+/// ориентация листа считаются один раз (см. [`render_batch`]).
+fn lay_out_shared(schemes: Vec<(String, Vec<Node>)>, st: &Style) -> Vec<(String, Vec<Layout>)> {
+    let normed: Vec<Sizes> = schemes.iter().map(|(_, n)| normalize(n, st)).collect();
+    let sizes = uniform_sizes(&normed);
+    lay_out(schemes, &sizes, st)
+}
+
+/// SVG по содержимому, без листа А4: для вставки в отчёт.
+///
+/// Лист не рисуется вовсе, размер задаётся в миллиметрах, вписывания
+/// нет — схема идёт в натуральную величину, и у всех файлов пачки
+/// размер совпадает.
+pub fn render_tight_batch(schemes: Vec<(String, Vec<Node>)>, st: &Style) -> Vec<(String, String)> {
+    lay_out_shared(schemes, st)
+        .into_iter()
+        .map(|(path, parts)| {
+            // порезка тут не нужна: страниц нет, схема одна
+            let joined = join_parts(&parts);
+            (path, render_svg_tight(&joined, st))
+        })
+        .collect()
+}
+
+/// Склеивает части порезки в одну раскладку: вертикальные смещения
+/// частей складываются, иначе блоки наложатся.
+fn join_parts(parts: &[Layout]) -> Layout {
+    let Some(first) = parts.first() else {
+        return Layout::default();
+    };
+    if parts.len() == 1 {
+        return first.clone();
+    }
+    let mut out = first.clone();
+    let mut shift = 0.0f64;
+    for (i, part) in parts.iter().enumerate() {
+        if i > 0 {
+            shift = part.bounds.1 - (out.bounds.1 + out.bounds.3);
+        }
+        for sh in &part.shapes {
+            let mut sh = sh.clone();
+            sh.cy += shift;
+            out.shapes.push(sh);
+        }
+        for e in &part.edges {
+            out.edges.push(crate::layout::Edge {
+                points: e.points.iter().map(|(x, y)| (*x, y + shift)).collect(),
+                arrow: e.arrow,
+            });
+        }
+        for lb in &part.labels {
+            out.labels.push(crate::layout::Label {
+                x: lb.x,
+                y: lb.y + shift,
+                text: lb.text.clone(),
+                ha: lb.ha.clone(),
+            });
+        }
+    }
+    let xs: Vec<f64> = out
+        .shapes
+        .iter()
+        .flat_map(|sh| [sh.cx - sh.w / 2.0, sh.cx + sh.w / 2.0])
+        .collect();
+    let ys: Vec<f64> = out
+        .shapes
+        .iter()
+        .flat_map(|sh| [sh.cy - sh.h / 2.0, sh.cy + sh.h / 2.0])
+        .collect();
+    let minx = xs.iter().cloned().fold(f64::MAX, f64::min);
+    let miny = ys.iter().cloned().fold(f64::MAX, f64::min);
+    let maxx = xs.iter().cloned().fold(f64::MIN, f64::max);
+    let maxy = ys.iter().cloned().fold(f64::MIN, f64::max);
+    out.bounds = (minx, miny, maxx - minx, maxy - miny);
+    out
+}
+
+/// Книга draw.io по той же пачке: один файл со всеми листами.
+pub fn render_drawio_batch(schemes: Vec<(String, Vec<Node>)>, st: &Style) -> Vec<(String, String)> {
+    lay_out_shared(schemes.clone(), st)
+        .into_iter()
+        .map(|(path, parts)| {
+            let stem = Path::new(&path)
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.clone());
+            let numbered: Vec<(String, Layout)> = parts
+                .iter()
+                .enumerate()
+                .map(|(i, l)| (format!("Лист {}", i + 1), l.clone()))
+                .collect();
+            let xml = crate::drawio::book(&stem, &numbered, st);
+            (path, xml)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -329,7 +448,23 @@ mod tests {
                 scales.insert(s);
             }
         }
-        assert_eq!(scales.len(), 1, "листы лабы разного масштаба: {scales:?}");
+        // Масштаб листа теперь свой у файла: иначе один широкий
+        // диспетчер ужимал всю лабу (на реальной лабе все 18 листов
+        // печатались на 30 % кегля). Общими остаются РАЗМЕРЫ фигур —
+        // этого требует ГОСТ, и это проверяется тестом ниже.
+        for (name, pages) in &out {
+            for svg in pages {
+                let s = svg
+                    .split("scale(")
+                    .nth(1)
+                    .and_then(|p| p.split(')').next())
+                    .unwrap()
+                    .parse::<f64>()
+                    .unwrap();
+                assert!(s > 0.0 && s <= 1.0, "{name}: масштаб {s} вне (0, 1]");
+            }
+        }
+        let _ = &scales;
         assert_eq!(
             info.sheet,
             opts().style().sheet,
@@ -421,10 +556,20 @@ mod tests {
         assert_eq!(out.len(), 2);
         let sa = scales(&out[0].1[0]);
         let sb = scales(&out[1].1[0]);
-        assert_eq!(sa, sb, "scale в пачке одинаков посимвольно");
+        // A (переключатель на 5 кейсов) не влезает — ужимается;
+        // B (четыре строки) влезает целиком и не платит за соседа
         assert!(
             !sa.is_empty() && sa[0] != "1",
             "схема A реально масштабирована"
+        );
+        assert_eq!(
+            sb.first().map(String::as_str),
+            Some("1"),
+            "схема B помещается в лист и должна рисоваться 1:1"
+        );
+        assert!(
+            sa[0].parse::<f64>().unwrap() < sb[0].parse::<f64>().unwrap(),
+            "масштабы должны различаться: широкий A ужимается сильнее"
         );
         let fa = metric(&out[0].1[0], "font-size");
         let fb = metric(&out[1].1[0], "font-size");
@@ -447,5 +592,151 @@ mod tests {
         rb.sort_by(|a, b| a.partial_cmp(b).unwrap());
         rb.dedup();
         assert!(ra.iter().all(|d| rb.contains(d)), "{ra:?} vs {rb:?}");
+    }
+}
+
+/// Экспорт для отчёта: без листа A4, размер в миллиметрах, вписывания
+/// нет — иначе схема в Word окажется втрое меньше физического размера.
+#[cfg(test)]
+mod tight_tests {
+    use super::*;
+
+    fn st() -> Style {
+        Options {
+            labels: "en".into(),
+            font: None,
+            lw: None,
+            no_split: false,
+            landscape: false,
+        }
+        .style()
+    }
+
+    fn one(src: &str) -> String {
+        let nodes = CParser::new().parse(src, "en");
+        render_tight_batch(vec![("t.c".into(), nodes)], &st())
+            .remove(0)
+            .1
+    }
+
+    /// Главное обещание: миллиметры в атрибуте соответствуют пунктам
+    /// во viewBox. Ошибка в масштабе здесь невидима глазом, но в
+    /// отчёте схема встаёт не того размера.
+    #[test]
+    fn mm_matches_viewbox_points() {
+        let svg = one("int main(void){ x = 1; y = 2; }");
+        let attr = |name: &str| {
+            svg.split(&format!("{name}=\""))
+                .nth(1)
+                .and_then(|s| s.split('"').next())
+                .map(|s| s.trim_end_matches("mm"))
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(f64::NAN)
+        };
+        let (w, h) = (attr("width"), attr("height"));
+        let vb: Vec<f64> = svg
+            .split("viewBox=\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .map(|s| s.parse().unwrap())
+            .collect();
+        assert!(svg.contains("mm\""), "размер должен быть в миллиметрах");
+        assert!(
+            (w - vb[2] * 25.4 / 72.0).abs() < 0.01,
+            "ширина: {w} мм при {w} pt"
+        );
+        assert!(
+            (h - vb[3] * 25.4 / 72.0).abs() < 0.01,
+            "высота: {h} мм при {} pt",
+            vb[3]
+        );
+    }
+
+    /// Лист A4 в отчёт не вставляют: схема должна занять ровно своё
+    /// содержимое, а не треть страницы с пустым полем.
+    #[test]
+    fn no_a4_sheet() {
+        let svg = one("int main(void){ x = 1; }");
+        assert!(!svg.contains("width=\"595"), "остался лист A4");
+        assert!(!svg.contains("scale("), "осталось вписывание в лист");
+        assert!(svg.contains("width=\""), "нет размера");
+    }
+
+    /// Порезка на листы тут не нужна: страниц нет, схема одна. Если
+    /// части не склеены, блоки разных листов наедут друг на друга.
+    #[test]
+    fn long_scheme_stays_one_diagram() {
+        let svg = one("int main(void){ for(int i=0;i<40;i++){ a+=i; b-=i; c*=i; d/=i; e=f(i); } }");
+        assert!(svg.contains("mm\""), "нет миллиметров");
+        let ys: Vec<f64> = svg
+            .match_indices("<rect x=\"")
+            .map(|(i, _)| {
+                svg[i + 9..]
+                    .split('"')
+                    .next()
+                    .unwrap()
+                    .parse::<f64>()
+                    .unwrap()
+            })
+            .collect();
+        assert!(ys.len() >= 3, "схема должна состоять из блоков");
+        let mut sorted = ys.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert_eq!(ys, sorted, "блоки наехали друг на друга после склейки");
+    }
+
+    /// Вся схема должна попасть в миллиметры: обрезка по габариту
+    /// считает ширину подписей, иначе подпись «да» у края обрежется.
+    #[test]
+    fn label_text_fits_inside() {
+        let svg = one("int main(void){ if (ready) scanf(\"%d\", &x); else return 0; }");
+        let vb: Vec<f64> = svg
+            .split("viewBox=\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .map(|s| s.parse().unwrap())
+            .collect();
+        for (n, (i, _)) in svg.match_indices("<text").enumerate() {
+            let x: f64 = svg[i..]
+                .split("x=\"")
+                .nth(1)
+                .unwrap()
+                .split('"')
+                .next()
+                .unwrap()
+                .parse()
+                .unwrap();
+            assert!(
+                x >= vb[0] - 1.0 && x <= vb[0] + vb[2] + 1.0,
+                "текст {n} на x={x} вне габарита {}..{}",
+                vb[0],
+                vb[0] + vb[2]
+            );
+        }
+    }
+
+    /// draw.io-файл должен быть XML с редактируемыми вершинами, иначе
+    /// это картинка, которую не открыть как схему.
+    #[test]
+    fn drawio_is_editable() {
+        let nodes = CParser::new().parse("int main(void){ if(a) x=1; else x=2; }", "en");
+        let xml = render_drawio_batch(vec![("t.c".into(), nodes)], &st())
+            .remove(0)
+            .1;
+        assert!(xml.starts_with("<?xml"), "нет декларации");
+        assert!(
+            xml.contains("<mxGeometry"),
+            "нет геометрии — блоки не двигаются"
+        );
+        assert!(xml.contains("rhombus"), "ромб превратился в прямоугольник");
+        assert!(xml.contains("value=\""), "нет подписей блоков");
     }
 }

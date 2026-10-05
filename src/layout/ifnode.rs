@@ -178,12 +178,28 @@ impl Ctx<'_> {
     pub(super) fn sub_if(&mut self, nd: &Node, tx: f64, top: f64) -> (f64, ColEnd) {
         let (dw, dh) = self.sizes["if"];
         let cy = top + dh / 2.0;
-        self.add("if", tx, cy, &nd.text);
-        let vl = (tx - dw / 2.0, cy);
-        let vr = (tx + dw / 2.0, cy);
+        // Вложенный переключатель с десятком кейсов шёл «шиной» — все
+        // кейсы в один ряд, ширина 3600 pt, лист ужимался до 13 %.
+        // Верхнеуровневый для того же случая давно раскладывается сеткой
+        // (см. `decision_top`), поэтому вложенный уводим туда же.
+        // Приём тот же: `switch` внутри `else` рисуется на своей оси.
         let idxs: Vec<usize> = (0..nd.branches.len())
             .filter(|&i| !nd.branches[i].stmts.is_empty())
             .collect();
+        let sub = idxs
+            .iter()
+            .map(|&i| self.extent(&nd.branches[i].stmts))
+            .fold(self.colw / 2.0, f64::max);
+        if nd.switch_var.is_some()
+            && idxs.len() >= 2
+            && super::column::bus_tiers(self.st, dw, sub, idxs.len()) == 0
+        {
+            let (_, cursor) = self.switch_rows(nd, None, top - dh / 2.0, tx);
+            // кейсы переключателя заканчиваются `break`, колонка за ними
+            // пуста: поток из этой ветки наружу не идёт
+            return (cursor, ColEnd::Flow);
+        }
+        self.add("if", tx, cy, &nd.text);
         let empty: Vec<String> = nd
             .branches
             .iter()
@@ -191,10 +207,8 @@ impl Ctx<'_> {
             .map(|b| b.label.clone())
             .collect();
         let n = idxs.len();
-        let sub = idxs
-            .iter()
-            .map(|&i| self.extent(&nd.branches[i].stmts))
-            .fold(self.colw / 2.0, f64::max);
+        let vl = (tx - dw / 2.0, cy);
+        let vr = (tx + dw / 2.0, cy);
         let pitch2 = 2.0 * sub + self.st.colgap;
         let base2 = dw / 2.0 + self.st.hgap + sub;
         let comb = nd.switch_var.is_some() && n >= 2;
@@ -261,23 +275,7 @@ impl Ctx<'_> {
                 .map(|p| (p.3 - tx) + self.nhe + self.st.grid)
                 .fold(dw / 2.0 + 2.0 * self.st.grid, f64::max);
             let bx2 = tx + super::geometry::up(clear, self.st.grid);
-            for (k, lbl) in empty.iter().enumerate() {
-                self.edge(
-                    &[
-                        vr,
-                        (bx2 + k as f64 * 2.0 * self.st.grid, cy),
-                        (bx2 + k as f64 * 2.0 * self.st.grid, merge2),
-                        (tx, merge2),
-                    ],
-                    false,
-                );
-                self.labels.push(Label {
-                    x: tx + dw / 2.0 + self.st.label_exit_dx,
-                    y: cy - self.st.label_dy,
-                    text: lbl.clone(),
-                    ha: "center".into(),
-                });
-            }
+            self.empty_rails(tx, cy, merge2, bx2, &empty);
         }
         let all_dead = !bottoms.is_empty()
             && bottoms.iter().all(|&(_, _, e)| e == ColEnd::Return)

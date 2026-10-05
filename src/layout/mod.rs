@@ -7,7 +7,7 @@ mod ifnode;
 mod iftop;
 mod loopnode;
 mod measure;
-mod split;
+pub(crate) mod split;
 #[cfg(test)]
 mod tests;
 mod types;
