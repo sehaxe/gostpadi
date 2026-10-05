@@ -42,8 +42,29 @@ pub fn crossings_ok(shapes: &[Shape], edges: &[Edge]) -> Result<(), String> {
     Ok(())
 }
 
+/// Каждое ребро — по осям: отрезок либо горизонтален, либо вертикален,
+/// либо вырожден в точку. ГОСТ требует именно прямых углов в потоке,
+/// и диагональ в схеме — всегда ошибка раскладки, а не рисунка.
+///
+/// Проверка живёт здесь, рядом с проверкой пересечений, потому что это
+/// тот же класс дефектов и ловиться он должен тем же местом. Раньше
+/// диагонали доходили до готового SVG: список точек ребра собирался в
+/// один общий вектор на полосу и спаривался по две, и при нечётном
+/// числе точек соединение шло между точками чужих рёбер.
+#[cfg(debug_assertions)]
+pub(super) fn assert_axis_aligned(edges: &[Edge]) {
+    for (i, e) in edges.iter().enumerate() {
+        for w in e.points.windows(2) {
+            if (w[0].0 - w[1].0).abs() > 1e-6 && (w[0].1 - w[1].1).abs() > 1e-6 {
+                panic!("edge #{i} отрезок {:?}-{:?} не по осям", w[0], w[1]);
+            }
+        }
+    }
+}
+
 #[cfg(debug_assertions)]
 pub(super) fn assert_no_crossing(shapes: &[Shape], edges: &[Edge]) {
+    assert_axis_aligned(edges);
     if let Err(e) = crossings_ok(shapes, edges) {
         panic!("layout: {e}");
     }

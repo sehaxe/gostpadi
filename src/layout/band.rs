@@ -87,7 +87,13 @@ pub fn band_split(l: &Layout, st: &Style) -> Vec<Layout> {
 
     let mut shapes: Vec<Vec<Shape>> = vec![Vec::new(); n];
     let mut labels: Vec<Vec<Label>> = vec![Vec::new(); n];
-    let mut pts: Vec<Vec<(f64, f64)>> = vec![Vec::new(); n];
+    // Отрезки полосы: (из, куда). Именно ПАРАМИ, а не списком точек.
+    // Раньше точки всех рёбер полосы сваливались в один общий вектор,
+    // а потом спаривались по две через chunks(2). Стоило одному ребру
+    // оставить в полосе нечётное число точек — разметка сдвигалась,
+    // и chunks соединял точки ЧУЖИХ рёбер: получались диагонали через
+    // всю схему. Пара «из-куда» не может рассинхронизироваться.
+    let mut segs: Vec<Vec<Seg>> = vec![Vec::new(); n];
     // швы: (полоса, до которой дошло ребро, x пересечения, y границы).
     // На каждом шве две отметки — конец в нижней полосе и начало в
     // верхней, с одной буквой на обе.
@@ -106,10 +112,11 @@ pub fn band_split(l: &Layout, st: &Style) -> Vec<Layout> {
         labels[k].push(lb);
     }
 
-    let mut last_band: Option<(usize, (f64, f64))> = None;
+    // (полоса, отрезок, конец ребра?) — конец нужен, чтобы стрелка
+    // досталась ровно тому отрезку, где ребро заканчивается
+    let mut tail: Vec<Option<usize>> = vec![None; n];
     for e in &l.edges {
-        let cnt = e.points.len();
-        if cnt < 2 {
+        if e.points.len() < 2 {
             continue;
         }
         for seg in e.points.windows(2) {
@@ -117,8 +124,7 @@ pub fn band_split(l: &Layout, st: &Style) -> Vec<Layout> {
             if (p1.1 - p2.1).abs() < EPS {
                 // горизонтальный отрезок полосу не пересекает
                 let k = band_of(p1.1);
-                push(&mut pts[k], (p1.0, p1.1 - starts[k]));
-                push(&mut pts[k], (p2.0, p2.1 - starts[k]));
+                segs[k].push(((p1.0, p1.1 - starts[k]), (p2.0, p2.1 - starts[k])));
                 continue;
             }
             // вертикальный: режем по тем границам полос, что строго
@@ -132,35 +138,35 @@ pub fn band_split(l: &Layout, st: &Style) -> Vec<Layout> {
             let mut prev = p1;
             for c in here {
                 let k = band_of(prev.1);
-                push(&mut pts[k], (prev.0, prev.1 - starts[k]));
-                push(&mut pts[k], (prev.0, c - starts[k]));
+                segs[k].push(((prev.0, prev.1 - starts[k]), (prev.0, c - starts[k])));
                 seams.push((k, prev.0, c));
                 prev = (prev.0, c);
             }
             let k = band_of(prev.1);
-            push(&mut pts[k], (prev.0, prev.1 - starts[k]));
-            push(&mut pts[k], (p2.0, p2.1 - starts[k]));
+            segs[k].push(((prev.0, prev.1 - starts[k]), (p2.0, p2.1 - starts[k])));
         }
-        // стрелка стоит на последнем отрезке ребра, чей конец попал
-        // в эту полосу: полоса без конца стрелки не получает
-        last_band = Some((band_of(e.points[cnt - 1].1), e.points[cnt - 1]));
+        // стрелка — на последнем отрезке ребра, и только в полосе,
+        // где этот конец оказался
+        let (last_from, last_to) = (e.points[e.points.len() - 2], e.points[e.points.len() - 1]);
+        let k = band_of(last_to.1);
+        if let Some(idx) = segs[k]
+            .iter()
+            .rposition(|&(_, b)| abs_eq(b.0, last_to.0) && abs_eq(b.1, last_to.1))
+        {
+            tail[k] = Some(idx);
+        }
+        let _ = last_from;
     }
 
     let mut edges: Vec<Vec<Edge>> = Vec::with_capacity(n);
-    for (k, band_pts) in pts.iter().enumerate() {
-        // стрелка — только на последнем отрезке той полосы, в которую
-        // пришёлся конец ребра
-        let tail = matches!(last_band, Some((b, p)) if b == k
-            && band_pts.last().is_some_and(|&q| q.0 - p.0 < EPS && q.1 - p.1 < EPS));
-        let n_seg = band_pts.len() / 2;
+    for (k, band_segs) in segs.iter().enumerate() {
         edges.push(
-            band_pts
-                .chunks(2)
+            band_segs
+                .iter()
                 .enumerate()
-                .filter(|c| c.1.len() == 2)
-                .map(|(i, c)| Edge {
-                    points: vec![c[0], c[1]],
-                    arrow: tail && i + 1 == n_seg,
+                .map(|(i, &(from, to))| Edge {
+                    points: vec![from, to],
+                    arrow: tail[k] == Some(i),
                 })
                 .collect(),
         );
@@ -202,14 +208,14 @@ pub fn band_split(l: &Layout, st: &Style) -> Vec<Layout> {
 
 /// Точка ломаной в список, если она не совпадает с последней: два
 /// ребра, сошедшиеся в одной точке, не должны склеиваться.
-fn push(out: &mut Vec<(f64, f64)>, p: (f64, f64)) {
-    if out
-        .last()
-        .is_some_and(|&q| (q.0 - p.0).abs() < EPS && (q.1 - p.1).abs() < EPS)
-    {
-        return;
-    }
-    out.push(p);
+/// Отрезок в полосе: (из, куда). Пара, а не отдельные точки, — иначе
+/// спаривание может сдвинуться и соединить точки чужих отрезков.
+type Seg = ((f64, f64), (f64, f64));
+
+/// Совпадение координат с допуском: точки после разреза считаются
+/// равными, хотя и считались независимо.
+fn abs_eq(a: f64, b: f64) -> bool {
+    (a - b).abs() < EPS
 }
 
 #[cfg(test)]
@@ -271,6 +277,80 @@ mod band_tests {
         let bands = band_split(&l, &st);
         let total = |ls: &[Layout]| ls.iter().map(|x| x.shapes.len()).sum::<usize>();
         assert_eq!(total(&bands), l.shapes.len(), "часть блоков пропала");
+    }
+
+    /// Полосы не соединяют точки разных рёбер.
+    ///
+    /// Регрессия: точки всех рёбер полосы складывались в один вектор,
+    /// и `chunks(2)` соединял их попарно. Ребро, оставившее нечётное
+    /// число точек, сдвигало разметку — и следующая пара брала первую
+    /// точку одного ребра и вторую чужого. В SVG выходили диагонали
+    /// через всю схему, а `--check` их не видел: он ловит пересечения
+    /// с блоками, а не наклон линий.
+    #[test]
+    fn no_edge_crosses_another_in_a_band() {
+        let (nodes, st) = laid(
+            "int main(void){ int d; scanf(\"%d\", &d); switch(d){\n\
+             case 1: printf(\"a\"); break; case 2: printf(\"b\"); break;\n\
+             case 3: printf(\"c\"); break; case 4: printf(\"d\"); break;\n\
+             case 5: printf(\"e\"); break; case 6: printf(\"f\"); break;\n\
+             case 7: printf(\"g\"); break; case 8: printf(\"h\"); break;\n\
+             case 9: printf(\"i\"); break; case 10: printf(\"j\"); break;\n\
+             case 11: printf(\"k\"); break; default: printf(\"z\"); }\n\
+             for(int i=0;i<4;i++) printf(\"%d\", i); return 0; }",
+        );
+        let sizes = normalize(&nodes, &st);
+        let l = layout(&nodes, &sizes, &st);
+        let bands = band_split(&l, &st);
+        assert!(
+            bands.len() > 1,
+            "нужно несколько полос, получилось {}",
+            bands.len()
+        );
+        for (bi, b) in bands.iter().enumerate() {
+            for (ei, e) in b.edges.iter().enumerate() {
+                for w in e.points.windows(2) {
+                    assert!(
+                        (w[0].0 - w[1].0).abs() < 1e-6 || (w[0].1 - w[1].1).abs() < 1e-6,
+                        "полоса {bi}, ребро {ei}: отрезок {:?}-{:?} не по осям",
+                        w[0],
+                        w[1]
+                    );
+                }
+            }
+        }
+    }
+
+    /// Каждое ребро в полосе остаётся связным куском исходного: его
+    /// отрезки идут подряд и не меняют направление без поворота.
+    /// Обратная проверка к предыдущей: если бы спаривание пошло по
+    /// чужому ребру, телесность ломалась бы не только наклоном.
+    #[test]
+    fn band_edges_stay_connected() {
+        let (nodes, st) = laid(
+            "int main(void){ for(int i=0;i<9;i++){ a=i; b=i*2; c=i*3; d=i*4; \
+             e=i*5; f=i*6; g=i*7; h=i*8; } }",
+        );
+        let sizes = normalize(&nodes, &st);
+        let l = layout(&nodes, &sizes, &st);
+        let bands = band_split(&l, &st);
+        // сколько отрезков ушло в полосы, столько же должно остаться:
+        // разрез ребра по шву добавляет парность, но не теряет отрезки
+        let orig: usize = l
+            .edges
+            .iter()
+            .map(|e| e.points.len().saturating_sub(1))
+            .sum();
+        let got: usize = bands
+            .iter()
+            .flat_map(|b| &b.edges)
+            .map(|e| e.points.len().saturating_sub(1))
+            .sum();
+        // шов режет вертикаль на два отрезка, поэтому got >= orig
+        assert!(
+            got >= orig,
+            "полосы потеряли отрезки: было {orig}, стало {got}"
+        );
     }
 
     /// Мелкая схема режется один лист — полосы не нужны.

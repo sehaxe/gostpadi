@@ -263,12 +263,18 @@ fn lay_out_shared(schemes: Vec<(String, Vec<Node>)>, st: &Style) -> Vec<(String,
 /// нет — схема идёт в натуральную величину, и у всех файлов пачки
 /// размер совпадает.
 pub fn render_tight_batch(schemes: Vec<(String, Vec<Node>)>, st: &Style) -> Vec<(String, String)> {
-    lay_out_shared(schemes, st)
+    // Порезка тут не нужна: страниц нет, схема одна. Раньше всё равно
+    // шла через порезку и склейку частей — напрасно: склейка сдвигала
+    // части по вертикали, и линии на стыках частей расходились.
+    let st = Style {
+        no_split: true,
+        ..st.clone()
+    };
+    lay_out_shared(schemes, &st)
         .into_iter()
         .map(|(path, parts)| {
-            // порезка тут не нужна: страниц нет, схема одна
             let joined = join_parts(&parts);
-            (path, render_svg_tight(&joined, st))
+            (path, render_svg_tight(&joined, &st))
         })
         .collect()
 }
