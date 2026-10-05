@@ -85,7 +85,7 @@ pub fn render_svg_tight(l: &Layout, st: &Style) -> String {
     put(&mut out, w);
     out.push(' ');
     put(&mut out, h);
-    out.push_str("\">\n");
+    out.push_str("\" shape-rendering=\"crispEdges\">\n");
     out.push_str(&body);
     out.push_str("</svg>\n");
     out
@@ -129,7 +129,7 @@ pub fn render_svg_at(l: &Layout, st: &Style, s: f64) -> String {
     put(&mut out, sheet.w);
     out.push(' ');
     put(&mut out, sheet.h);
-    out.push_str("\">\n<rect x=\"0\" y=\"0\" width=\"");
+    out.push_str("\" shape-rendering=\"crispEdges\">\n<rect x=\"0\" y=\"0\" width=\"");
     put(&mut out, sheet.w);
     out.push_str("\" height=\"");
     put(&mut out, sheet.h);

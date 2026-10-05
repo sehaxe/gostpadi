@@ -89,6 +89,31 @@ fn markers_all_kinds() {
     assert!(!svg.contains("bold"));
 }
 
+/// Линии одной толщины. Координаты стоят на модуле 5 мм (14.1732 pt),
+/// поэтому при выводе на экран горизонталь попадает то на пиксель, то на
+/// его середину: серединная размазывается на две строки по половине
+/// плотности и рядом с соседями читается как более тонкая. Корень просит
+/// «резкие» края; дуги и усики стрелок остаются со сглаживанием — у них
+/// нет прямых участков вдоль пиксельной сетки.
+#[test]
+fn crisp_edges_keep_curves_smooth() {
+    let l = all_kinds();
+    let st = Style::default();
+    for (name, svg) in [
+        ("лист", render_svg(&l, &st)),
+        ("по содержимому", super::svg::render_svg_tight(&l, &st)),
+    ] {
+        assert!(
+            svg.contains("shape-rendering=\"crispEdges\""),
+            "{name}: корень без crispEdges"
+        );
+        let circles = svg.matches("<circle").count();
+        let auto = svg.matches("shape-rendering=\"auto\"").count();
+        assert!(circles > 0, "{name}: в наборе нет кружка");
+        assert!(auto >= circles, "{name}: дуги без сглаживания ({auto})");
+    }
+}
+
 /// Белая подложка сразу после <svg>: в тёмных просмотрщиках чёрные
 /// линии на прозрачном фоне не видны.
 #[test]
