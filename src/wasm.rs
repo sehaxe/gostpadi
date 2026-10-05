@@ -174,7 +174,10 @@ pub extern "C" fn gostpadi_render_batch(
         _ => return std::ptr::null_mut(),
     };
     let opts = site_options(ru != 0, lw, font);
-    let rendered = pipeline::render_batch(pipeline::parse_batch(&inputs, &opts), &opts.style()).0;
+    // все функции файла, а не только main: по схеме на функцию, имя
+    // после `#` разбирает сайт
+    let rendered =
+        pipeline::render_batch(pipeline::parse_functions(&inputs, &opts), &opts.style()).0;
     pack_json(&rendered, &inputs, out_len)
 }
 
@@ -208,7 +211,7 @@ pub extern "C" fn gostpadi_export_batch(
     };
     let opts = site_options(ru != 0, lw, font);
     let st = opts.style();
-    let nodes = pipeline::parse_batch(&inputs, &opts);
+    let nodes = pipeline::parse_functions(&inputs, &opts);
     let produced: Vec<(String, Vec<String>)> = if mode == 2 {
         pipeline::render_drawio_batch(nodes, &st)
             .into_iter()

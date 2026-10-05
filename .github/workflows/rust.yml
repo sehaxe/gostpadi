@@ -21,6 +21,17 @@ jobs:
       - run: cargo build --release
       # сайт: docs/gostpadi.wasm — движок для страницы. На main CI сам
       # пересобирает и коммитит его, если исходники ушли вперёд.
+      # wasm-opt -Oz: opt-level=z уже ужимает, но -Oz вырезает ещё и
+      # мёртвые сегменты данных. Главная грузит движок сразу, поэтому
+      # каждый килобайт заметен.
+      - name: Ужать движок wasm-opt
+        uses: webassemblyjs/action-wasm-opt@v1.4
+        with:
+          path: ./target/wasm32-unknown-unknown/release/gostpadi.wasm
+          version: latest
+          flags: -Oz
+          skipTests: true
+
       - name: Свежий gostpadi.wasm для сайта
         run: |
           CARGO_PROFILE_RELEASE_OPT_LEVEL=z cargo build --release \
