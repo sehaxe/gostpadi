@@ -3,7 +3,8 @@
 
 use super::*;
 use crate::layout::{
-    crossings_ok, layout, measure, normalize, overlaps_ok, single_entry_ok, split_scheme,
+    crossings_ok, dangling_ok, layout, measure, normalize, overlaps_ok, single_entry_ok,
+    split_scheme,
 };
 
 #[test]
@@ -1443,4 +1444,31 @@ printf(\"далее\");
         "T-стык на выходе loop_end, не ниже: {yj} vs {merge_y}"
     );
     assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
+}
+
+/// Обрывы линий — одной проверкой: конец ребра либо касается фигуры,
+/// либо лежит на другом ребре (T-стык). Ловит три разные по причине,
+/// но одинаковые по виду обрыва: коридор каскада, свисавший над первой
+/// ветвью и под последней горизонталью; спуск верхней колонки,
+/// кончавшийся в пустоте над блоком нижней; конец на границе листа,
+/// оставшийся без кружка-соединителя.
+#[test]
+fn no_dangling_line_ends() {
+    let st = Style::default();
+    for text in [
+        "int a, b;\nif (scanf(\"%d %d\", &a, &b) != 2) { printf(\"bad\"); }\nelse if (a == b) { printf(\"eq\"); }\nelse { printf(\"lt\"); }\n",
+        "int a;\nif (a < 0) { printf(\"neg\"); }\nelse if (a == 0) { printf(\"zero\"); }\nelse if (a > 0) { printf(\"pos\"); }\nelse { printf(\"?\"); }\n",
+        "int a;\nif (a < 0) { printf(\"n\"); }\nelse if (a == 0) { printf(\"z\"); }\n",
+        "int i;\nfor (i = 0; i < 3; i++) { if (i == 1) { printf(\"y\"); } else { printf(\"n\"); } }\n",
+        "int k;\nswitch (k) {\ncase 1: printf(\"a\"); break;\ncase 2: printf(\"b\"); break;\ndefault: printf(\"c\");\n}\n",
+    ] {
+        let nodes = nodes(text);
+        let sizes = normalize(&nodes, &st);
+        let l = layout(&nodes, &sizes, &st);
+        assert_eq!(dangling_ok(&l), Ok(()), "цельная схема: {text}");
+        for part in split_scheme(nodes, &sizes, &st) {
+            let p = layout(&part, &sizes, &st);
+            assert_eq!(dangling_ok(&p), Ok(()), "лист после разреза: {text}");
+        }
+    }
 }

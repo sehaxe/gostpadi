@@ -267,7 +267,13 @@ impl Ctx<'_> {
             super::geometry::up(clear, self.st.grid),
             &empty,
         );
-        if n_merge == 0 && empty.is_empty() && !has_axis {
+        // Вершина ромба, на которую пришла рельса пустой ветки, обязана
+        // уходить вниз в то же место, откуда продолжается ствол. Раньше
+        // рельса садилась на вершину, а ствол начинался на merge_y —
+        // между ними зазор: 2g при мёртвой колонке (examples/switch_case)
+        // и вплоть до самой шины, когда колонка живая. Колонка на оси
+        // ведёт вершину вниз сама, ей стык не нужен.
+        if !has_axis && (!empty.is_empty() || n_merge == 0) {
             self.edge(&[vb, (0.0, merge_y)], false);
         }
         let cursor = merge_y.max(col_bottom).max(link_bottom);
@@ -522,7 +528,10 @@ impl Ctx<'_> {
         // ветки каскада — не кейс-колонки: break в них не растворяется
         let saved_direct = self.case_direct;
         self.case_direct = false;
-        let mut span: Vec<(f64, f64)> = Vec::new(); // (sgn, верх вертикали коридора)
+        // Точки крепления коридора по сторонам: сюда попадает и выход
+        // из боковой вершины ромба, и вход в колонку — коридор
+        // рисуется ровно между крайними из них.
+        let mut att: [Vec<f64>; 2] = [Vec::new(), Vec::new()];
         let mut tops: Vec<f64> = Vec::with_capacity(n_cols);
         let mut side_bottom = [f64::NEG_INFINITY, f64::NEG_INFINITY];
         // ветка ci — это links[ci] для «да»-звеньев и хвост для последнего
@@ -547,7 +556,8 @@ impl Ctx<'_> {
                 &[(sgn * x_v, top), (cx0, top)],
                 !(rail_only(&ybr.stmts) && self.loop_depth + self.switch_depth > 0),
             );
-            span.push((sgn, top.min(cy)));
+            att[side].push(cy);
+            att[side].push(top);
             self.labels.push(Label {
                 x: sgn * (dw / 2.0 + self.st.label_exit_dx),
                 y: cy - self.st.label_dy,
@@ -559,22 +569,21 @@ impl Ctx<'_> {
             tops.push(top);
             exits.push((cx0, yend, end, ybr.to_end, ybr.link, sgn < 0.0));
         }
-        // коридор стороны — один вертикальный участок, от самой
-        // верхней ветви до самой нижней колонки
+        // коридор стороны — один вертикальный участок ровно между
+        // крайними горизонталями, что к нему крепятся: сверху от
+        // самой верхней ветви, снизу до входа в самую нижнюю колонку.
+        // Раньше верх брался от верхней вершины первого ромба, а низ —
+        // от низа колонки, и линия свисала в пустоту с обеих сторон:
+        // концы висели над схемой без крепления.
         for (side_idx, sgn) in [-1.0f64, 1.0f64].into_iter().enumerate() {
-            let tops: Vec<f64> = span
-                .iter()
-                .filter(|e| (e.0 < 0.0) == (side_idx == 0))
-                .map(|&(_, t)| t)
-                .collect();
-            let cy_lo = (cy0 - dh / 2.0).min(tops.iter().copied().fold(f64::MAX, f64::min));
-            let deep = if side_bottom[side_idx].is_finite() {
-                side_bottom[side_idx]
-            } else {
-                cy_lo
-            };
-            if deep > cy_lo {
-                self.edge(&[(sgn * x_v, cy_lo), (sgn * x_v, deep)], false);
+            let a = &att[side_idx];
+            if a.is_empty() {
+                continue;
+            }
+            let cy_lo = a.iter().copied().fold(f64::MAX, f64::min);
+            let cy_hi = a.iter().copied().fold(f64::MIN, f64::max);
+            if cy_hi - cy_lo > 1e-9 {
+                self.edge(&[(sgn * x_v, cy_lo), (sgn * x_v, cy_hi)], false);
             }
         }
         self.case_direct = saved_direct;
@@ -598,13 +607,25 @@ impl Ctx<'_> {
         // единая шина: спуск каждой живой колонки и ровно один
         // горизонтальный сегмент от крайней левой до крайней правой
         let mut xs: Vec<f64> = vec![axis];
-        for (ci, &(cx0, yend, end, to_end, _, _)) in exits.iter().enumerate() {
+        for (ci, &(cx0, yend, end, to_end, _, left)) in exits.iter().enumerate() {
             if end == ColEnd::Flow && !to_end {
                 let to = drop_to(ci, merge_y);
                 if to > yend {
                     self.edge(&[(cx0, yend), (cx0, to)], false);
                 }
-                xs.push(cx0);
+                if to < merge_y - 1e-6 {
+                    // Спуск упёрся в блок нижней колонки той же стороны
+                    // (колонки уложены на одну абсциссу): сплошная линия
+                    // кончилась бы в пустоту над этим блоком. В обход —
+                    // на чистую полосу снаружи колонок: nhe — полная
+                    // полутавина содержимого колонки, плюс сетка зазора.
+                    let sgn = if left { -1.0 } else { 1.0 };
+                    let lane = axis + sgn * ((cx0 - axis).abs() + self.nhe + self.st.grid);
+                    self.edge(&[(cx0, to), (lane, to), (lane, merge_y)], false);
+                    xs.push(lane);
+                } else {
+                    xs.push(cx0);
+                }
             }
         }
         // «-> конец»: рельса снаружи колонок всей схемы, кружки link

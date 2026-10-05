@@ -14,7 +14,7 @@ mod tests;
 mod types;
 mod wrap;
 
-pub use geometry::{crossings_ok, overlaps_ok, single_entry_ok};
+pub use geometry::{crossings_ok, dangling_ok, overlaps_ok, single_entry_ok};
 pub use measure::{measure, normalize, uniform_sizes};
 pub use split::split_scheme;
 pub use types::{Anchor, Edge, Label, Layout, Shape, Sizes};
