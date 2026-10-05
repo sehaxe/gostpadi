@@ -71,13 +71,20 @@ fn base_for(inp: &str, output: Option<&str>, folder: bool, batch: bool, dup: boo
 }
 
 /// Лист k: база, base-2.svg, base-3.svg...
-fn page_path(base: &Path, k: usize) -> PathBuf {
-    if k == 0 {
+/// Имя k-го листа из `total`.
+///
+/// Каталог сортируется именами, а «main.svg» стоит в нём ПОСЛЕ
+/// «main-02.svg»: точка кодом 0x2E больше дефиса 0x2D. Одно
+/// исключение ломало порядок целиком — первый лист уезжал в конец.
+/// Поэтому при нескольких листах номер у всех, с ведущим нулём, иначе
+/// «main-10.svg» встал выше «main-2.svg».
+fn page_path(base: &Path, k: usize, total: usize) -> PathBuf {
+    if total <= 1 {
         return base.to_path_buf();
     }
     let s = base.to_string_lossy();
     let stem = s.strip_suffix(".svg").unwrap_or(&s);
-    PathBuf::from(format!("{stem}-{}.svg", k + 1))
+    PathBuf::from(format!("{stem}-{:02}.svg", k + 1))
 }
 
 /// --font=N / --lw=N: число > 0, иначе usage-ошибка (exit 2).
@@ -296,7 +303,7 @@ fn main() {
     for ((_, pages), inp) in rendered.into_iter().zip(&inputs) {
         let base = base_for(inp, output.as_deref(), folder, inputs.len() > 1, dup);
         for (k, svg) in pages.iter().enumerate() {
-            let target = page_path(&base, k);
+            let target = page_path(&base, k, pages.len());
             if let Err(e) = std::fs::write(&target, svg) {
                 eprintln!("не удалось записать {}: {e}", target.display());
                 failed = true;
@@ -320,5 +327,43 @@ fn main() {
     }
     if failed {
         process::exit(1);
+    }
+}
+
+/// Порядок листов в каталоге — часть результата: файлы сортируются
+/// именами, и «main.svg» стоит в списке ПОСЛЕ «main-02.svg».
+#[cfg(test)]
+mod page_name_tests {
+    use super::*;
+
+    fn names(count: usize) -> Vec<String> {
+        (0..count)
+            .map(|k| {
+                page_path(Path::new("/tmp/main.svg"), k, count)
+                    .to_string_lossy()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn pages_sort_in_order() {
+        let mut sorted = names(12);
+        sorted.sort();
+        assert_eq!(sorted, names(12), "листы перечислены не по порядку");
+    }
+
+    /// Один лист — обычное имя: «-01» в сотнях однострочных
+    /// лабораторных файлов только шумит.
+    #[test]
+    fn single_page_keeps_original_name() {
+        assert_eq!(
+            page_path(Path::new("a/b/main.svg"), 0, 1),
+            PathBuf::from("a/b/main.svg")
+        );
+        assert_eq!(
+            page_path(Path::new("a/b/main.svg"), 0, 3).to_string_lossy(),
+            "a/b/main-01.svg"
+        );
     }
 }

@@ -198,6 +198,53 @@
     box-shadow: 0 2px 14px rgba(0,0,0,.35); overflow: hidden;
   }
   #stage .sheet svg { display: block; }
+  #stage .sheet .thumb {
+    width: 100%; height: 100%; border: 0; padding: 0;
+    background: none; cursor: zoom-in;
+  }
+
+  /* Коллаж: все листы сразу, чтобы было видно, сколько их и какой
+     где. Один клик — режим просмотра этого листа. */
+  #stage.collage {
+    position: absolute; inset: 0; transform: none !important;
+    overflow-y: auto; padding: 14px;
+    display: flex; flex-wrap: wrap; gap: 14px; align-content: flex-start;
+    justify-content: center;
+  }
+  #stage.collage .tile {
+    flex: 0 0 auto; display: flex; flex-direction: column; gap: 6px;
+    background: none; border: 0; padding: 0; cursor: zoom-in;
+  }
+  #stage.collage .tile .sheet {
+    position: relative; box-shadow: 0 2px 10px rgba(0,0,0,.3);
+  }
+  #stage.collage .tile .cap {
+    font-size: 12px; color: var(--muted); text-align: center;
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  #stage.collage .tile:hover .cap,
+  #stage.collage .tile:focus-visible .cap { color: var(--ink); }
+
+  /* Точки и стрелки — только когда лист больше одного. */
+  #pager {
+    position: absolute; left: 0; right: 0; bottom: 8px;
+    display: none; align-items: center; justify-content: center; gap: 14px;
+    pointer-events: none; z-index: 5;
+  }
+  #pager.show { display: flex; }
+  #pager button {
+    pointer-events: auto; width: 34px; height: 34px; border-radius: 50%;
+    border: 1px solid var(--paper-line); background: rgba(20,22,28,.62);
+    color: var(--ink); font-size: 18px; line-height: 1; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #pager button:disabled { opacity: .3; cursor: default; }
+  #dots { display: flex; gap: 7px; pointer-events: auto; }
+  #dots i {
+    width: 8px; height: 8px; border-radius: 50%; cursor: pointer;
+    background: rgba(255,255,255,.35); border: 0; padding: 0; display: block;
+  }
+  #dots i[aria-current="true"] { background: var(--accent); }
   #placeholder[hidden] { display: none; }
   #placeholder {
     position: absolute; inset: 0; display: flex; align-items: center;
@@ -360,15 +407,22 @@
         <button id="zoomfull" class="btn" title="на весь экран">⤢</button>
       </span>
       <span class="tools">
-        <button id="dsvg" class="btn" disabled>SVG</button>
+        <button id="dcollage" class="btn" disabled title="все листы сразу">коллаж</button>
+        <button id="dsvg" class="btn" disabled title="SVG по содержимому, в миллиметрах — для вставки в отчёт">SVG</button>
         <button id="dpng" class="btn" disabled>PNG</button>
-        <button id="dall" class="btn" disabled title="скачать SVG каждого листа">скачать всё</button>
-        <button id="copy" class="btn" disabled title="скопировать SVG листа в буфер">копировать</button>
+        <button id="ddrawio" class="btn" disabled title="файл draw.io с редактируемыми блоками">draw.io</button>
+        <button id="dall" class="btn" disabled title="скачать SVG каждого файла">скачать всё</button>
+        <button id="copy" class="btn" disabled title="скопировать SVG в буфер">копировать</button>
       </span>
     </div>
     <div id="viewport">
       <div id="stage"></div>
       <div id="placeholder">вставь код слева — схема появится здесь<br>и перерисуется сама при вводе</div>
+      <div id="pager">
+        <button id="prev" aria-label="предыдущий лист">‹</button>
+        <span id="dots" role="tablist" aria-label="листы"></span>
+        <button id="next" aria-label="следующий лист">›</button>
+      </div>
     </div>
     <div id="statusline">движок загружается…</div>
   </section>
@@ -417,6 +471,7 @@ let cur = -1;            // -1 — черновик без имени
 let badNames = new Set();
 let sheets = [];         // [{file, i, svg, w, h, name}]
 let activeSheet = 0;
+let viewing = false;     // false — коллаж всех листов, true — просмотр одного
 let zoom = null;         // null = вписать
 let pan = { x: 0, y: 0 };
 let renderTimer = null, pendingUndo = null, undoTimer = null;
@@ -500,7 +555,7 @@ function callOne(text, ru, lw) {
   return JSON.parse(r ? r.json : '{"ok":false}');
 }
 
-function callBatch(items, ru, lw) {
+function packInputs(items) {
   const enc = new TextEncoder();
   const parts = [new Uint8Array(new Uint32Array([items.length]).buffer)];
   for (const it of items) {
@@ -508,16 +563,35 @@ function callBatch(items, ru, lw) {
     parts.push(new Uint8Array(new Uint32Array([n.length]).buffer), n,
                new Uint8Array(new Uint32Array([t.length]).buffer), t);
   }
-  const all = new Uint8Array(parts.reduce((s, p) => s + p.length, 0));
-  let o = 0;
-  for (const p of parts) { all.set(p, o); o += p.length; }
-  const [ip, il] = wasmInput(all);
+  return new Uint8Array(parts.reduce((s, p) => s + p.length, 0));
+}
+
+function callBatch(items, ru, lw) {
+  const [ip, il] = wasmInput(packInputs(items));
   const lp = wasm.gostpadi_alloc(4);
   const r = readOut(wasm.gostpadi_render_batch(ip, il, ru ? 1 : 0, lw, 0, lp), lp);
   wasm.gostpadi_free(ip, il);
   wasm.gostpadi_free(lp, 4);
   if (r) wasm.gostpadi_free(r.out, r.n);
   return JSON.parse(r ? r.json : '{"ok":false}');
+}
+
+/* Экспорт другим выходом движка: 1 — SVG по содержимому в
+   миллиметрах, 2 — draw.io. Отдельный вызов, а не поле в render_batch:
+   эти файлы нужны по кнопке, а на каждый чих перерисовки в JSON они
+   бы только раздували ответ втрое. */
+function callExport(items, ru, lw, mode) {
+  if (!wasm || !wasm.gostpadi_export_batch) {
+    toast("движок без экспорта — обнови страницу");
+    return null;
+  }
+  const [ip, il] = wasmInput(packInputs(items));
+  const lp = wasm.gostpadi_alloc(4);
+  const r = readOut(wasm.gostpadi_export_batch(ip, il, ru ? 1 : 0, lw, 0, mode, lp), lp);
+  wasm.gostpadi_free(ip, il);
+  wasm.gostpadi_free(lp, 4);
+  if (r) wasm.gostpadi_free(r.out, r.n);
+  return r ? JSON.parse(r.json) : null;
 }
 
 /* ============================== рендер ============================== */
@@ -544,8 +618,8 @@ function curItems() {
    враньё, она сделана из другого кода. */
 function dropSheets() {
   sheets = [];
+  viewing = false;
   drawSheets();
-  drawTabs();
   setExport(false);
   $("errbox").classList.remove("show");
 }
@@ -555,7 +629,7 @@ function renderNow() {
   syncCur();
   const items = curItems().filter(it => it.text.trim());
   if (!items.length) {
-    sheets = []; drawSheets(); drawTabs();
+    sheets = []; viewing = false; drawSheets();
     setExport(false);
     $("errbox").classList.remove("show");
     status("пусто — вставь код или перетащи файлы");
@@ -627,12 +701,10 @@ function applyResult(res, items, ms) {
   }
   drawFileList();
   // активный лист: лист активного файла; иначе первый
-  const activeName = cur >= 0 && files[cur] ? files[cur].name : "scheme";
-  let idx = sheets.findIndex(s => s.file === activeName);
+  let idx = sheets.findIndex(s => s.file === activeName());
   if (idx < 0) idx = 0;
   activeSheet = idx;
   drawSheets();
-  drawTabs();
   setExport(sheets.length > 0);
   const errFiles = items.filter(it => badNames.has(it.name));
   showErrors(errors, items);
@@ -654,27 +726,129 @@ function plural(n, one, few, many) {
 }
 
 function svgDims(svg) {
-  const m = svg.match(/width="([\d.]+)pt" height="([\d.]+)pt"/);
+  const m = svg.match(/width="([\d.]+)(pt|mm)" height="([\d.]+)\2"/);
   if (!m) return null;
-  return { w: Math.round(+m[1] * 4 / 3), h: Math.round(+m[2] * 4 / 3) };
+  const k = m[2] === "mm" ? 96 / 25.4 : 4 / 3;
+  return { w: Math.round(+m[1] * k), h: Math.round(+m[3] * k) };
+}
+
+/* Габарит содержимого в координатах страницы — его движок кладёт в
+   data-box. Плитка коллажа обрезается по нему: лист A4 с крошечной
+   схемой посреди пустоты в коллаже выглядит пустым, и листать
+   приходится вслепую. */
+function contentBox(svg) {
+  const m = svg.match(/data-box="([-\d. ]+)"/);
+  if (!m) return null;
+  const v = m[1].trim().split(/\s+/).map(Number);
+  return v.length === 4 && v[2] > 0 && v[3] > 0 ? { x: v[0], y: v[1], w: v[2], h: v[3] } : null;
 }
 
 /* ============================== отрисовка листов ============================== */
 
-function drawTabs() {
-  const tabs = $("tabs");
-  tabs.innerHTML = "";
-  const activeName = cur >= 0 && files[cur] ? files[cur].name : "scheme";
-  const own = sheets.filter(s => s.file === activeName);
-  if (own.length <= 1) { tabs.style.display = "none"; return; }
-  tabs.style.display = "flex";
-  own.forEach(s => {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.textContent = s.i + 1;
-    b.setAttribute("aria-current", sheets[activeSheet] === s ? "true" : "false");
-    b.addEventListener("click", () => { activeSheet = sheets.indexOf(s); drawSheets(); drawTabs(); });
-    tabs.appendChild(b);
+/* Имя активного файла — ровно то, что движок вернул в `files[].name`.
+   Раньше здесь стояло "scheme" для черновика, а движок отдаёт "черновик":
+   список своих листов был пуст, и в коллаже не появлялось ничего. */
+function activeName() {
+  if (cur >= 0 && files[cur]) return files[cur].name;
+  return curItems()[0]?.stem || "scheme";
+}
+
+/* Листы активного файла: в коллаже и в просмотре показываем одни и
+   те же, иначе стрелка «дальше» уводит на лист другого файла. */
+function ownSheets() {
+  const name = activeName();
+  return sheets.filter(s => s.file === name);
+}
+
+function openSheet(idx) {
+  const own = ownSheets();
+  if (!own.length) return;
+  activeSheet = sheets.indexOf(own[Math.max(0, Math.min(idx, own.length - 1))]);
+  viewing = true;
+  zoom = null;
+  drawSheets();
+}
+
+function stepSheet(d) {
+  const own = ownSheets();
+  if (!own.length) return;
+  openSheet(own.indexOf(sheets[activeSheet]) + d);
+}
+
+/* Точки и стрелки показываем только когда лист больше одного: при
+   единственном листе они занимают место и ничего не делают. */
+function drawPager() {
+  const pager = $("pager"), dots = $("dots");
+  const own = ownSheets();
+  const multi = own.length > 1;
+  pager.classList.toggle("show", viewing && multi);
+  dots.innerHTML = "";
+  if (!viewing || !multi) { return; }
+  const at = own.indexOf(sheets[activeSheet]);
+  $("prev").disabled = at <= 0;
+  $("next").disabled = at >= own.length - 1;
+  own.forEach((s, i) => {
+    const b = document.createElement("i");
+    b.title = s.name;
+    b.setAttribute("role", "tab");
+    b.setAttribute("aria-current", i === at ? "true" : "false");
+    b.addEventListener("click", () => openSheet(i));
+    dots.appendChild(b);
+  });
+}
+
+/* Плитка одного листа: карточка фиксированного размера + подпись.
+   Размер задаёт коллаж, а не лист: превью должны быть одного
+   масштаба между собой, иначе сравнивать схемы нечем. */
+function tileFor(s, w, h, cap, crop) {
+  const tile = document.createElement("button");
+  tile.type = "button";
+  tile.className = "tile";
+  const card = document.createElement("div");
+  card.className = "sheet";
+  card.style.width = w + "px";
+  card.style.height = h + "px";
+  const holder = document.createElement("div");
+  holder.innerHTML = s.svg;
+  const svg = holder.firstElementChild;
+  svg.style.width = "100%"; svg.style.height = "100%";
+  // обрезка листа по содержимому: viewBox в координатах страницы,
+  // блок внутри листа остаётся на своём месте
+  const box = crop && contentBox(s.svg);
+  if (box) {
+    svg.setAttribute("viewBox", `${box.x} ${box.y} ${box.w} ${box.h}`);
+    svg.removeAttribute("width");
+    svg.removeAttribute("height");
+  }
+  card.appendChild(svg);
+  const label = document.createElement("div");
+  label.className = "cap";
+  label.textContent = cap;
+  tile.append(card, label);
+  tile.title = s.name + " — открыть";
+  return tile;
+}
+
+/* Коллаж: все листы файла сразу мелкими плитками. Раньше лист был
+   один, а остальные прятались за вкладками с цифрами — вкладки не
+   говорят, сколько их, и где ты сейчас. */
+function drawCollage(stage) {
+  const own = ownSheets();
+  stage.className = "collage";
+  const vh = stage.clientHeight - 60 || 320;
+  const H = Math.max(140, Math.min(360, vh));
+  const manyFiles = new Set(own.map(s => s.file)).size > 1;
+  own.forEach((s, i) => {
+    // пропорции берём у содержимого, а не у листа: иначе плитка A4
+    // с пятистрочной схемой посреди пустоты
+    const box = contentBox(s.svg);
+    const ar = box ? box.w / box.h : s.w / s.h;
+    const w = Math.max(90, Math.round(H * ar));
+    let cap = own.length > 1 ? "лист " + (i + 1) : s.name;
+    if (manyFiles) cap += " · " + s.file;
+    const tile = tileFor(s, w, H, cap, true);
+    tile.addEventListener("click", () => openSheet(i));
+    stage.appendChild(tile);
   });
 }
 
@@ -682,12 +856,24 @@ function drawSheets() {
   const stage = $("stage");
   stage.innerHTML = "";
   const ph = $("placeholder");
-  if (!sheets.length) { ph.hidden = false; return; }
+  if (!sheets.length) {
+    ph.hidden = false;
+    stage.className = "";
+    drawPager();
+    return;
+  }
   ph.hidden = true;
-  // показываем листы АКТИВНОГО файла друг под другом; чужие — по вкладкам
-  // один активный лист: остальные — по вкладкам над панелью
-  const s = sheets[Math.min(activeSheet, sheets.length - 1)] || sheets[0];
-  if (!s) { ph.hidden = false; return; }
+  const own = ownSheets();
+  if (!viewing || own.length <= 1) {
+    // один лист незачем листать: показываем его, но с коллажным
+    // оформлением, чтобы возврат по «коллаж» не прыгал в пустоту
+    if (own.length <= 1) viewing = false;
+    drawCollage(stage);
+    drawPager();
+    return;
+  }
+  stage.className = "";
+  const s = sheets[Math.min(activeSheet, sheets.length - 1)];
   const card = document.createElement("div");
   card.className = "sheet";
   card.style.width = s.w + "px";
@@ -697,10 +883,18 @@ function drawSheets() {
   const svg = holder.firstElementChild;
   svg.style.width = "100%"; svg.style.height = "100%";
   card.appendChild(svg);
-  card.addEventListener("dblclick", () => setZoom(null));
   stage.appendChild(card);
   applyZoom();
+  drawPager();
 }
+
+$("prev").addEventListener("click", () => stepSheet(-1));
+$("next").addEventListener("click", () => stepSheet(1));
+$("dcollage").addEventListener("click", () => {
+  viewing = false;
+  zoom = null;
+  drawSheets();
+});
 
 function viewportSize() {
   const v = $("viewport");
@@ -715,7 +909,9 @@ function viewportSize() {
 function fitZoom() {
   const { w, h } = viewportSize();
   if (w <= 0 || h <= 0) return null;
-  const cards = $("stage").children;
+  const stage = $("stage");
+  if (stage.classList.contains("collage")) return null;
+  const cards = stage.children;
   if (!cards.length) return null;
   let maxX = 0, maxY = 0;
   for (const c of cards) {
@@ -728,6 +924,9 @@ function fitZoom() {
 
 function applyZoom() {
   const stage = $("stage");
+  // коллаж не трансформируется: плитки и так вписаны, а трансформация
+  // увеличила бы их относительно точки отсчёта и порвала раскладку
+  if (stage.classList.contains("collage")) return;
   let z = zoom, p = pan;
   // мусорный зафиксированный масштаб (было -Infinity) возвращаем
   // к вписыванию, а не рисуем схему за краем экрана
@@ -808,7 +1007,7 @@ function curZoom() {
 /* ============================== экспорт ============================== */
 
 function setExport(on) {
-  for (const id of ["dsvg", "dpng", "dall", "copy"]) $(id).disabled = !on;
+  for (const id of ["dcollage", "dsvg", "dpng", "ddrawio", "dall", "copy"]) $(id).disabled = !on;
 }
 
 function save(url, name) {
@@ -838,18 +1037,83 @@ function downloadPng(svgText, name) {
   img.src = url;
 }
 
-$("dsvg").addEventListener("click", () => { const s = sheets[activeSheet]; if (s) saveSvg(s.svg, s.name); });
-$("dpng").addEventListener("click", () => { const s = sheets[activeSheet]; if (s) downloadPng(s.svg, s.name); });
+/* Имя файла на экспорт: то же, что у листа на экране, но без
+   номера страницы — по содержимому схема одна, не по листам. */
+function exportStem(s) {
+  return s ? s.name.replace(/-\d+$/, "") : "схема";
+}
+
+function withBusy(btn, label, fn) {
+  const was = btn.textContent;
+  btn.textContent = label;
+  btn.disabled = true;
+  try {
+    return fn();
+  } finally {
+    btn.textContent = was;
+    btn.disabled = false;
+  }
+}
+
+$("dsvg").addEventListener("click", () => withBusy($("dsvg"), "…", () => {
+  const s = sheets[activeSheet];
+  if (!s) return;
+  const r = callExport(curItems().filter(it => it.text.trim()), $("ru").checked, +$("lw").value, 1);
+  const f = r && r.ok && r.files[0];
+  if (!f) return toast("движок не отдал файл");
+  saveSvg(f.sheets[0], exportStem(s));
+}));
+$("dpng").addEventListener("click", () => withBusy($("dpng"), "…", () => {
+  const s = sheets[activeSheet];
+  if (!s) return;
+  const r = callExport(curItems().filter(it => it.text.trim()), $("ru").checked, +$("lw").value, 1);
+  const f = r && r.ok && r.files[0];
+  if (!f) return toast("движок не отдал файл");
+  downloadPng(f.sheets[0], exportStem(s));
+}));
+$("ddrawio").addEventListener("click", () => withBusy($("ddrawio"), "…", () => {
+  const s = sheets[activeSheet];
+  if (!s) return;
+  const r = callExport(curItems().filter(it => it.text.trim()), $("ru").checked, +$("lw").value, 2);
+  const f = r && r.ok && r.files[0];
+  if (!f) return toast("движок не отдал файл");
+  save(new Blob([f.sheets[0]], { type: "application/xml" }), exportStem(s) + ".drawio");
+}));
 $("dall").addEventListener("click", () => {
-  sheets.forEach((s, i) => setTimeout(() => saveSvg(s.svg, s.name), i * 350));
+  const items = curItems().filter(it => it.text.trim());
+  const r = callExport(items, $("ru").checked, +$("lw").value, 1);
+  if (!r || !r.ok) return toast("движок не отдал файлы");
+  // браузер умеет качать несколько файлов разом, но глотает пачку —
+  // поэтому по одному через таймер
+  r.files.forEach((f, i) => setTimeout(() => saveSvg(f.sheets[0], stemOf(f.name)), i * 350));
 });
 $("copy").addEventListener("click", () => {
   const s = sheets[activeSheet];
   if (!s) return;
-  navigator.clipboard.writeText(s.svg).then(() => {
+  const r = callExport(curItems().filter(it => it.text.trim()), $("ru").checked, +$("lw").value, 1);
+  const f = r && r.ok && r.files[0];
+  if (!f) return toast("движок не отдал файл");
+  navigator.clipboard.writeText(f.sheets[0]).then(() => {
     $("copy").textContent = "скопировано";
     setTimeout(() => { $("copy").textContent = "копировать"; }, 1500);
-  }).catch(() => {});
+  }).catch(() => toast("буфер недоступен"));
+});
+
+/* Имя файла без расширения: пакет отдаёт «имя.c». */
+function stemOf(name) {
+  return name.replace(/\.[^./\\]+$/, "").replace(/[^\wа-яёА-ЯЁ -]/g, "_");
+}
+
+/* Стрелки листают лист, Esc возвращает в коллаж. Работает, только
+   когда открыт просмотр: в коллаже стрелки должны двигать курсор
+   по тексту, а не перелистывать схему. */
+addEventListener("keydown", e => {
+  if (!viewing || sheets.length < 2) return;
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+  if (e.key === "ArrowLeft") { stepSheet(-1); e.preventDefault(); }
+  else if (e.key === "ArrowRight") { stepSheet(1); e.preventDefault(); }
+  else if (e.key === "Escape") { $("dcollage").click(); }
 });
 
 /* ============================== файлы ============================== */

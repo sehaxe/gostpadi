@@ -139,8 +139,70 @@ pub fn render_svg_at(l: &Layout, st: &Style, s: f64) -> String {
     put(&mut out, ty);
     out.push_str(") scale(");
     put(&mut out, s);
-    out.push_str(")\">");
+    out.push_str(")\" data-box=\"");
+    // Габарит содержимого в координатах страницы: коллаж на сайте
+    // показывает схему, а пустое поле листа. Без него плитка А4 с
+    // крошечной схемой посреди листа — это пустая страница.
+    put(&mut out, l.bounds.0 * s + tx);
+    out.push(' ');
+    put(&mut out, l.bounds.1 * s + ty);
+    out.push(' ');
+    put(&mut out, l.bounds.2 * s);
+    out.push(' ');
+    put(&mut out, l.bounds.3 * s);
+    out.push_str("\">");
     out.push_str(&body);
     out.push_str("</g>\n</svg>\n");
     out
+}
+
+/// Порезка листа по содержимому: тот же `data-box`, но в координатах
+/// страницы без обёртки масштаба — для тестов и для проверок.
+#[cfg(test)]
+mod box_tests {
+    use super::*;
+    use crate::frontend::cts::CParser;
+    use crate::layout::{layout, normalize};
+
+    fn st() -> Style {
+        Style::with_metrics(14.0, 1.0)
+    }
+
+    /// `data-box` обязан лечь внутрь листа и совпасть с габаритом
+    /// содержимого: плитка коллажа обрезает лист по нему, и ошибка
+    /// здесь — обрезанный блок на главной странице сайта.
+    #[test]
+    fn data_box_is_inside_the_sheet_and_matches_bounds() {
+        let nodes = CParser::new().parse("int main(void){ x = 1; }", "en");
+        let s = st();
+        let l = layout(&nodes, &normalize(&nodes, &s), &s);
+        let svg = render_svg_at(&l, &s, 1.0);
+        let boxv: Vec<f64> = svg
+            .split("data-box=\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .map(|v| v.parse().unwrap())
+            .collect();
+        let sheet = s.sheet;
+        assert_eq!(boxv.len(), 4, "в data-box должно быть четыре числа");
+        assert!(
+            boxv[0] >= 0.0 && boxv[1] >= 0.0,
+            "рамка уходит в поле: {boxv:?}"
+        );
+        assert!(
+            boxv[0] + boxv[2] <= sheet.w + 0.5,
+            "рамка шире листа: {boxv:?} при ширине {}",
+            sheet.w
+        );
+        assert!(
+            boxv[1] + boxv[3] <= sheet.h + 0.5,
+            "рамка выше листа: {boxv:?} при высоте {}",
+            sheet.h
+        );
+        assert!(boxv[2] > 0.0 && boxv[3] > 0.0, "пустая рамка: {boxv:?}");
+    }
 }
