@@ -16,8 +16,14 @@ const WHISKER_FRAC: f64 = 0.25;
 /// Число без хвостовых нулей прямо в буфер: 14.170 -> "14.17", 1.000 -> "1",
 /// -0.000 -> "0". Ни одной промежуточной String — только запись в `out`.
 pub(crate) fn put(out: &mut String, v: f64) {
+    put_prec(out, v, 3);
+}
+
+/// То же с заданной точностью: масштаб пишется шестью знаками — при
+/// трёх округление сдвигало бы фазу пикселей (13/19 = 0.684210...).
+pub(crate) fn put_prec(out: &mut String, v: f64, prec: usize) {
     let start = out.len();
-    let _ = write!(out, "{v:.3}");
+    let _ = write!(out, "{v:.prec$}");
     let mut end = out.len();
     while end > start + 2 && out.as_bytes()[end - 1] == b'0' {
         end -= 1;
@@ -36,6 +42,29 @@ pub(crate) fn put(out: &mut String, v: f64) {
 pub fn fit_scale(bounds: (f64, f64, f64, f64), st: &Style) -> f64 {
     let (_, _, w, h) = bounds;
     st.sheet.scale_for(w, h)
+}
+
+/// Модуль сетки в пикселях при 96 dpi: 1 pt = 4/3 px.
+fn grid_px(st: &Style) -> f64 {
+    st.grid * 4.0 / 3.0
+}
+
+/// Масштаб, при котором модуль сетки остаётся ЦЕЛЫМ числом пикселей.
+///
+/// Без этого вписывание ломает фазу: при масштабе 0.714 линия, стоящая
+/// на целом модуле, попадает то в пиксель, то между двумя, и одна и та
+/// же линия в разных местах схемы выглядит по-разному. Округляем ВНИЗ —
+/// схема остаётся вписанной; цена — до 5 % незанятого места листа.
+pub fn snap_scale(s: f64, st: &Style) -> f64 {
+    let u = grid_px(st);
+    (s * u).floor().max(1.0) / u
+}
+
+/// Ближайшая координата с фазой полпикселя (не больше `v`): попав в
+/// центр пикселя, штрих в один пиксель рисуется ровно в один пиксель.
+fn half_px(v: f64) -> f64 {
+    let q = v * 4.0 / 3.0;
+    ((q - 0.5).floor() + 0.5) * 3.0 / 4.0
 }
 
 /// Раскладка + стиль -> SVG с автоподбором масштаба.
@@ -59,6 +88,11 @@ const PT_PER_MM: f64 = 72.0 / 25.4;
 /// совпадает — вписывания, которое ломало бы единообразие, тут нет.
 pub fn render_svg_tight(l: &Layout, st: &Style) -> String {
     let (x, y, w, h) = l.bounds;
+    // Окно сдвигается на доли пикселя (содержимое остаётся на месте):
+    // координаты, кратные модулю, попадают в центр пикселя — линии
+    // выходят одной толщины и без `shape-rendering`.
+    let (ox, oy) = (half_px(x), half_px(y));
+    let (w, h) = (x + w - ox + 0.375, y + h - oy + 0.375);
     let whisker = WHISKER_FRAC * 2.0 * st.grid;
     let mut body = String::new();
     for e in &l.edges {
@@ -78,14 +112,14 @@ pub fn render_svg_tight(l: &Layout, st: &Style) -> String {
     out.push_str("mm\" height=\"");
     put(&mut out, h / PT_PER_MM);
     out.push_str("mm\" viewBox=\"");
-    put(&mut out, x);
+    put(&mut out, ox);
     out.push(' ');
-    put(&mut out, y);
+    put(&mut out, oy);
     out.push(' ');
     put(&mut out, w);
     out.push(' ');
     put(&mut out, h);
-    out.push_str("\" shape-rendering=\"crispEdges\">\n");
+    out.push_str("\">\n");
     out.push_str(&body);
     out.push_str("</svg>\n");
     out
@@ -99,11 +133,19 @@ pub fn render_svg_tight(l: &Layout, st: &Style) -> String {
 /// буферах (тело и документ) — без промежуточных строк на каждый элемент.
 pub fn render_svg_at(l: &Layout, st: &Style, s: f64) -> String {
     let sheet = st.sheet;
+    let s = snap_scale(s, st);
     // усики стрелок в локальных единицах: масштаб применит g-обёртка.
     let whisker = WHISKER_FRAC * 2.0 * st.grid;
     // лист центрирует содержимое в текстовой зоне; страница всегда
     // одного размера, а не обрезается по содержимому
     let (tx, ty) = sheet.origin(l.bounds, s);
+    // Полпиксельная фаза. Модуль сетки — 19 px, координаты линий кратны
+    // модулю, а масштаб подобран так, чтобы 19·s было целым; остаётся
+    // поставить начало координат на полпикселя — и штрих в 1 px ляжет в
+    // центр пикселя. Отсюда и отказ от `shape-rendering` crispEdges: он
+    // лечил ту же болезнь, но ценой ступенек на дугах и пропадающих
+    // линий при масштабе.
+    let (tx, ty) = (half_px(tx), half_px(ty));
 
     let mut body = String::new();
     for e in &l.edges {
@@ -129,7 +171,7 @@ pub fn render_svg_at(l: &Layout, st: &Style, s: f64) -> String {
     put(&mut out, sheet.w);
     out.push(' ');
     put(&mut out, sheet.h);
-    out.push_str("\" shape-rendering=\"crispEdges\">\n<rect x=\"0\" y=\"0\" width=\"");
+    out.push_str("\">\n<rect x=\"0\" y=\"0\" width=\"");
     put(&mut out, sheet.w);
     out.push_str("\" height=\"");
     put(&mut out, sheet.h);
@@ -138,7 +180,7 @@ pub fn render_svg_at(l: &Layout, st: &Style, s: f64) -> String {
     out.push(' ');
     put(&mut out, ty);
     out.push_str(") scale(");
-    put(&mut out, s);
+    put_prec(&mut out, s, 6);
     out.push_str(")\" data-box=\"");
     // Габарит содержимого в координатах страницы: коллаж на сайте
     // показывает схему, а пустое поле листа. Без него плитка А4 с

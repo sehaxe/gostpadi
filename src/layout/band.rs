@@ -294,7 +294,14 @@ mod band_tests {
         let sizes = normalize(&nodes, &st);
         let l = layout(&nodes, &sizes, &st);
         let bands = band_split(&l, &st, 0).0;
-        let total = |ls: &[Layout]| ls.iter().map(|x| x.shapes.len()).sum::<usize>();
+        assert!(bands.len() > 1, "схема должна резаться на полосы");
+        // кружки-соединители добавляет сама порезка: считаем только блоки
+        let total = |ls: &[Layout]| {
+            ls.iter()
+                .flat_map(|x| &x.shapes)
+                .filter(|s| s.kind != "conn")
+                .count()
+        };
         assert_eq!(total(&bands), l.shapes.len(), "часть блоков пропала");
     }
 

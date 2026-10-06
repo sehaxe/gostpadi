@@ -89,29 +89,92 @@ fn markers_all_kinds() {
     assert!(!svg.contains("bold"));
 }
 
-/// Линии одной толщины. Координаты стоят на модуле 5 мм (14.1732 pt),
-/// поэтому при выводе на экран горизонталь попадает то на пиксель, то на
-/// его середину: серединная размазывается на две строки по половине
-/// плотности и рядом с соседями читается как более тонкая. Корень просит
-/// «резкие» края; дуги и усики стрелок остаются со сглаживанием — у них
-/// нет прямых участков вдоль пиксельной сетки.
+/// Линии одной толщины — без `shape-rendering`.
+///
+/// Модуль сетки (14.25 pt = 19 px при 96 dpi) целый в пикселях, размеры
+/// фигур округляются до ЧЁТНОГО числа модулей, а рендер листа сдвигает
+/// начало координат на полпикселя. Поэтому каждая прямая ложится ровно в
+/// один пиксель: все линии выходят одинаково чёрными и одной ширины.
+/// Раньше здесь стоял `shape-rendering="crispEdges"` — он лечил ту же
+/// болезнь, но включал «лестницу» на дугах капсулы и на наклонных ромба,
+/// а при масштабе заставлял линии пропадать.
 #[test]
-fn crisp_edges_keep_curves_smooth() {
-    let l = all_kinds();
+fn straight_lines_land_on_the_pixel_grid() {
     let st = Style::default();
-    for (name, svg) in [
-        ("лист", render_svg(&l, &st)),
-        ("по содержимому", super::svg::render_svg_tight(&l, &st)),
-    ] {
-        assert!(
-            svg.contains("shape-rendering=\"crispEdges\""),
-            "{name}: корень без crispEdges"
-        );
-        let circles = svg.matches("<circle").count();
-        let auto = svg.matches("shape-rendering=\"auto\"").count();
-        assert!(circles > 0, "{name}: в наборе нет кружка");
-        assert!(auto >= circles, "{name}: дуги без сглаживания ({auto})");
+    let g = st.grid;
+    // 1 pt = 4/3 px: модуль обязан быть целым числом пикселей
+    let px = g * 4.0 / 3.0;
+    assert!(
+        (px - px.round()).abs() < 1e-9,
+        "модуль {g} pt = {px} px — не целое число пикселей"
+    );
+
+    // размеры фигур считает measure — проверяем на настоящей раскладке
+    let nodes = CParser::new().parse(
+        "int main(void){ int i; printf(\"a\"); i = 1; if (i > 0) { i = 2; } \
+         while (i < 3) { i = i + 1; } return 0; }",
+        "en",
+    );
+    let sizes = normalize(&nodes, &st);
+    let l = layout(&nodes, &sizes, &st);
+    assert!(
+        l.shapes.iter().any(|s| s.kind == "if") && l.shapes.iter().any(|s| s.kind == "loop_begin"),
+        "в схеме должны быть ромб и трапеция"
+    );
+    for sh in &l.shapes {
+        if sh.kind == "conn" {
+            continue; // кружок круглый, ему фаза не нужна
+        }
+        for v in [sh.w, sh.h] {
+            let k = v / g;
+            assert!(
+                (k - k.round()).abs() < 1e-9 && (k as i64) % 2 == 0,
+                "{}: размер {v} = {k} модулей — не чётное число",
+                sh.kind
+            );
+        }
     }
+
+    let svg = render_svg(&l, &st);
+    assert!(
+        !svg.contains("shape-rendering"),
+        "атрибут рендера больше не нужен: за чёткость отвечает геометрия"
+    );
+    // сдвиг листа — ровно полпикселя: линии, стоящие на целых модулях,
+    // попадают в центр пикселя и рисуются в один пиксель
+    let tr: Vec<f64> = svg
+        .split("translate(")
+        .nth(1)
+        .unwrap()
+        .split(')')
+        .next()
+        .unwrap()
+        .split_whitespace()
+        .map(|v| v.parse().unwrap())
+        .collect();
+    for (name, v) in [("x", tr[0]), ("y", tr[1])] {
+        let p = v * 4.0 / 3.0;
+        let frac = p - p.floor();
+        assert!(
+            (frac - 0.5).abs() < 1e-6,
+            "{name}: сдвиг {v} pt = {p} px, а нужна фаза полпикселя"
+        );
+    }
+    // и масштаб, при котором модуль остаётся целым числом пикселей
+    let scale: f64 = svg
+        .split("scale(")
+        .nth(1)
+        .unwrap()
+        .split(')')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let unit = g * scale * 4.0 / 3.0;
+    assert!(
+        (unit - unit.round()).abs() < 1e-4,
+        "модуль на листе = {unit} px — не целое число пикселей (масштаб {scale})"
+    );
 }
 
 /// Белая подложка сразу после <svg>: в тёмных просмотрщиках чёрные

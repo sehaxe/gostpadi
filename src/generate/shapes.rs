@@ -41,20 +41,16 @@ fn rect(out: &mut String, x0: f64, y0: f64, w: f64, h: f64, rx: f64) {
 
 /// Общая обводка фигуры; заливка белая — чёрные линии видны в тёмных темах.
 ///
-/// `aa` — оставить сглаживание. Всё остальное наследует `crispEdges`
-/// корневого `<svg>`: координаты стоят на модуле 5 мм (14.1732 pt), и
-/// при выводе на экран горизонталь попадает то на пиксель, то на его
-/// середину. Серединная размазывается на две строки по половине
-/// плотности и рядом с соседями читается как более тонкая линия.
-/// Кружок-соединитель — сплошная дуга, её сглаживать нужно.
-fn stroke(out: &mut String, lw: f64, aa: bool) {
+/// Никакого `shape-rendering`: все кромки фигур стоят на целых модулях
+/// сетки (размеры округляются до чётного числа модулей), а рендер
+/// сдвигает начало координат на полпикселя — штрих в 1 px ложится в
+/// центр пикселя сам. `crispEdges` давал то же на прямых, но превращал
+/// дуги капсулы и наклонные ромба в лестницу и заставлял линии
+/// пропадать при масштабе.
+fn stroke(out: &mut String, lw: f64) {
     out.push_str(" fill=\"white\" stroke=\"black\" stroke-width=\"");
     put(out, lw);
-    if aa {
-        out.push_str("\" shape-rendering=\"auto\" stroke-linejoin=\"miter\"/>");
-    } else {
-        out.push_str("\" stroke-linejoin=\"miter\"/>");
-    }
+    out.push_str("\" stroke-linejoin=\"miter\"/>");
 }
 
 /// Контур фигуры: polygon/rect/circle без заливки в атрибутах —
@@ -101,11 +97,11 @@ pub(crate) fn shape_svg(out: &mut String, sh: &Shape, lw: f64) {
             out.push_str("\" r=\"");
             put(out, sh.w / 2.0);
             out.push('"');
-            stroke(out, lw, true);
+            stroke(out, lw);
             return;
         }
         // процесс и всё неизвестное — прямоугольник
         _ => rect(out, x0, y0, sh.w, sh.h, 0.0),
     }
-    stroke(out, lw, false);
+    stroke(out, lw);
 }

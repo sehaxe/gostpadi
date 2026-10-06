@@ -29,7 +29,7 @@ impl Options {
             } else {
                 crate::sheet::Sheet::A4
             },
-            ..Style::with_metrics(self.font.unwrap_or(14.0), self.lw.unwrap_or(1.0))
+            ..Style::with_metrics(self.font.unwrap_or(14.0), self.lw.unwrap_or(0.75))
         }
     }
 }
@@ -185,10 +185,15 @@ fn lay_out(
 /// не влезает, а не потому что один диспетчер на 12 кейсов стоял рядом
 /// с тривиальным файлом.
 fn shared_scale(laid: &[(String, Vec<Layout>)], st: &Style) -> f64 {
-    laid.iter()
+    let s = laid
+        .iter()
         .flat_map(|(_, pages)| pages)
         .map(|l| fit_scale(l.bounds, st))
-        .fold(1.0_f64, f64::min)
+        .fold(1.0_f64, f64::min);
+    // Тот же масштаб, что и в рендере: модуль сетки обязан остаться
+    // целым числом пикселей, иначе линии «разной толщины» (см.
+    // generate::svg::snap_scale). Отчёт и картинка не должны расходиться.
+    crate::generate::snap_scale(s, st)
 }
 
 /// Узлы из parse_batch + стиль -> (путь, страницы SVG). Размеры фигур,

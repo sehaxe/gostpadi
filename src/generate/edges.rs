@@ -27,11 +27,7 @@ pub(crate) fn edge_svg(out: &mut String, e: &Edge, lw: f64, whisker: f64) {
         let mark = out.len();
         out.push_str("<path d=\"");
         if arrow_path(out, tip, prev, whisker) {
-            // усики — две наклонные черты: их сглаживаем, иначе «резкий»
-            // рендер превращает наконечник в лестницу
-            out.push_str(
-                "\" fill=\"none\" stroke=\"black\" shape-rendering=\"auto\" stroke-width=\"",
-            );
+            out.push_str("\" fill=\"none\" stroke=\"black\" stroke-width=\"");
             put(out, lw);
             out.push_str("\"/>");
         } else {
