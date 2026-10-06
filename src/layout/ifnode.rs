@@ -1,5 +1,5 @@
 use super::column::rail_only;
-use super::ctx::{ColEnd, Ctx};
+use super::ctx::{BreakAt, ColEnd, Ctx};
 use super::types::Label;
 use crate::ir::{Node, NodeKind, Stmt};
 
@@ -8,20 +8,6 @@ pub(super) enum Side {
     L,
     R,
     Axis,
-}
-
-/// Сколько ярусов в стороны занимает ромб с `cases` непустыми ветками.
-///
-/// Единственное место, где живёт эта формула. Раньше её повторяли
-/// трижды, и все три копии ошибались на нечётном числе веток: при
-/// нечётном `n` средняя ветка встаёт на ось, и в каждую сторону
-/// уходит (n-1)/2 колонок, то есть последний ярус (n-3)/2, а не
-/// (n-1)/2. Лишний ярус резервировал пустое место под рельсы.
-pub(super) fn max_tier(cases: usize) -> usize {
-    if cases < 2 {
-        return 0;
-    }
-    (cases - 1) / 2 - (cases % 2)
 }
 
 /// План колонок: (индекс ветки, сторона, ярус, абсцисса колонки).
@@ -73,21 +59,6 @@ pub(super) fn cascade_cols(nd: &Node) -> Option<(usize, usize)> {
     }
 }
 
-/// До какой высоты можно опустить вертикаль на абсциссе `x`, не
-/// задев фигуры ниже `from`. Бесконечность, если ничего ниже нет.
-///
-/// Колонки укладываются одна под другой, и на одной абсциссе могут
-/// оказаться две разные конструкции: хвост колонки и ромб следующей.
-/// Спуск к шине от первой ко второй пересекал ромб. Ловим здесь, а не
-/// в каждом месте: правило одно на все слияния.
-fn clear_below(ctx: &Ctx<'_>, x: f64, from: f64) -> f64 {
-    ctx.shapes
-        .iter()
-        .filter(|s| (s.cx - x).abs() <= s.w / 2.0 + 1e-6 && s.cy - s.h / 2.0 > from + 1e-6)
-        .map(|s| s.cy - s.h / 2.0)
-        .fold(f64::INFINITY, f64::min)
-}
-
 impl Ctx<'_> {
     /// Слияние колонок на одну шину: вертикальные спуски остаются по
     /// колонкам, а горизонталь на уровне my рисуется одним отрезком от
@@ -99,10 +70,7 @@ impl Ctx<'_> {
         }
         if cols.len() == 1 {
             let (x, y) = cols[0];
-            self.edge(
-                &[(x, y), (x, clear_below(self, x, y).min(my)), (target, my)],
-                false,
-            );
+            self.edge(&[(x, y), (x, my), (target, my)], false);
             return;
         }
         let (mut lo, mut hi) = (f64::MAX, f64::MIN);
@@ -111,7 +79,7 @@ impl Ctx<'_> {
             hi = hi.max(x);
         }
         for &(x, y) in cols {
-            self.edge(&[(x, y), (x, clear_below(self, x, y).min(my))], false);
+            self.edge(&[(x, y), (x, my)], false);
         }
         self.edge(&[(lo.min(target), my), (hi.max(target), my)], false);
     }
@@ -196,19 +164,12 @@ impl Ctx<'_> {
     pub(super) fn sub_if(&mut self, nd: &Node, tx: f64, top: f64) -> (f64, ColEnd) {
         let (dw, dh) = self.sizes["if"];
         let cy = top + dh / 2.0;
+        self.add("if", tx, cy, &nd.text);
+        let vl = (tx - dw / 2.0, cy);
+        let vr = (tx + dw / 2.0, cy);
         let idxs: Vec<usize> = (0..nd.branches.len())
             .filter(|&i| !nd.branches[i].stmts.is_empty())
             .collect();
-        let sub = idxs
-            .iter()
-            .map(|&i| self.extent(&nd.branches[i].stmts))
-            .fold(self.colw / 2.0, f64::max);
-        // Вложенная цепочка else-if остаётся на build_plan: увести её
-        // в decision_cascade вносило пересечение на глубине три
-        // (zad2.1 — if внутри for внутри if, ровно то, что и ловил
-        // --check). Верхнеуровневый каскад упакован в две колонки;
-        // этого хватает для верхнего уровня лабораторной работы.
-        self.add("if", tx, cy, &nd.text);
         let empty: Vec<String> = nd
             .branches
             .iter()
@@ -216,8 +177,10 @@ impl Ctx<'_> {
             .map(|b| b.label.clone())
             .collect();
         let n = idxs.len();
-        let vl = (tx - dw / 2.0, cy);
-        let vr = (tx + dw / 2.0, cy);
+        let sub = idxs
+            .iter()
+            .map(|&i| self.extent(&nd.branches[i].stmts))
+            .fold(self.colw / 2.0, f64::max);
         let pitch2 = 2.0 * sub + self.st.colgap;
         let base2 = dw / 2.0 + self.st.hgap + sub;
         let comb = nd.switch_var.is_some() && n >= 2;
@@ -230,6 +193,7 @@ impl Ctx<'_> {
         let is_switch = nd.switch_var.is_some();
         let scoped = is_switch || self.loop_depth > 0 || self.switch_depth > 0;
         let saved_direct = self.case_direct;
+        let br_mark = self.breaks.len();
         if is_switch {
             self.switch_depth += 1;
             self.case_direct = true;
@@ -274,6 +238,29 @@ impl Ctx<'_> {
             .map(|&(bi, y, _)| (plan.iter().find(|p| p.0 == bi).unwrap().3, y))
             .collect();
         self.merge_bus(&cols, tx, merge2);
+        // рельсы break из веток внутри кейсов (if внутри case): наружу
+        // за колонки switch, вниз к слиянию switch, T-стык на стволе
+        if is_switch {
+            let nested: Vec<BreakAt> = self.breaks.drain(br_mark..).collect();
+            let outer = plan
+                .iter()
+                .map(|&(.., txx)| (txx - tx).abs())
+                .fold(dw / 2.0 + 2.0 * self.st.grid, f64::max)
+                + sub
+                + self.st.grid;
+            for b in &nested {
+                let slot = self.break_slot;
+                self.break_slot += 1;
+                let sgn = if b.tx <= tx { -1.0 } else { 1.0 };
+                let rx = tx
+                    + sgn
+                        * super::geometry::up(
+                            outer + slot as f64 * 2.0 * self.st.grid,
+                            self.st.grid,
+                        );
+                self.edge(&[(b.tx, b.y), (rx, b.y), (rx, merge2), (tx, merge2)], false);
+            }
+        }
         if !empty.is_empty() {
             merge2 = merge2.max(y_b + 2.0 * self.st.grid);
             // рельса жмётся к под-ромбу: пол — вершина + 2g, дальше —
@@ -284,7 +271,23 @@ impl Ctx<'_> {
                 .map(|p| (p.3 - tx) + self.nhe + self.st.grid)
                 .fold(dw / 2.0 + 2.0 * self.st.grid, f64::max);
             let bx2 = tx + super::geometry::up(clear, self.st.grid);
-            self.empty_rails(tx, cy, merge2, bx2, &empty);
+            for (k, lbl) in empty.iter().enumerate() {
+                self.edge(
+                    &[
+                        vr,
+                        (bx2 + k as f64 * 2.0 * self.st.grid, cy),
+                        (bx2 + k as f64 * 2.0 * self.st.grid, merge2),
+                        (tx, merge2),
+                    ],
+                    false,
+                );
+                self.labels.push(Label {
+                    x: tx + dw / 2.0 + self.st.label_exit_dx,
+                    y: cy - self.st.label_dy,
+                    text: lbl.clone(),
+                    ha: "center".into(),
+                });
+            }
         }
         let all_dead = !bottoms.is_empty()
             && bottoms.iter().all(|&(_, _, e)| e == ColEnd::Return)

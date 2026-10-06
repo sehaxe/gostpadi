@@ -10,20 +10,12 @@ const IF_MIN_W_GRIDS: f64 = 11.0;
 
 /// (ширина, высота) фигуры по её тексту; порт gostpadi.py measure().
 /// Текст уже перенесён — строки разделяются \n.
-///
-/// Размер округляется вверх до ЧЁТНОГО числа модулей сетки. Чётность не
-/// косметика: кромка фигуры — это `cx ± w/2`, а половинки нечётного
-/// модуля (7.125 pt) ставят вертикальную линию между пикселями. Тогда
-/// одна и та же линия в разных местах схемы рисуется то в пиксель, то в
-/// два полупрозрачных, и глаз читает это как разную толщину. Все линии
-/// потока и так кратны модулю; чётные размеры приводят к той же фазе и
-/// кромки фигур.
 pub fn measure(st: &Style, kind: &str, text: &str) -> (f64, f64) {
     let g = st.grid;
     let ls: Vec<&str> = text.split('\n').collect();
     let tw = ls.iter().map(|l| l.chars().count()).max().unwrap_or(0) as f64 * st.char_w;
     let n = ls.len() as f64;
-    let (w, h) = match kind {
+    match kind {
         "term" | "ret" => {
             let h = (2.0 * g).max(up(n * st.pitch * TERM_LINE_FACTOR + st.term_pad_v, g));
             (up(tw + st.pad_x + st.term_pad_h, g).max(2.0 * h), h)
@@ -47,12 +39,7 @@ pub fn measure(st: &Style, kind: &str, text: &str) -> (f64, f64) {
             let h = (2.0 * g).max(up(n * st.pitch + st.pad_y - st.line_slack, g));
             (up(tw + st.pad_x + st.text_pad, g).max(2.0 * h), h)
         }
-    };
-    // кружок-соединитель не фигура потока: он круглый, ему фаза не нужна
-    if kind == "conn" {
-        return (w, h);
     }
-    (up(w, 2.0 * g), up(h, 2.0 * g))
 }
 
 pub(super) fn put(sizes: &mut Sizes, st: &Style, kind: &'static str, text: &str) {

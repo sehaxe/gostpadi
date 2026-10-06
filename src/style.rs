@@ -1,5 +1,3 @@
-use crate::sheet::Sheet;
-
 #[derive(Debug, Clone)]
 pub struct Style {
     pub font: f64,
@@ -29,20 +27,20 @@ pub struct Style {
     pub conn_r: f64,
     pub conn_step: f64,
     pub aspect: f64,
-    /// лист документации: формат, поля, вписывание. Владеет всей
-    /// геометрией страницы; порезка и рендер спрашивают его.
-    pub sheet: Sheet,
-    /// порог читаемости: ниже этого масштаба лист режется, а не
-    /// сжимается. Не коэффициент вписывания — спрашивает sheet.
+    pub a4_w: f64,
+    pub a4_h: f64,
+    pub page_pad: f64,
     pub split_scale: f64,
     /// не резать длинную схему на листы: один лист, вписывание в А4
-    /// выполняет общий масштаб пачки (sheet::scale_for)
+    /// выполняет общий масштаб пачки (fit_scale)
     pub no_split: bool,
     pub edge_lw: f64,
     pub label_dx: f64,
     pub label_dy: f64,
     pub label_exit_dx: f64,
     pub label_axis_dx: f64,
+    pub vertex_label_dy: f64,
+    pub label_gap: f64,
     pub letters: &'static str,
     pub io_words: &'static [&'static str],
 }
@@ -63,38 +61,30 @@ const TERM_PAD_V_RATE: f64 = 16.0 / 12.0; // высота капсулы све�
 const TERM_PAD_H_RATE: f64 = 22.0 / 12.0; // ширина капсулы сверх текста
 const LINE_SLACK_RATE: f64 = 4.0 / 12.0; // подрезка высоты блока
 const LABEL_DY_RATE: f64 = 1.0; // подпись над точкой: базовая линия
+const VERTEX_LABEL_DY_RATE: f64 = 11.0 / 12.0;
+const LABEL_GAP_RATE: f64 = 16.0 / 12.0;
 
 /// Модульная сетка 5 мм (b = 2a, ГОСТ 19.701-90) при font = 12 pt.
 /// Все зазоры задаются целыми долями сетки, без литералов вида 14.2.
-///
-/// 14.25 pt, а не 14.17: при 96 dpi пункт — это ровно 4/3 пикселя, и
-/// 14.25 pt = 19 px. Модуль, целый в пикселях, — единственный способ
-/// нарисовать линию ровно в один пиксель БЕЗ `shape-rendering`: все
-/// кромки фигур и все линии потока стоят на целых модулях (размеры
-/// фигур округляются до чётного числа модулей), рендер сдвигает начало
-/// координат на полпикселя — и штрих ложится в центр пикселя. Иначе
-/// горизонталь попадает то в пиксель, то между двумя: серединная
-/// размазывается на две полупрозрачные полосы и рядом с соседями
-/// читается тоньше. Цена — 0.5 % к «круглым» 5 мм, на глаз не видно.
-const GRID: f64 = 14.25;
+const GRID: f64 = 14.17;
 
 impl Style {
-    /// Шаблон DEFAULT записан для font = 14 pt, lw = 1.0; произвольные
+    /// Шаблон DEFAULT записан для font = 12 pt, lw = 1.0; произвольные
     /// значения кегля/пера — только через with_metrics, иначе
     /// производные метрики разъедутся с font.
     pub const DEFAULT: Style = Style {
-        font: 14.0,
-        char_w: 8.54,
-        pad_x: 21.0,
-        pad_y: 16.38,
-        pitch: 21.0,
+        font: 12.0,
+        char_w: 7.32,
+        pad_x: 18.0,
+        pad_y: 14.04,
+        pitch: 18.0,
         max_chars: 30,
         cond_chars: 22,
-        text_pad: 7.0,
-        cond_pad: 26.0 * (14.0 / 12.0),
-        term_pad_v: 16.0 * (14.0 / 12.0),
-        term_pad_h: 22.0 * (14.0 / 12.0),
-        line_slack: 4.0 * (14.0 / 12.0),
+        text_pad: 6.0,
+        cond_pad: 26.0,
+        term_pad_v: 16.0,
+        term_pad_h: 22.0,
+        line_slack: 4.0,
         grid: GRID,
         vgap: 3.0 * GRID,
         hgap: 2.0 * GRID,
@@ -106,20 +96,18 @@ impl Style {
         conn_r: GRID,
         conn_step: GRID,
         aspect: 1.0,
-        sheet: Sheet::A4,
+        a4_w: 468.0,
+        a4_h: 700.0,
+        page_pad: 14.0,
         split_scale: 0.70,
         no_split: false,
-        // Толщина пера: 0.75 pt — ровно один пиксель при 96 dpi (1 pt = 4/3 px).
-        // Раньше было 1 pt: штрих в 1.33 px ложился на три пикселя — тёмное
-        // ядро и две полупрозрачные каёмки. При модуле 14.25 pt (19 px) и
-        // сдвиге начала координат на полпикселя перо в 1 px попадает точно в
-        // пиксель: линия выходит чёрной и одной ширины у всех, а дуги и
-        // наклонные остаются сглаженными.
-        edge_lw: 0.75,
+        edge_lw: 1.0,
         label_dx: 14.0,
-        label_dy: 14.0,
+        label_dy: 12.0,
         label_exit_dx: 2.0 * GRID,
         label_axis_dx: 14.0,
+        vertex_label_dy: 11.0,
+        label_gap: 16.0,
         letters: "АБВГДЕЖЗИКЛМНОПРСТУФХЦЧШЭЮЯ",
         io_words: IO_WORDS,
     };
@@ -141,6 +129,8 @@ impl Style {
         s.term_pad_h = font * TERM_PAD_H_RATE;
         s.line_slack = font * LINE_SLACK_RATE;
         s.label_dy = font * LABEL_DY_RATE;
+        s.vertex_label_dy = font * VERTEX_LABEL_DY_RATE;
+        s.label_gap = font * LABEL_GAP_RATE;
         // зазоры кратны модульной сетке (см. GRID)
         s.vgap = 3.0 * s.grid;
         s.hgap = 2.0 * s.grid;
@@ -186,8 +176,8 @@ mod tests {
     #[test]
     fn default_values() {
         let s = Style::default();
-        assert!((s.font - 14.0).abs() < 1e-9);
-        assert!((s.grid - 14.25).abs() < 1e-9);
+        assert!((s.font - 12.0).abs() < 1e-9);
+        assert!((s.grid - 14.17).abs() < 1e-9);
         assert!((s.label_exit_dx - s.grid * 2.0).abs() < 0.01);
         assert_eq!(s.max_chars, 30);
         assert_eq!(s.cond_chars, 22);
@@ -235,11 +225,11 @@ mod tests {
         assert!(!s.is_io("a = printf + 1"));
         assert!(!s.is_io("myprintf"));
     }
-    /// DEFAULT — это with_metrics(14, 1): шаблон и конструктор согласованы.
+    /// DEFAULT — это with_metrics(12, 1): шаблон и конструктор согласованы.
     #[test]
-    fn default_is_with_metrics_at_14pt() {
+    fn default_is_with_metrics_at_12pt() {
         let d = Style::default();
-        let m = Style::with_metrics(14.0, 1.0);
+        let m = Style::with_metrics(12.0, 1.0);
         for (a, b) in [
             (d.char_w, m.char_w),
             (d.pitch, m.pitch),
@@ -251,6 +241,8 @@ mod tests {
             (d.term_pad_h, m.term_pad_h),
             (d.line_slack, m.line_slack),
             (d.label_dy, m.label_dy),
+            (d.vertex_label_dy, m.vertex_label_dy),
+            (d.label_gap, m.label_gap),
         ] {
             assert!((a - b).abs() < 1e-9, "{a} != {b}");
         }
@@ -264,23 +256,8 @@ mod tests {
         assert!((s.pad_x - 24.0 * 1.5).abs() < 1e-9);
         assert!((s.pad_y - 24.0 * 1.17).abs() < 1e-9);
         assert!((s.edge_lw - 2.5).abs() < 1e-9);
-        // сетка и лист — от кегля не зависят
-        assert!((s.grid - 14.25).abs() < 1e-9);
-        assert_eq!(s.sheet, crate::sheet::Sheet::A4);
-    }
-
-    /// Лист — А4 с полями ЕСКД. Раньше здесь стояли a4_w/a4_h/page_pad:
-    /// 468×700 pt не соответствовали ни формату А4, ни чему-либо ещё.
-    #[test]
-    fn sheet_is_a4_with_eskd_margins() {
-        let s = Style::default();
-        let sh = s.sheet;
-        let mm = 72.0 / 25.4;
-        assert!((sh.w / mm - 210.0).abs() < 1e-9, "лист 210 мм");
-        assert!((sh.h / mm - 297.0).abs() < 1e-9, "лист 297 мм");
-        assert!((sh.m_l / mm - 30.0).abs() < 1e-9, "левое поле 30 мм");
-        assert!((sh.m_r / mm - 10.0).abs() < 1e-9, "правое поле 10 мм");
-        assert!((sh.m_t / mm - 20.0).abs() < 1e-9, "верхнее поле 20 мм");
-        assert!((sh.m_b / mm - 20.0).abs() < 1e-9, "нижнее поле 20 мм");
+        // сетка и страница — от кегля не зависят
+        assert!((s.grid - 14.17).abs() < 1e-9);
+        assert!((s.a4_w - 468.0).abs() < 1e-9);
     }
 }

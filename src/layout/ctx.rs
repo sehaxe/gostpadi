@@ -13,14 +13,17 @@ pub(super) struct Pend {
     pub rail: f64,
 }
 
-/// continue внутри тела цикла: точка ухода на рельсу к началу итерации.
+/// break внутри тела цикла: точка ухода на левую рельсу.
 pub(super) struct BreakAt {
     pub tx: f64,
     pub y: f64,
+    /// Перед break стояла нарисованная плитка: рельса уходит из её низа,
+    /// иначе колонка без плиток и уходить неоткуда.
+    pub from_tile: bool,
 }
 
 /// Чем закончилась колонка. Flow — поток продолжается; Return — тупик
-/// (линии из него не выходят); Rail — поток ушёл рельсой continue,
+/// (линии из него не выходят); Rail — поток ушёл рельсой break/continue,
 /// слияние колонки не дорисовывается: за него отвечает scope-владелец
 /// рельсы (цикл или switch).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -50,6 +53,7 @@ pub(super) struct Ctx<'a> {
     /// render_column вызван напрямую за кейс-колонку switch-рендера
     pub case_direct: bool,
     pub break_slot: usize,
+    pub breaks: Vec<BreakAt>,
     /// continue: рельсы к выходу loop_end (следующая итерация)
     pub continues: Vec<BreakAt>,
 }
@@ -63,15 +67,12 @@ impl<'a> Ctx<'a> {
             match scan.kind {
                 NodeKind::Decision => {
                     let m = scan.branches.iter().filter(|b| !b.stmts.is_empty()).count();
-                    // формула ярусов одна — ifnode::max_tier; раньше здесь
-                    // была вторая копия, и на нечётном числе веток она
-                    // резервировала лишний ярус под рельсы
-                    max_tier = max_tier.max(super::ifnode::max_tier(m));
+                    max_tier = max_tier.max(m.saturating_sub(1) / 2);
                     match super::ifnode::cascade_cols(scan) {
                         Some((k, c)) if k >= 2 => {
                             // ярусы каскада: рельсы «-> конец» обязаны
                             // обходить его внешние колонки
-                            max_tier = max_tier.max(super::ifnode::max_tier(c));
+                            max_tier = max_tier.max(c.saturating_sub(1) / 2);
                             // колонки каскада: да-звенья и хвост; «нет»-ветка
                             // с вложенным ромбом не рендерится как колонка
                             // и nhe не раздувает
@@ -135,6 +136,7 @@ impl<'a> Ctx<'a> {
             switch_depth: 0,
             case_direct: false,
             break_slot: 0,
+            breaks: Vec::new(),
             continues: Vec::new(),
         }
     }
@@ -172,49 +174,6 @@ impl<'a> Ctx<'a> {
                 clean.push(p);
             }
         }
-        // Вертикаль не должна идти сквозь фигуру, оказавшуюся на её
-        // абсциссе ниже. Колонки укладываются одна под другой, и на
-        // одной абсциссе оказываются хвост одной конструкции и ромб
-        // следующей; спуск к шине пересекал ромб. Обрезаем здесь, а не
-        // в каждом из мест, где вертикаль рисуется: правило одно.
-        let mut fixed: Vec<(f64, f64)> = Vec::with_capacity(clean.len());
-        for (i, &p) in clean.iter().enumerate() {
-            if i > 0 {
-                let prev = clean[i - 1];
-                if (p.0 - prev.0).abs() < 1e-6 && p.1 > prev.1 + 1e-6 {
-                    let stop = self
-                        .shapes
-                        .iter()
-                        // фигура, верх которой СТРОГО выше конца
-                        // отрезка: касание границы в конечной точке
-                        // разрешено, и иначе ствол между ромбами,
-                        // кончающийся ровно у верха следующего,
-                        // обрезался бы в ноль
-                        .filter(|s| {
-                            (s.cx - p.0).abs() <= s.w / 2.0 + 1e-6
-                                && s.cy - s.h / 2.0 > prev.1 + 1e-6
-                                && s.cy - s.h / 2.0 < p.1 - 1e-6
-                        })
-                        .map(|s| s.cy - s.h / 2.0)
-                        .fold(f64::INFINITY, f64::min);
-                    if stop.is_finite() && stop > prev.1 + 1e-6 {
-                        fixed.push((p.0, stop));
-                        fixed.push(p);
-                        continue;
-                    }
-                }
-            }
-            fixed.push(p);
-        }
-        let clean: Vec<(f64, f64)> = {
-            let mut c: Vec<(f64, f64)> = Vec::with_capacity(fixed.len());
-            for p in fixed {
-                if c.last().is_none_or(|&q| q != p) {
-                    c.push(p);
-                }
-            }
-            c
-        };
         if clean.len() >= 2 {
             self.edges.push(Edge {
                 points: clean,
@@ -224,62 +183,47 @@ impl<'a> Ctx<'a> {
     }
 
     pub(super) fn finish(self) -> Layout {
-        let bounds = bounds_of(&self.edges, &self.shapes, &self.labels, self.st);
+        let mut xs = Vec::new();
+        let mut ys = Vec::new();
+        for e in &self.edges {
+            for &(x, y) in &e.points {
+                xs.push(x);
+                ys.push(y);
+            }
+        }
+        for sh in &self.shapes {
+            xs.extend([sh.cx - sh.w / 2.0, sh.cx + sh.w / 2.0]);
+            ys.extend([sh.cy - sh.h / 2.0, sh.cy + sh.h / 2.0]);
+        }
+        for l in &self.labels {
+            // оценка ширины подписи: половина глифа на символ (моноширинный)
+            let half = l.text.chars().count() as f64 * self.st.char_w / 2.0;
+            match l.ha.as_str() {
+                "right" => xs.push(l.x - half),
+                "left" => xs.push(l.x + half),
+                _ => {
+                    xs.push(l.x - half);
+                    xs.push(l.x + half);
+                }
+            }
+            ys.push(l.y);
+        }
+        let pad = self.st.page_pad;
+        let minx = xs.iter().cloned().fold(f64::MAX, f64::min);
+        let miny = ys.iter().cloned().fold(f64::MAX, f64::min);
+        let maxx = xs.iter().cloned().fold(f64::MIN, f64::max);
+        let maxy = ys.iter().cloned().fold(f64::MIN, f64::max);
         Layout {
             shapes: self.shapes,
             edges: self.edges,
             labels: self.labels,
-            bounds,
+            bounds: (
+                minx - pad,
+                miny - pad,
+                maxx - minx + 2.0 * pad,
+                maxy - miny + 2.0 * pad,
+            ),
             anchors: self.anchors,
         }
     }
-}
-
-/// Габарит раскладки: (x, y, ширина, высота), без полей листа.
-///
-/// Ширина подписи — глиф на символ (шрифт моноширинный), а якорь
-/// решает, откуда текст растёт: "left" -> текст идёт вправо на всю
-/// ширину, "right" -> влево. Раньше для них бралась половина ширины,
-/// и длинная подпись («default» у края схемы) вылезала за поля листа.
-///
-/// Вынесено отдельно, потому что тем же считаются полосы при
-/// разрезе раскладки по высоте: у каждой полосы свой габарит.
-pub(crate) fn bounds_of(
-    edges: &[super::types::Edge],
-    shapes: &[super::types::Shape],
-    labels: &[super::types::Label],
-    st: &crate::style::Style,
-) -> (f64, f64, f64, f64) {
-    let mut xs: Vec<f64> = Vec::new();
-    let mut ys: Vec<f64> = Vec::new();
-    for e in edges {
-        for &(x, y) in &e.points {
-            xs.push(x);
-            ys.push(y);
-        }
-    }
-    for sh in shapes {
-        xs.extend([sh.cx - sh.w / 2.0, sh.cx + sh.w / 2.0]);
-        ys.extend([sh.cy - sh.h / 2.0, sh.cy + sh.h / 2.0]);
-    }
-    for l in labels {
-        let w = l.text.chars().count() as f64 * st.char_w;
-        match l.ha.as_str() {
-            "right" => xs.push(l.x - w),
-            "left" => xs.push(l.x + w),
-            _ => {
-                xs.push(l.x - w / 2.0);
-                xs.push(l.x + w / 2.0);
-            }
-        }
-        ys.push(l.y);
-    }
-    if xs.is_empty() {
-        return (0.0, 0.0, 0.0, 0.0);
-    }
-    let minx = xs.iter().cloned().fold(f64::MAX, f64::min);
-    let miny = ys.iter().cloned().fold(f64::MAX, f64::min);
-    let maxx = xs.iter().cloned().fold(f64::MIN, f64::max);
-    let maxy = ys.iter().cloned().fold(f64::MIN, f64::max);
-    (minx, miny, maxx - minx, maxy - miny)
 }

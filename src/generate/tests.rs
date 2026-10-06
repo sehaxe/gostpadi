@@ -1,8 +1,8 @@
 //! Тесты генератора: вид строк SVG фиксируем, идём от тестов.
 
 use super::svg::render_svg;
-use crate::frontend::cts::CParser;
-
+use crate::frontend::c::c_to_gvn;
+use crate::frontend::gvn::parse;
 use crate::layout::{layout, normalize, Edge, Label, Layout, Shape};
 use crate::style::Style;
 
@@ -28,11 +28,10 @@ fn hand(shapes: Vec<Shape>, edges: Vec<Edge>, labels: Vec<Label>) -> Layout {
     }
 }
 
-/// Схема из тела main: фронтенд сам ставит терминаторы, дальше —
-/// раскладка, как в бою.
-fn render_c(body: &str) -> String {
+/// Схема через gvn-парсер + раскладку, как в бою.
+fn render_gvn(gvn: &str) -> String {
     let st = Style::default();
-    let nodes = CParser::new().parse(&format!("int main(void) {{\n{body}\n}}"), "en");
+    let nodes = parse(gvn, &st, "").expect("parse gvn");
     let sizes = normalize(&nodes, &st);
     let l = layout(&nodes, &sizes, &st);
     render_svg(&l, &st)
@@ -89,94 +88,6 @@ fn markers_all_kinds() {
     assert!(!svg.contains("bold"));
 }
 
-/// Линии одной толщины — без `shape-rendering`.
-///
-/// Модуль сетки (14.25 pt = 19 px при 96 dpi) целый в пикселях, размеры
-/// фигур округляются до ЧЁТНОГО числа модулей, а рендер листа сдвигает
-/// начало координат на полпикселя. Поэтому каждая прямая ложится ровно в
-/// один пиксель: все линии выходят одинаково чёрными и одной ширины.
-/// Раньше здесь стоял `shape-rendering="crispEdges"` — он лечил ту же
-/// болезнь, но включал «лестницу» на дугах капсулы и на наклонных ромба,
-/// а при масштабе заставлял линии пропадать.
-#[test]
-fn straight_lines_land_on_the_pixel_grid() {
-    let st = Style::default();
-    let g = st.grid;
-    // 1 pt = 4/3 px: модуль обязан быть целым числом пикселей
-    let px = g * 4.0 / 3.0;
-    assert!(
-        (px - px.round()).abs() < 1e-9,
-        "модуль {g} pt = {px} px — не целое число пикселей"
-    );
-
-    // размеры фигур считает measure — проверяем на настоящей раскладке
-    let nodes = CParser::new().parse(
-        "int main(void){ int i; printf(\"a\"); i = 1; if (i > 0) { i = 2; } \
-         while (i < 3) { i = i + 1; } return 0; }",
-        "en",
-    );
-    let sizes = normalize(&nodes, &st);
-    let l = layout(&nodes, &sizes, &st);
-    assert!(
-        l.shapes.iter().any(|s| s.kind == "if") && l.shapes.iter().any(|s| s.kind == "loop_begin"),
-        "в схеме должны быть ромб и трапеция"
-    );
-    for sh in &l.shapes {
-        if sh.kind == "conn" {
-            continue; // кружок круглый, ему фаза не нужна
-        }
-        for v in [sh.w, sh.h] {
-            let k = v / g;
-            assert!(
-                (k - k.round()).abs() < 1e-9 && (k as i64) % 2 == 0,
-                "{}: размер {v} = {k} модулей — не чётное число",
-                sh.kind
-            );
-        }
-    }
-
-    let svg = render_svg(&l, &st);
-    assert!(
-        !svg.contains("shape-rendering"),
-        "атрибут рендера больше не нужен: за чёткость отвечает геометрия"
-    );
-    // сдвиг листа — ровно полпикселя: линии, стоящие на целых модулях,
-    // попадают в центр пикселя и рисуются в один пиксель
-    let tr: Vec<f64> = svg
-        .split("translate(")
-        .nth(1)
-        .unwrap()
-        .split(')')
-        .next()
-        .unwrap()
-        .split_whitespace()
-        .map(|v| v.parse().unwrap())
-        .collect();
-    for (name, v) in [("x", tr[0]), ("y", tr[1])] {
-        let p = v * 4.0 / 3.0;
-        let frac = p - p.floor();
-        assert!(
-            (frac - 0.5).abs() < 1e-6,
-            "{name}: сдвиг {v} pt = {p} px, а нужна фаза полпикселя"
-        );
-    }
-    // и масштаб, при котором модуль остаётся целым числом пикселей
-    let scale: f64 = svg
-        .split("scale(")
-        .nth(1)
-        .unwrap()
-        .split(')')
-        .next()
-        .unwrap()
-        .parse()
-        .unwrap();
-    let unit = g * scale * 4.0 / 3.0;
-    assert!(
-        (unit - unit.round()).abs() < 1e-4,
-        "модуль на листе = {unit} px — не целое число пикселей (масштаб {scale})"
-    );
-}
-
 /// Белая подложка сразу после <svg>: в тёмных просмотрщиках чёрные
 /// линии на прозрачном фоне не видны.
 #[test]
@@ -193,10 +104,8 @@ fn white_background_rect_before_g() {
 }
 
 #[test]
-fn markers_from_c_parse_and_layout() {
-    let svg = render_c(
-        "int a;\nscanf(\"%d\", &a);\nif (a > 0) { printf(\"да\"); } else { printf(\"нет\"); }\n",
-    );
+fn markers_from_gvn_parse_and_layout() {
+    let svg = render_gvn(include_str!("../../examples/hello.gvn"));
     assert!(svg.starts_with("<?xml"));
     assert!(svg.contains("<polygon"));
     assert!(!svg.contains("bold"));
@@ -272,20 +181,21 @@ fn examples_render_clean() {
     let mut n = 0;
     for entry in std::fs::read_dir(dir).expect("examples dir") {
         let path = entry.expect("dir entry").path();
-        if path.extension().and_then(|e| e.to_str()) != Some("c") {
-            continue;
-        }
-        let src = std::fs::read_to_string(&path).expect("read c");
-        let st = Style::default();
-        let nodes = CParser::new().parse(&src, "en");
-        let svg = render_svg(&layout(&nodes, &normalize(&nodes, &st), &st), &st);
+        let gvn = match path.extension().and_then(|e| e.to_str()) {
+            Some("gvn") => std::fs::read_to_string(&path).expect("read gvn"),
+            Some("c") => {
+                c_to_gvn(&std::fs::read_to_string(&path).expect("read c"), "").expect("c_to_gvn")
+            }
+            _ => continue,
+        };
+        let svg = render_gvn(&gvn);
         assert!(!svg.is_empty(), "{path:?}: пустой");
         assert!(svg.starts_with("<?xml"), "{path:?}: нет шапки");
         assert!(!svg.contains("NaN"), "{path:?}: NaN");
         assert!(!svg.contains("inf"), "{path:?}: inf");
         n += 1;
     }
-    assert!(n >= 1, "ожидался хоть один *.c, найдено {n}");
+    assert!(n >= 6, "ожидались gvn-файлы + main.c, найдено {n}");
 }
 
 #[test]

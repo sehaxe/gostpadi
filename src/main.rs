@@ -2,6 +2,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process;
 
+use gostpadi::error::ParseError;
 use gostpadi::ir::Node;
 use gostpadi::layout::{crossings_ok, layout, normalize, overlaps_ok, single_entry_ok};
 use gostpadi::pipeline::{self, Options};
@@ -25,51 +26,49 @@ fn out(s: &str) {
 /// Версия — единственный источник истины: Cargo.toml.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-const HELP: &str = "gostpadi 2.0.0 — блок-схемы по ГОСТ 19.701 из C-кода
+/// Внимание: `\`-перенос внутри строкового литерала съедает отступы
+/// следующей строки — ветки шаблона обязаны остаться с отступом в 4
+/// пробела, иначе `--template | gostpadi - --check` не сойдётся.
+const TEMPLATE: &str = "\
+#gostpadi 1
+# One line = one block; top to bottom. Five words: input, output, if, yes/no.
+input scanf(\"%d\", &a)
+c = a * 2
+if c > 10
+    yes: printf(\"many\"); break
+    no: c = 0
+output printf(\"c = %d\", c)
+";
+
+const HELP: &str = "gostpadi 2.0.0 — блок-схемы по ГОСТ 19.701 из кода C или .gvn
 
 ИСПОЛЬЗОВАНИЕ:
-    gostpadi код.c [ещё.c ...] [-o out.svg|папка/] [флаги]
+    gostpadi схема.gvn [ещё.gvn|код.c ...] [-o out.svg|папка/] [флаги]
 
 ФЛАГИ:
     -o <путь>       выход: файл.svg (один вход) или папка/ (пачка)
     --labels=ru|en  язык надписей (по умолчанию en)
-    --font=N        кегль текста в pt (по умолчанию 14), растит всю геометрию
+    --font=N        кегль текста в pt (по умолчанию 12), растит всю геометрию
     --lw=N          толщина линий и усиков стрелок (по умолчанию 1.0)
     --no-split      не резать длинную схему на листы: один лист, в А4
                     вписывает общий масштаб пачки (для вставки в отчёт)
-    --landscape     альбомный лист А4 297x210 вместо книжного 210x297
     --check         только проверить, не рисовать
-    --trim          без листа A4: схема ровно по содержимому, размер
-                    в миллиметрах — для вставки в отчёт
-    --drawio        файл draw.io (.drawio) с редактируемыми блоками
+    --template      заготовка .gvn на stdout
     -h, --help      эта справка
     -V, --version   версия
 ";
 
-const USAGE: &str = "использование: gostpadi код.c [ещё.c ...] [-o out.svg|папка/] [--labels=ru|en] [--font=N] [--lw=N] [--no-split] [--landscape] [--check] [--trim] [--drawio] [-h] [-V]";
+const USAGE: &str = "использование: gostpadi схема.gvn [ещё.gvn|код.c ...] [-o out.svg|папка/] [--labels=ru|en] [--font=N] [--lw=N] [--no-split] [--check] [--template] [-h] [-V]";
 
 /// Базовый путь результата входа: ".../stem.svg" (суффиксы листов добавит
 /// page_path). Папкой считается -o с косой чертой или существующая папка;
 /// пачка с голым именем кладёт результат рядом с каждым входом; у
 /// одинаковых stem имя родительской папки — префикс.
-/// То же плюс имя функции: `util.c` с функциями main и fib даёт
-/// `util.svg` и `util-fib.svg`. Без суффикса функции затирали друг
-/// друга — все писали в один и тот же файл.
-fn base_for_fn(
-    inp: &str,
-    fun: Option<&str>,
-    output: Option<&str>,
-    folder: bool,
-    batch: bool,
-    dup: bool,
-) -> PathBuf {
+fn base_for(inp: &str, output: Option<&str>, folder: bool, batch: bool, dup: bool) -> PathBuf {
     let mut stem = Path::new(inp)
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default();
-    if let Some(f) = fun.filter(|f| !f.is_empty()) {
-        stem = format!("{stem}-{}", sanitize(f));
-    }
     if folder && dup {
         if let Some(parent) = Path::new(inp).parent().and_then(|p| p.file_name()) {
             stem = format!("{}-{}", parent.to_string_lossy(), stem);
@@ -83,41 +82,34 @@ fn base_for_fn(
     }
 }
 
-/// Имя функции в имени файла: только буквы, цифры, дефис и подчёркивание.
-/// Имя из исходника может быть чем угодно (`ф$1`, `..`).
-fn sanitize(name: &str) -> String {
-    let s: String = name
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '_' || c == '-' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    if s.is_empty() || s.chars().all(|c| c == '_') {
-        "_".into()
-    } else {
-        s
-    }
-}
-
 /// Лист k: база, base-2.svg, base-3.svg...
-/// Имя k-го листа из `total`.
-///
-/// Каталог сортируется именами, а «main.svg» стоит в нём ПОСЛЕ
-/// «main-02.svg»: точка кодом 0x2E больше дефиса 0x2D. Одно
-/// исключение ломало порядок целиком — первый лист уезжал в конец.
-/// Поэтому при нескольких листах номер у всех, с ведущим нулём, иначе
-/// «main-10.svg» встал выше «main-2.svg».
-fn page_path(base: &Path, k: usize, total: usize) -> PathBuf {
-    if total <= 1 {
+fn page_path(base: &Path, k: usize) -> PathBuf {
+    if k == 0 {
         return base.to_path_buf();
     }
     let s = base.to_string_lossy();
     let stem = s.strip_suffix(".svg").unwrap_or(&s);
-    PathBuf::from(format!("{stem}-{:02}.svg", k + 1))
+    PathBuf::from(format!("{stem}-{}.svg", k + 1))
+}
+
+/// «файл:строка: сообщение» — как render_file в gostpadi.py.
+fn report_parse(path: &str, e: &ParseError) {
+    let loc = match (e.line, e.col) {
+        (Some(l), Some(c)) => format!("{path}:{l}:{c}: "),
+        (Some(l), None) => format!("{path}:{l}: "),
+        (None, _) => format!("{path}: "),
+    };
+    let src = e
+        .src
+        .as_deref()
+        .map(|s| format!(" ({})", s.trim()))
+        .unwrap_or_default();
+    eprintln!("{loc}{}{src}", e.msg);
+}
+
+fn die_parse(path: &str, e: &ParseError) -> ! {
+    report_parse(path, e);
+    process::exit(1)
 }
 
 /// --font=N / --lw=N: число > 0, иначе usage-ошибка (exit 2).
@@ -143,10 +135,8 @@ fn main() {
     let mut font: Option<f64> = None;
     let mut lw: Option<f64> = None;
     let mut no_split = false;
-    let mut trim = false;
-    let mut drawio = false;
-    let mut landscape = false;
     let mut check = false;
+    let mut template = false;
 
     let mut i = 1;
     while i < argv.len() {
@@ -160,11 +150,9 @@ fn main() {
                 out(&format!("gostpadi {VERSION}\n"));
                 process::exit(0);
             }
+            "--template" => template = true,
             "--check" => check = true,
             "--no-split" => no_split = true,
-            "--trim" => trim = true,
-            "--drawio" => drawio = true,
-            "--landscape" => landscape = true,
             "-o" | "--output" => {
                 i += 1;
                 if i >= argv.len() {
@@ -197,16 +185,26 @@ fn main() {
         i += 1;
     }
 
+    if template {
+        out(TEMPLATE);
+        process::exit(0);
+    }
     if inputs.is_empty() {
         eprintln!("{USAGE}");
         process::exit(2);
     }
 
-    // читаем входы: формат только C, тип по расширению не определяется
-    let mut sources: Vec<(String, String)> = Vec::with_capacity(inputs.len());
+    // читаем входы; расширение определяет тип (.c -> C, остальное .gvn)
+    let mut sources: Vec<(String, String, bool)> = Vec::with_capacity(inputs.len());
     for inp in &inputs {
         match std::fs::read_to_string(inp) {
-            Ok(text) => sources.push((inp.clone(), text)),
+            Ok(text) => {
+                let is_c = Path::new(inp)
+                    .extension()
+                    .map(|e| e == "c")
+                    .unwrap_or(false);
+                sources.push((inp.clone(), text, is_c));
+            }
             Err(e) => {
                 eprintln!("не удалось открыть {inp}: {e}");
                 process::exit(1);
@@ -219,12 +217,14 @@ fn main() {
         font,
         lw,
         no_split,
-        landscape,
     };
     let st = opts.style();
 
     if check {
-        let schemes = pipeline::parse_batch(&sources, &opts);
+        let schemes = match pipeline::parse_batch(&sources, &opts) {
+            Ok(s) => s,
+            Err((path, e)) => die_parse(&path, &e),
+        };
         let multi = schemes.len() > 1;
         for (inp, (_, nodes)) in inputs.iter().zip(&schemes) {
             let l = layout(nodes, &normalize(nodes, &st), &st);
@@ -250,30 +250,19 @@ fn main() {
         return;
     }
 
-    // Разбора с ошибкой не бывает: битый C рисуется частично. Пустой
-    // вход (нет ни одного блока) рисуем пустым листом и предупреждаем —
-    // молча выдать схему из ничего хуже, чем сказать об этом.
-    // все функции файла, а не только main: лабораторная работа это
-    // десяток функций, и раньше они терялись целиком
-    let schemes: Vec<(String, Vec<Node>)> = pipeline::parse_functions(&sources, &opts);
-    let mut empty: Vec<&str> = Vec::new();
-    for (path, nodes) in &schemes {
-        if nodes
-            .iter()
-            .all(|n| n.branches.is_empty() && n.body.is_none())
-            && nodes.len() <= 2
-        {
-            empty.push(path);
+    // пачка: сбойный вход не останавливает остальные (порт render_many)
+    let mut schemes: Vec<(String, Vec<Node>)> = Vec::new();
+    let mut parse_failed = false;
+    for src in &sources {
+        match pipeline::parse_batch(std::slice::from_ref(src), &opts) {
+            Ok(mut s) => schemes.append(&mut s),
+            Err((path, e)) => {
+                report_parse(&path, &e);
+                parse_failed = true;
+            }
         }
     }
-    for path in &empty {
-        eprintln!("{path}: в коде нет ни одной функции с телом — рисовать нечего");
-    }
-    // Если пуст ВСЁ — схем не получилось вовсе, и «готово» в коде выхода
-    // враньё: наружу ушёл бы лист с двумя терминаторами и ничего
-    // больше. Частично пустая пачка — норма, там предупреждения
-    // достаточно и остальные файлы отрисованы.
-    if !empty.is_empty() && empty.len() == schemes.len() {
+    if schemes.is_empty() {
         process::exit(1);
     }
 
@@ -303,45 +292,14 @@ fn main() {
         .iter()
         .any(|s| stems.iter().filter(|t| *t == s).count() > 1);
 
-    let mut failed = false;
-
-    // --trim и --drawio отдают по одному файлу на вход, без листа A4:
-    // лист удобен для печати, но в отчёт его не вставишь — схема
-    // занимает часть страницы, а вокруг пустое поле. Размер задаётся
-    // в миллиметрах, вписывания нет, поэтому у всех файлов пачки
-    // физический размер совпадает.
-    if trim || drawio {
-        let produced = if drawio {
-            pipeline::render_drawio_batch(schemes, &st)
-        } else {
-            pipeline::render_tight_batch(schemes, &st)
-        };
-        let ext = if drawio { "drawio" } else { "svg" };
-        for (path, data) in produced {
-            let (inp, fun) = pipeline::scheme_parts(&path);
-            let base = base_for_fn(inp, fun, output.as_deref(), folder, inputs.len() > 1, dup)
-                .with_extension(ext);
-            if let Err(e) = std::fs::write(&base, data) {
-                eprintln!("не удалось записать {}: {e}", base.display());
-                failed = true;
-                continue;
-            }
-            out(&format!("{}\n", base.display()));
-        }
-        if failed {
-            process::exit(1);
-        }
-        return;
-    }
-
-    let (rendered, info) = pipeline::render_batch(schemes, &st);
-    for (scheme_path, pages) in rendered {
-        // схема на функцию: путь схемы несёт и вход, и имя функции,
-        // zip по inputs больше не годится — их число разошлось
-        let (inp, fun) = pipeline::scheme_parts(&scheme_path);
-        let base = base_for_fn(inp, fun, output.as_deref(), folder, inputs.len() > 1, dup);
+    let mut failed = parse_failed;
+    for ((_, pages), inp) in pipeline::render_batch(schemes, &st)
+        .into_iter()
+        .zip(&inputs)
+    {
+        let base = base_for(inp, output.as_deref(), folder, inputs.len() > 1, dup);
         for (k, svg) in pages.iter().enumerate() {
-            let target = page_path(&base, k, pages.len());
+            let target = page_path(&base, k);
             if let Err(e) = std::fs::write(&target, svg) {
                 eprintln!("не удалось записать {}: {e}", target.display());
                 failed = true;
@@ -350,58 +308,7 @@ fn main() {
             out(&format!("{}\n", target.display()));
         }
     }
-    // Молча выдать 4.7 pt текста нельзя: на листе это нечитаемо, и
-    // причина обычно одна — слишком широкий блок, который порезка
-    // не может разрезать (резать можно только между узлами).
-    if info.is_illegible() {
-        eprintln!(
-            "внимание: масштаб {:.0} %, кегль на листе {:.1} pt вместо {} pt — \
-             не вырезайте такую схему из отчёта. Для отчёта есть --trim: \
-             лист по содержимому, размер в миллиметрах, без ужатия.",
-            info.scale * 100.0,
-            info.font_on_page,
-            st.font
-        );
-    }
     if failed {
         process::exit(1);
-    }
-}
-
-/// Порядок листов в каталоге — часть результата: файлы сортируются
-/// именами, и «main.svg» стоит в списке ПОСЛЕ «main-02.svg».
-#[cfg(test)]
-mod page_name_tests {
-    use super::*;
-
-    fn names(count: usize) -> Vec<String> {
-        (0..count)
-            .map(|k| {
-                page_path(Path::new("/tmp/main.svg"), k, count)
-                    .to_string_lossy()
-                    .to_string()
-            })
-            .collect()
-    }
-
-    #[test]
-    fn pages_sort_in_order() {
-        let mut sorted = names(12);
-        sorted.sort();
-        assert_eq!(sorted, names(12), "листы перечислены не по порядку");
-    }
-
-    /// Один лист — обычное имя: «-01» в сотнях однострочных
-    /// лабораторных файлов только шумит.
-    #[test]
-    fn single_page_keeps_original_name() {
-        assert_eq!(
-            page_path(Path::new("a/b/main.svg"), 0, 1),
-            PathBuf::from("a/b/main.svg")
-        );
-        assert_eq!(
-            page_path(Path::new("a/b/main.svg"), 0, 3).to_string_lossy(),
-            "a/b/main-01.svg"
-        );
     }
 }

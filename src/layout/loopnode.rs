@@ -18,7 +18,7 @@ impl Ctx<'_> {
             self.edge(&[p, (0.0, cursor + self.st.vgap)], true);
         }
         let (merge, _) = self.sub_loop(nd, 0.0, cursor + self.st.vgap);
-        self.anchors.push(Anchor { y: merge });
+        self.anchors.push(Anchor { x: 0.0, y: merge });
         (Some((0.0, merge)), merge)
     }
 
@@ -28,47 +28,25 @@ impl Ctx<'_> {
     pub(super) fn sub_loop(&mut self, nd: &Node, tx: f64, top: f64) -> (f64, ColEnd) {
         let (lw, lh) = self.sizes["loop"];
         let cy1 = top + lh / 2.0;
-        // Цикл, разорванный по листам: на продолжении верхняя
-        // трапеция уже нарисована на прошлом листе, а при уходе тела
-        // дальше нижняя не рисуется вовсе — её заменяет кружок.
-        // Иначе на листе с разрывом цикл выглядел бы замкнутым, и
-        // читатель не видел бы, что он не кончился.
-        if !nd.cont {
-            self.add("loop_begin", tx, cy1, &nd.loop_label());
-        }
+        self.add("loop_begin", tx, cy1, &nd.loop_label());
         self.loop_depth += 1;
         let num = self.loop_depth;
         // коридор: шире половины трапеции и любого вложенного содержимого,
         // чтобы рельсы break/continue не задевали фигуры
         let chan = up(self.nhe.max(lw / 2.0) + 2.0 * self.st.grid, self.st.grid);
-        let top0 = if nd.cont {
-            top
-        } else {
-            cy1 + lh / 2.0 + self.st.vgap
-        };
+        let top0 = cy1 + lh / 2.0 + self.st.vgap;
+        let mark = self.breaks.len();
         let mark_c = self.continues.len();
         let saved_direct = self.case_direct;
         self.case_direct = false;
         let (yend, end) = match &nd.body {
-            Some(body) if !body.is_empty() => {
-                if !nd.cont {
-                    self.edge(&[(tx, cy1 + lh / 2.0), (tx, top0)], true);
-                }
+            Some(body) => {
+                self.edge(&[(tx, cy1 + lh / 2.0), (tx, top0)], true);
                 self.render_column(body, tx, top0)
             }
-            // Пустое тело (`while (getchar() != '\n');`): рисовать нечего,
-            // и стрелка «в тело» встала бы в середине прямой линии —
-            // вторая стрелка у нижней трапеции осталась бы ниже. Поток
-            // идёт из верхней трапеции прямо в нижнюю, одной стрелкой.
-            _ => (if nd.cont { top0 } else { cy1 + lh / 2.0 }, ColEnd::Flow),
+            None => (cy1 + lh / 2.0, ColEnd::Flow),
         };
         self.case_direct = saved_direct;
-        if nd.cont_out {
-            // тело продолжится на следующем листе: нижней трапеции
-            // нет, поток просто идёт в кружок-соединитель
-            self.loop_depth -= 1;
-            return (yend + self.st.vgap, ColEnd::Flow);
-        }
         // нижняя трапеция: вход сверху (из тела), штатный выход вниз
         let cy2 = yend + self.st.vgap + lh / 2.0;
         self.add("loop_end", tx, cy2, &num.to_string());
@@ -77,6 +55,41 @@ impl Ctx<'_> {
         }
         let merge = cy2 + lh / 2.0 + self.st.mgap;
         self.edge(&[(tx, cy2 + lh / 2.0), (tx, merge)], false);
+        // Рельсы break: вниз мимо loop_end, T-стык на продолжении.
+        //
+        // Колонка плитки (b.tx) уже своя ось: если она не накрыта трапецией
+        // слияния, рельса падает из центра плитки прямо на merge и вправо
+        // на ось — один изгиб. Коридор тогда не нужен, и лишней ступеньки
+        // нет. Трапеция шириной lw по центру tx, так что достаточно
+        // выйти за её половину.
+        //
+        // Плитка на месте — отъезд вниз на в-gap нужен ещё и по виду:
+        // горизонталь с высоты низа плитки сливается с её границей и
+        // читается как уход из угла, а не из центра. Колонка без плиток
+        // (только break/continue) выходит сразу влево: выходить неоткуда,
+        // и вертикаль на её оси запрещена.
+        let breaks: Vec<BreakAt> = self.breaks.drain(mark..).collect();
+        for b in &breaks {
+            let slot = self.break_slot;
+            self.break_slot += 1;
+            let clear = b.tx < tx - lw / 2.0 || b.tx > tx + lw / 2.0;
+            if b.from_tile && clear {
+                self.edge(&[(b.tx, b.y), (b.tx, merge), (tx, merge)], false);
+                continue;
+            }
+            let rx = tx - chan - slot as f64 * 2.0 * self.st.grid;
+            let mut pts = vec![(b.tx, b.y)];
+            if b.from_tile {
+                let by = b.y + self.st.vgap;
+                pts.push((b.tx, by));
+                pts.push((rx, by));
+            } else {
+                pts.push((rx, b.y));
+            }
+            pts.push((rx, merge));
+            pts.push((tx, merge));
+            self.edge(&pts, false);
+        }
         // рельсы continue: тот же коридор, T-стык на выходе loop_end —
         // следующая итерация
         let conts: Vec<BreakAt> = self.continues.drain(mark_c..).collect();

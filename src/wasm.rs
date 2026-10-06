@@ -3,12 +3,6 @@
 //! {"ok":true,"sheets":[...]} либо {"ok":false,"error":{...}}.
 //! Память: буфер выдаёт Rust, освобождение — gostpadi_free.
 
-// Экспорты C-ABI: указатели приходят из JS, каждый проверяется на null
-// перед разыменованием. Помечать их `unsafe fn` нельзя — из JS всё
-// равно зовётся как обычная функция, а контракт «null = ошибка»
-// проверяется внутри.
-#![allow(clippy::not_unsafe_ptr_arg_deref)]
-
 use crate::pipeline::{self, Options};
 
 /// Чтение u32 little-endian из буфера с проверкой границ.
@@ -26,9 +20,8 @@ fn rd_block<'a>(b: &'a [u8], off: &mut usize, len: usize) -> Option<&'a [u8]> {
 }
 
 /// Разбор пачки: u32 count, затем для каждого входа u32 name_len,
-/// имя, u32 data_len, текст. None — битый пакет. Формат только C:
-/// байт «is_c» из прошлой версии ABI больше не читается.
-fn unpack(b: &[u8]) -> Option<Vec<(String, String)>> {
+/// имя, u8 is_c, u32 data_len, текст. None — битый пакет.
+fn unpack(b: &[u8]) -> Option<Vec<(String, String, bool)>> {
     let mut off = 0usize;
     let count = rd_u32(b, &mut off)? as usize;
     if count > 4096 {
@@ -38,9 +31,10 @@ fn unpack(b: &[u8]) -> Option<Vec<(String, String)>> {
     for _ in 0..count {
         let nl = rd_u32(b, &mut off)? as usize;
         let name = String::from_utf8(rd_block(b, &mut off, nl)?.to_vec()).ok()?;
+        let is_c = *rd_block(b, &mut off, 1)?.first()? != 0;
         let dl = rd_u32(b, &mut off)? as usize;
         let text = String::from_utf8(rd_block(b, &mut off, dl)?.to_vec()).ok()?;
-        out.push((name, text));
+        out.push((name, text, is_c));
     }
     Some(out)
 }
@@ -64,58 +58,53 @@ fn json_str(out: &mut String, s: &str) {
     out.push('"');
 }
 
-/// Опции сайта в Options. Один конструктор на оба входа: раньше
-/// Options собирался дважды одинаковым телом, и новое поле опций
-/// приходилось добавлять в два места — забыть можно было молча,
-/// сборка wasm32 не проверяется нативным `cargo build`.
-fn site_options(ru: bool, lw: f64, font: f64) -> Options {
-    Options {
+/// Текст схемы -> ответ в формате JSON (листы SVG либо ошибка разбора).
+fn render_result(text: &str, is_c: bool, ru: bool, lw: f64, font: f64) -> String {
+    let opts = Options {
         labels: if ru { "ru" } else { "en" }.into(),
         font: (font > 0.0).then_some(font),
         lw: (lw > 0.0).then_some(lw),
         no_split: false,
-        landscape: false,
-    }
-}
-
-/// Текст C -> ответ в формате JSON {"ok":true,"sheets":[...]}.
-/// Ошибки разбора нет: битый код рисуется частично. Единственный
-/// «неудачный» исход — код без `main`, о нём сообщаем полем "empty".
-fn render_result(text: &str, ru: bool, lw: f64, font: f64) -> String {
-    let opts = site_options(ru, lw, font);
-    let pages = pipeline::render_text(text, &opts);
-    let mut out = String::with_capacity(pages.iter().map(|p| p.len()).sum::<usize>() + 64);
-    out.push_str("{\"ok\":true,\"sheets\":[");
-    for (i, p) in pages.iter().enumerate() {
-        if i > 0 {
-            out.push(',');
+    };
+    match pipeline::render_text(text, is_c, &opts) {
+        Ok(pages) => {
+            let mut out = String::with_capacity(pages.iter().map(|p| p.len()).sum::<usize>() + 32);
+            out.push_str("{\"ok\":true,\"sheets\":[");
+            for (i, p) in pages.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                json_str(&mut out, p);
+            }
+            out.push_str("]}");
+            out
         }
-        json_str(&mut out, p);
+        Err(e) => {
+            let mut out = String::with_capacity(128);
+            out.push_str("{\"ok\":false,\"error\":{\"msg\":");
+            json_str(&mut out, &e.msg);
+            out.push_str(",\"line\":");
+            match e.line {
+                Some(l) => out.push_str(&l.to_string()),
+                None => out.push_str("null"),
+            }
+            out.push_str(",\"col\":");
+            match e.col {
+                Some(c) => out.push_str(&c.to_string()),
+                None => out.push_str("null"),
+            }
+            out.push_str(",\"src\":");
+            match &e.src {
+                Some(s) => json_str(&mut out, s),
+                None => out.push_str("null"),
+            }
+            out.push_str("}}");
+            out
+        }
     }
-    out.push(']');
-    if pages.iter().all(|p| p.matches("<rect").count() <= 1) {
-        out.push_str(",\"empty\":true");
-    }
-    out.push('}');
-    out
 }
 
-/// Пустая ли схема: в ней только терминаторы, рисовать нечего.
-///
-/// Проверка по разобранным узлам, а не по тексту на «main»: движок
-/// рисует все функции файла, и файл без `main`, но с функцией —
-/// полноценная схема. Поиск слова `main` в тексте давал ложное
-/// предупреждение ровно на таких файлах.
-fn scheme_is_empty(nodes: &[crate::ir::Node]) -> bool {
-    nodes.len() <= 2
-        && nodes
-            .iter()
-            .all(|n| n.branches.is_empty() && n.body.is_none())
-}
-
-/// Вход: (ptr, len) в UTF-8; ru — флаги; lw/font — 0 = дефолт.
-/// is_c из прошлой ABI оставлен параметром, но игнорируется: вход
-/// теперь только C.
+/// Вход: (ptr, len) в UTF-8; is_c/ru — флаги; lw/font — 0 = дефолт.
 /// Возврат: указатель на буфер с JSON, длина записана в *out_len.
 /// Паника движка (кривой ввод недопустим по контракту парсеров) —
 /// wasm-trap: страница покажет «движок упал» и перезапустит модуль.
@@ -138,8 +127,7 @@ pub extern "C" fn gostpadi_render(
         unsafe { std::slice::from_raw_parts(ptr, len) }
     };
     let text = String::from_utf8_lossy(bytes);
-    let _ = is_c;
-    let json = render_result(&text, ru != 0, lw, font);
+    let json = render_result(&text, is_c != 0, ru != 0, lw, font);
     let boxed = json.into_bytes().into_boxed_slice();
     let p = boxed.as_ptr() as *mut u8;
     let n = boxed.len();
@@ -160,10 +148,10 @@ pub extern "C" fn gostpadi_alloc(len: usize) -> *mut u8 {
     p
 }
 
-/// Пачка файлов: единые размеры блоков и общий масштаб на все входы.
-/// Вход — упакованный unpack(); выход — JSON {"ok":true,"files":[...]}.
-/// Сбойных разборов не бывает, но вход без `main` рисуется пустым —
-/// такие перечисляются в "empty", остальные рисуются.
+/// Пачка файлов: единые размеры блоков и общий масштаб на все входы —
+/// как `gostpadi 1/*.gvn -o out/` в CLI. Вход — упакованный unpack();
+/// выход — JSON {"ok":true,"files":[{name,sheets}]}, сбойные входы
+/// перечислены в "errors", остальные рисуются.
 #[no_mangle]
 pub extern "C" fn gostpadi_render_batch(
     ptr: *const u8,
@@ -185,67 +173,26 @@ pub extern "C" fn gostpadi_render_batch(
         Some(v) if !v.is_empty() => v,
         _ => return std::ptr::null_mut(),
     };
-    let opts = site_options(ru != 0, lw, font);
-    // все функции файла, а не только main: по схеме на функцию, имя
-    // после `#` разбирает сайт
-    let schemes = pipeline::parse_functions(&inputs, &opts);
-    let empty: Vec<String> = schemes
-        .iter()
-        .filter(|(_, nodes)| scheme_is_empty(nodes))
-        .map(|(p, _)| p.clone())
-        .collect();
-    let empty: Vec<&str> = empty.iter().map(String::as_str).collect();
-    let rendered = pipeline::render_batch(schemes, &opts.style()).0;
-    pack_json(&rendered, &empty, out_len)
-}
-
-/// Тот же вход и тот же JSON, но другой выход на файл:
-/// mode 1 — SVG по содержимому, в миллиметрах (для отчёта),
-/// mode 2 — draw.io с редактируемыми блоками.
-///
-/// Отдельный вызов, а не поле в `gostpadi_render_batch`: файлы draw.io
-/// и SVG по содержимому нужны по кнопке, а не при каждой отрисовке,
-/// и в JSON на все три вида весили бы втрое.
-#[no_mangle]
-pub extern "C" fn gostpadi_export_batch(
-    ptr: *const u8,
-    len: usize,
-    ru: u8,
-    lw: f64,
-    font: f64,
-    mode: u8,
-    out_len: *mut usize,
-) -> *mut u8 {
-    if ptr.is_null() || out_len.is_null() {
-        return std::ptr::null_mut();
-    }
-    let bytes = if len == 0 {
-        &[][..]
-    } else {
-        unsafe { std::slice::from_raw_parts(ptr, len) }
+    let opts = Options {
+        labels: if ru != 0 { "ru" } else { "en" }.into(),
+        font: (font > 0.0).then_some(font),
+        lw: (lw > 0.0).then_some(lw),
+        no_split: false,
     };
-    let Some(inputs) = unpack(bytes).filter(|v| !v.is_empty()) else {
-        return std::ptr::null_mut();
-    };
-    let opts = site_options(ru != 0, lw, font);
     let st = opts.style();
-    let nodes = pipeline::parse_functions(&inputs, &opts);
-    let produced: Vec<(String, Vec<String>)> = if mode == 2 {
-        pipeline::render_drawio_batch(nodes, &st)
-            .into_iter()
-            .map(|(p, x)| (p, vec![x]))
-            .collect()
-    } else {
-        pipeline::render_tight_batch(nodes, &st)
-            .into_iter()
-            .map(|(p, x)| (p, vec![x]))
-            .collect()
-    };
-    pack_json(&produced, &[], out_len)
-}
-
-/// Отдача буфера наружу: содержимое забываем, длину пишем в out_len.
-fn pack_json(rendered: &[(String, Vec<String>)], empty: &[&str], out_len: *mut usize) -> *mut u8 {
+    // сбойные входы не останавливают остальные (порт CLI-пачки)
+    let mut ok: Vec<(String, Vec<crate::ir::Node>)> = Vec::new();
+    let mut errors: Vec<(String, crate::error::ParseError)> = Vec::new();
+    for (name, text, is_c) in &inputs {
+        match pipeline::parse_batch(
+            std::slice::from_ref(&(name.clone(), text.clone(), *is_c)),
+            &opts,
+        ) {
+            Ok(mut s) => ok.append(&mut s),
+            Err((_, e)) => errors.push((name.clone(), e)),
+        }
+    }
+    let rendered = pipeline::render_batch(ok, &st);
     let mut out = String::with_capacity(4096);
     out.push_str("{\"ok\":true,\"files\":[");
     for (i, (name, pages)) in rendered.iter().enumerate() {
@@ -263,12 +210,25 @@ fn pack_json(rendered: &[(String, Vec<String>)], empty: &[&str], out_len: *mut u
         }
         out.push_str("]}");
     }
-    out.push_str("],\"empty\":[");
-    for (i, name) in empty.iter().enumerate() {
+    out.push_str("],\"errors\":[");
+    for (i, (name, e)) in errors.iter().enumerate() {
         if i > 0 {
             out.push(',');
         }
+        out.push_str("{\"name\":");
         json_str(&mut out, name);
+        out.push_str(",\"msg\":");
+        json_str(&mut out, &e.msg);
+        out.push_str(",\"line\":");
+        out.push_str(&e.line.map_or("null".into(), |l| l.to_string()));
+        out.push_str(",\"col\":");
+        out.push_str(&e.col.map_or("null".into(), |c| c.to_string()));
+        out.push_str(",\"src\":");
+        match &e.src {
+            Some(s) => json_str(&mut out, s),
+            None => out.push_str("null"),
+        }
+        out.push('}');
     }
     out.push_str("]}");
     let boxed = out.into_bytes().into_boxed_slice();

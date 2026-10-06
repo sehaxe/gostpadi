@@ -1,6 +1,5 @@
 //! Основной проход раскладки: главная линия по оси x=0.
 
-pub mod band;
 mod column;
 mod ctx;
 mod geometry;
@@ -8,17 +7,15 @@ mod ifnode;
 mod iftop;
 mod loopnode;
 mod measure;
-pub(crate) mod split;
+mod split;
 #[cfg(test)]
 mod tests;
 mod types;
-mod wrap;
 
-pub use geometry::{crossings_ok, dangling_ok, overlaps_ok, single_entry_ok};
+pub use geometry::{crossings_ok, overlaps_ok, single_entry_ok};
 pub use measure::{measure, normalize, uniform_sizes};
 pub use split::split_scheme;
 pub use types::{Anchor, Edge, Label, Layout, Shape, Sizes};
-pub use wrap::wrap_nodes;
 
 use ctx::Ctx;
 
@@ -66,7 +63,7 @@ pub fn layout(nodes: &[Node], sizes: &Sizes, st: &Style) -> Layout {
             _ => {
                 if nd.kind == NodeKind::Conn && leads_to_end(nodes, idx) {
                     c.inbound.push(nd.text.clone());
-                    c.anchors.push(Anchor { y: cursor });
+                    c.anchors.push(Anchor { x: 0.0, y: cursor });
                     continue;
                 }
                 let pend_here = idx == last && !c.pend.is_empty();

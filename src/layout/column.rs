@@ -4,29 +4,15 @@ use super::types::Sizes;
 use crate::ir::{Branch, NodeKind, Stmt, TileKind};
 use crate::style::Style;
 
-/// Колонка, в которую нечего входить: её тело не рисует ни одного
-/// блока, поэтому стрелка в неё была бы стрелкой в пустоту.
-///
-/// Раньше сюда попадал и `break`: он уходил рельсой и сам блока не
-/// рисовал. Теперь `break` — обычный прямоугольник (ADR-0004), и вход
-/// в него со стрелкой обязателен. Единственная инструкция, после
-/// которой в колонке не остаётся ничего видимого, — `continue`.
+/// Колонка состоит только из break/continue: входить в неё со стрелкой
+/// нечего — поток уйдёт рельсой или растворится в слиянии кейса.
 pub(super) fn rail_only(items: &[Stmt]) -> bool {
-    !items.is_empty() && items.iter().all(|s| matches!(s, Stmt::Continue))
+    !items.is_empty()
+        && items
+            .iter()
+            .all(|s| matches!(s, Stmt::Break | Stmt::Continue))
 }
 
-/// Сколько ярусов вправо от оси занимает разлёт веток ромба: столько,
-/// сколько даёт шина, но только если шина вообще влезает в лист.
-///
-/// Решение по ширине листа, а не по числу кейсов, — но по **локальной**
-/// полуширине колонки ветки, а не по общей `nhe`. Общая в этом месте
-/// давала круг: `nhe` растёт от ярусов, ярусы считаются от `nhe`... и
-/// на реальной лабе (`switch` на 12 кейсов внутри `else`) `nhe`
-/// разъезжался до 1445 pt, после чего сетка кейсов раскладывалась по
-/// колонкам шириной 1563 pt и лист ужимался до 13 %.
-///
-/// Тот же предикат использует рендер (`sub_if`), поэтому габарит и
-/// реальная раскладка считаются по одним числам.
 /// Полуширина содержимого колонки вокруг её оси: плитки, вложенные
 /// ромбы с их под-колонками, вложенные циклы с каналами возврата.
 pub(super) fn extent(sizes: &Sizes, st: &Style, colw: f64, items: &[Stmt]) -> f64 {
@@ -41,21 +27,10 @@ pub(super) fn extent(sizes: &Sizes, st: &Style, colw: f64, items: &[Stmt]) -> f6
                 .map(|b| extent(sizes, st, colw, &b.stmts))
                 .fold(colw / 2.0, f64::max);
             let n = ne.len();
-            // Диспетч всегда раскладывается одной шиной: кейсы в один ряд,
-            // число ярусов — `max_tier`. Раньше здесь стоял `bus_tiers`,
-            // который при нехватке ширины возвращал 0 (кейсы уходили в
-            // сетку), и полуширина колонки занижалась вдвое — рельса
-            // continue уходила по блокам.
-            let tiers = super::ifnode::max_tier(n);
+            let tiers = n.saturating_sub(1) / 2;
             let pitch2 = 2.0 * sub + st.colgap;
             he = he
-                // + sub в конце обязателен: колонка ветки стоит на
-                // расстоянии base2 = dw2/2 + hgap + sub от оси, а её
-                // собственная полуширина — ещё sub. Без этого nhe
-                // занижался, и рельса continue уходила по блокам
-                // (ловил --check на реальной лабе: while с if/else и
-                // switch внутри).
-                .max(dw2 / 2.0 + st.hgap + sub + tiers as f64 * pitch2 + sub)
+                .max(dw2 / 2.0 + st.hgap + sub + tiers as f64 * pitch2)
                 .max(super::geometry::up(
                     dw2 / 2.0 + 2.0 * st.grid + tiers as f64 * pitch2 + sub,
                     st.grid,
@@ -112,28 +87,31 @@ impl Ctx<'_> {
                     return (top + h_r, ColEnd::Return);
                 }
                 Stmt::Break | Stmt::Continue => {
-                    // break — обычный прямоугольник процесса: он стоит
-                    // в коде, и читатель должен его видеть. Ни рельсы,
-                    // ни обрыва колонки: после break линия идёт дальше
-                    // обычным порядком (ADR-0004).
-                    //
-                    // continue — наоборот, рельса: он не выполняет
-                    // ничего, а возвращает поток к началу цикла, и
-                    // прямоугольник «continue» на схеме был бы ложью.
-                    if matches!(it, Stmt::Break) {
-                        self.draw_tile("break", TileKind::Act, tx, top, &mut prev_bottom);
-                        continue;
-                    }
+                    let is_break = matches!(it, Stmt::Break);
                     let scoped = self.loop_depth > 0 || self.switch_depth > 0;
                     if scoped {
-                        self.continues.push(BreakAt {
+                        // break напрямую в кейс-колонке switch —
+                        // растворяется: слияние кейса само доводит поток
+                        // до шины switch (в C break покидает только
+                        // switch, а не цикл вокруг)
+                        if is_break && self.switch_depth > 0 && self.case_direct {
+                            return (prev_bottom.unwrap_or(top0), ColEnd::Flow);
+                        }
+                        let exit = BreakAt {
                             tx,
                             y: prev_bottom.unwrap_or(top0),
-                        });
+                            from_tile: prev_bottom.is_some(),
+                        };
+                        if is_break {
+                            self.breaks.push(exit);
+                        } else {
+                            self.continues.push(exit);
+                        }
                         return (prev_bottom.unwrap_or(top0), ColEnd::Rail);
                     }
-                    // вне цикла и switch — обычная плитка
-                    self.draw_tile("continue", TileKind::Act, tx, top, &mut prev_bottom);
+                    // вне цикла и switch — прежняя плитка
+                    let text = if is_break { "break" } else { "continue" };
+                    self.draw_tile(text, TileKind::Act, tx, top, &mut prev_bottom);
                 }
                 Stmt::Tile { kind, text } => {
                     self.draw_tile(text, *kind, tx, top, &mut prev_bottom);
@@ -183,7 +161,10 @@ impl Ctx<'_> {
             (Some(p), None) => self.edge(&[p, (0.0, cy - h / 2.0)], true),
             _ => {}
         }
-        self.anchors.push(super::Anchor { y: cy + h / 2.0 });
+        self.anchors.push(super::Anchor {
+            x: 0.0,
+            y: cy + h / 2.0,
+        });
         ((0.0, cy + h / 2.0), cy + h / 2.0, i)
     }
 }

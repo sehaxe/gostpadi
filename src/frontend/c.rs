@@ -47,14 +47,7 @@ pub fn parse_c_to_nodes(src: &str, labels: &str) -> Result<Vec<Node>, ParseError
         labels,
     };
     let stmts = ctx.items(body)?;
-    // Терминаторы ставит фронтенд, а не раскладка: без них схема
-    // лишена «начала» и «конца», и по ГОСТ она не схема. Раньше их
-    // добавлял удалённый парсер `.gvn`.
-    let (start_txt, end_txt) = match labels {
-        "ru" => ("начало", "конец"),
-        _ => ("Start", "End"),
-    };
-    let mut nodes = vec![Node::new(NodeKind::Term, start_txt)];
+    let mut nodes = Vec::new();
     for s in stmts {
         match s {
             // верхнеуровневый return не рисуем: терминатор «конец» и так завершает схему
@@ -65,13 +58,90 @@ pub fn parse_c_to_nodes(src: &str, labels: &str) -> Result<Vec<Node>, ParseError
             Stmt::Node(n) => nodes.push(*n),
         }
     }
-    nodes.push(Node::new(NodeKind::Term, end_txt));
     Ok(nodes)
 }
 
-// (здесь был gvn-писатель: C -> узлы -> текст -> gvn::parse -> узлы.
-// Round-trip сериализации удалён вместе с форматом .gvn: узлы из
-// parse_c_to_nodes идут в layout напрямую, без потери контекста.)
+/// Код C -> текст схемы .gvn (обратная совместимость с main.rs).
+pub fn c_to_gvn(src: &str, labels: &str) -> Result<String, ParseError> {
+    let nodes = parse_c_to_nodes(src, labels)?;
+    let mut out = String::from("#gostpadi 1\n");
+    emit_nodes(&nodes, 0, &mut out);
+    Ok(out)
+}
+
+fn emit_nodes(nodes: &[Node], depth: usize, out: &mut String) {
+    for n in nodes {
+        pad(out, depth);
+        match n.kind {
+            NodeKind::Loop => {
+                // keyword добавляем обратно: парсер .gvn снимает его сам
+                out.push_str(if n.loop_kind == Some(LoopKind::While) {
+                    "while "
+                } else {
+                    "for "
+                });
+                out.push_str(&n.text);
+                out.push('\n');
+                if let Some(body) = &n.body {
+                    emit_stmts(body, depth + 1, out);
+                }
+                continue;
+            }
+            _ => {
+                if n.switch_var.is_none() && n.text.starts_with("if (") && n.text.ends_with(')') {
+                    out.push_str("if ");
+                    out.push_str(&n.text[4..n.text.len() - 1]);
+                } else {
+                    out.push_str(&n.text);
+                }
+                out.push('\n');
+            }
+        }
+        for br in &n.branches {
+            pad(out, depth + 1);
+            // switch: в IR метка уже с префиксом «svar = » — в текст .gvn
+            // пишем сырое значение, иначе gvn::parse навесит префикс дважды
+            let label = match &n.switch_var {
+                Some(sv) => br
+                    .label
+                    .strip_prefix(sv.as_str())
+                    .and_then(|r| r.strip_prefix(" = "))
+                    .unwrap_or(&br.label),
+                None => br.label.as_str(),
+            };
+            out.push_str(label.trim());
+            out.push_str(":\n");
+            emit_stmts(&br.stmts, depth + 1, out);
+        }
+    }
+}
+
+fn emit_stmts(stmts: &[Stmt], depth: usize, out: &mut String) {
+    for s in stmts {
+        match s {
+            Stmt::Tile { text, .. } | Stmt::Return(text) => {
+                pad(out, depth);
+                out.push_str(text);
+                out.push('\n');
+            }
+            Stmt::Break => {
+                pad(out, depth);
+                out.push_str("break\n");
+            }
+            Stmt::Continue => {
+                pad(out, depth);
+                out.push_str("continue\n");
+            }
+            Stmt::Node(n) => emit_nodes(std::slice::from_ref(n), depth, out),
+        }
+    }
+}
+
+fn pad(out: &mut String, depth: usize) {
+    for _ in 0..depth {
+        out.push_str("    ");
+    }
+}
 
 struct Ctx<'a> {
     /// подготовленный исходник (spans lang-c указывают в него)
@@ -149,6 +219,7 @@ impl<'a> Ctx<'a> {
                     shorten_calls(&expr_text(self.src, &w.node.expression)),
                 );
                 nd.loop_kind = Some(LoopKind::While);
+                nd.lang = self.labels.to_string();
                 nd.body = Some(self.block_stmt(&w.node.statement)?);
                 Ok(vec![Stmt::Node(Box::new(nd))])
             }
@@ -188,21 +259,12 @@ impl<'a> Ctx<'a> {
                     .unwrap_or_default();
                 let mut nd = Node::new(NodeKind::Loop, format!("{}; {}; {}", init, cond, step));
                 nd.loop_kind = Some(LoopKind::For);
+                nd.lang = self.labels.to_string();
                 nd.body = Some(self.block_stmt(&f.node.statement)?);
                 Ok(vec![Stmt::Node(Box::new(nd))])
             }
             Statement::DoWhile(d) => {
-                // тело выполняется до проверки условия, поэтому условие
-                // уходит в заголовок трапеции с пометкой «do while», а
-                // тело — в её содержимое: рисуется тем же циклом, что и
-                // остальные, но подпись видна на схеме
-                let mut nd = Node::new(
-                    NodeKind::Loop,
-                    shorten_calls(&expr_text(self.src, &d.node.expression)),
-                );
-                nd.loop_kind = Some(LoopKind::DoWhile);
-                nd.body = Some(self.block_stmt(&d.node.statement)?);
-                Ok(vec![Stmt::Node(Box::new(nd))])
+                Err(self.err("в коде цикл do-while — перепиши на while", d.span.start))
             }
             Statement::Goto(g) => Err(self.err("в коде goto — не поддерживается", g.span.start)),
             Statement::Return(e) => Ok(vec![Stmt::Return(match e {
@@ -260,6 +322,7 @@ impl<'a> Ctx<'a> {
                 shorten_calls(&expr_text(self.src, i.node.condition.as_ref()))
             ),
         );
+        nd.lang = self.labels.to_string();
         let no_stmts = match &i.node.else_statement {
             Some(e) => self.block_stmt(e)?,
             None => Vec::new(),
@@ -284,6 +347,7 @@ impl<'a> Ctx<'a> {
     fn switch_node(&self, s: &LangNode<SwitchStatement>) -> Result<Node, ParseError> {
         let var = expr_text(self.src, &s.node.expression);
         let mut nd = Node::new(NodeKind::Decision, format!("switch ({})", var));
+        nd.lang = self.labels.to_string();
         nd.switch_var = Some(var.clone());
         let items = match &s.node.statement.node {
             Statement::Compound(items) => items,
@@ -321,8 +385,6 @@ impl<'a> Ctx<'a> {
         branches: &mut Vec<Branch>,
         s: &LangNode<SwitchStatement>,
     ) -> Result<(), ParseError> {
-        // Vec, а не срез: switch_item дописывает новые ветки, а не только
-        // продлевает последнюю — срез не даст push.
         if !matches!(&st.node, Statement::Labeled(_)) {
             let stmts = self.stmt(st)?;
             return switch_extend_last(branches, stmts, || {
@@ -333,25 +395,32 @@ impl<'a> Ctx<'a> {
         // тело, предыдущие остаются пустыми ветками (алиасами)
         let mut labs: Vec<String> = Vec::new();
         let mut cur = st;
-        while let Statement::Labeled(l) = &cur.node {
-            let chained = match &l.node.label.node {
-                Label::Case(e) => {
-                    labs.push(format!("{} = {}", var, expr_text(self.src, e.as_ref())));
-                    true
+        loop {
+            match &cur.node {
+                Statement::Labeled(l) => {
+                    let chained = match &l.node.label.node {
+                        Label::Case(e) => {
+                            labs.push(format!("{} = {}", var, expr_text(self.src, e.as_ref())));
+                            true
+                        }
+                        Label::Default => {
+                            labs.push("default".to_string());
+                            true
+                        }
+                        Label::CaseRange(_) => {
+                            return Err(
+                                self.err("диапазон case «a ... b» не поддерживается", l.span.start)
+                            )
+                        }
+                        Label::Identifier(_) => false,
+                    };
+                    if !chained {
+                        break;
+                    }
+                    cur = l.node.statement.as_ref();
                 }
-                Label::Default => {
-                    labs.push("default".to_string());
-                    true
-                }
-                Label::CaseRange(_) => {
-                    return Err(self.err("диапазон case «a ... b» не поддерживается", l.span.start));
-                }
-                Label::Identifier(_) => false,
-            };
-            if !chained {
-                break;
+                _ => break,
             }
-            cur = l.node.statement.as_ref();
         }
         if labs.is_empty() {
             // goto-метка внутри switch — обычная инструкция
@@ -380,10 +449,8 @@ impl<'a> Ctx<'a> {
     }
 }
 
-/// Продлить содержимое последней ветки switch; пустой список — ошибка.
-/// Срез здесь и достаточен: функция ничего не добавляет.
 fn switch_extend_last(
-    branches: &mut [Branch],
+    branches: &mut Vec<Branch>,
     stmts: Vec<Stmt>,
     err: impl FnOnce() -> ParseError,
 ) -> Result<(), ParseError> {
@@ -459,9 +526,9 @@ fn strip_comments(src: &str) -> String {
                     n
                 }
             };
-            for c in &chars[i..j] {
+            for k in i..j {
                 // \n сохраняем: иначе номера строк ошибок съезжают
-                out.push(if *c == '\n' { '\n' } else { ' ' });
+                out.push(if chars[k] == '\n' { '\n' } else { ' ' });
             }
             i = j;
             continue;
@@ -560,221 +627,12 @@ fn col_of(src: &str, off: usize) -> usize {
 
 /// Узел AST -> однострочный текст C: срез исходника по span,
 /// внутренние скобки и переносы сохраняются как написал автор.
-/// AST -> однострочный текст C.
-///
-/// Пробелы схлопываются, а вокруг операторов приводятся к одному с
-/// каждой стороны. Автор может написать `a= a` или `a =a`, и на схеме
-/// это читалось как опечатка в программе, а не как авторская запись.
-/// Схлопывание не трогает строковые литералы: они приходят из исходника
-/// как есть, а `split_whitespace` по ним не ходит.
 fn expr_text(src: &str, e: &LangNode<Expression>) -> String {
     let s = src.get(e.span.start..e.span.end).unwrap_or_default();
-    space_operators(&s.split_whitespace().collect::<Vec<_>>().join(" "))
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Пробел вокруг бинарных операторов и после запятой. Сравнения,
-/// присваивания и арифметика на блок-схеме читаются глазом, а `a<a`
-/// или `x,y` сливаются в одно слово.
-///
-/// Пробел ставится с ОБЕИХ сторон: слева, если перед оператором уже есть
-/// операнд, и справа всегда. Односторонний пробел давал `i- =1` и
-/// `p- >x` вместо `i -= 1` и `p->x`.
-///
-/// Не трогаем: `++`/`--` (инкремент), `->` (разыменование), унарный знак,
-/// содержимое строковых литералов.
-/// Пробел вокруг бинарных операторов и после запятой.
-///
-/// Разбор идёт «островами»: сначала копируется операнд, потом оператор,
-/// и только между ними вставляется ровно один пробел. Проверка «а
-/// операнд ли перед оператором» делается по последнему непробельному
-/// символу накопленного — иначе `a =b` путал оператор с пробелом и
-/// оставлял `a =b` как есть.
-///
-/// Не трогаем `++`/`--`, `->` и унарный знак: они не разрываются.
-fn space_operators(s: &str) -> String {
-    const BINARY: [char; 12] = ['=', '<', '>', '+', '-', '*', '/', '%', '&', '|', '^', '!'];
-    const COMPOUND: [&str; 14] = [
-        "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "->", "++", "--",
-    ];
-    let c: Vec<char> = s.chars().collect();
-    let n = c.len();
-    let mut out = String::with_capacity(n + 8);
-    let mut i = 0;
-    while i < n {
-        let ch = c[i];
-        if ch == ' ' {
-            i += 1;
-            continue;
-        }
-        if ch == ',' {
-            // Запятая в C всегда разделяет аргументы, значит пробел после
-            // неё обязателен. lang-c иногда склеивает их ещё в span
-            // (`&m,&d`), поэтому пробел ставим безусловно, а не только
-            // если справа уже был.
-            while out.ends_with(' ') {
-                out.pop();
-            }
-            out.push_str(", ");
-            i += 1;
-            continue;
-        }
-        // строковый литерал целиком: пробелы внутри — часть текста
-        if ch == '"' {
-            out.push(ch);
-            i += 1;
-            while i < n {
-                out.push(c[i]);
-                if c[i] == '\\' && i + 1 < n {
-                    out.push(c[i + 1]);
-                    i += 2;
-                    continue;
-                }
-                if c[i] == '"' {
-                    i += 1;
-                    break;
-                }
-                i += 1;
-            }
-            continue;
-        }
-        let two: String = c[i..(i + 2).min(n)].iter().collect();
-        if COMPOUND.contains(&two.as_str()) {
-            // `++`/`--`/`->` приклеены к операнду, остальные — нет
-            let tight = two == "++" || two == "--" || two == "->";
-            if !tight {
-                out.push(' ');
-            }
-            out.push_str(&two);
-            if !tight {
-                out.push(' ');
-            }
-            i += 2;
-            continue;
-        }
-        if BINARY.contains(&ch) {
-            // Перед оператором должен стоять операнд — иначе это унарный
-            // знак (`&x`, `-1`, `!ok`), и он приклеивается к операнду.
-            let last = out.chars().rev().find(|p| !p.is_whitespace());
-            let binary = last.is_some_and(|p| {
-                p.is_alphanumeric() || p == '_' || p == ')' || p == ']' || p == '}'
-            });
-            if binary {
-                while out.ends_with(' ') {
-                    out.pop();
-                }
-                out.push(' ');
-                out.push(ch);
-                out.push(' ');
-            } else {
-                out.push(ch);
-            }
-            i += 1;
-            continue;
-        }
-        out.push(ch);
-        i += 1;
-    }
-    out.trim_end().to_string()
-}
-
-/// Сокращение середины: голова и хвост остаются, режется середина.
-///
-/// Так сокращённый текст остаётся РАЗЛИЧИМЫМ между ветками. Раньше
-/// усечение всегда отбрасывало хвост, и четыре кейса
-/// `printf("Введите номер месяца (1-12): ")` … `(13-24)` … `(25-36)` …
-/// «неверно» давали на схеме четыре одинаковых `printf("Введите номер...")`
-/// — различить их было нечем. Хвост как раз и нёс различие.
-fn ellipsize(s: &str, budget: usize) -> String {
-    let c: Vec<char> = s.chars().collect();
-    if c.len() <= budget || budget < 5 {
-        return s.to_string();
-    }
-    let head = (budget - 3) / 2;
-    let mut tail = budget - 3 - head;
-    // Грань хвоста не должна попадать внутрь слова: `...13-24)` без
-    // открывающей скобки читается хуже, чем `...(13-24)`. Если начало
-    // хвоста оказалось внутри токена, сдвигаем его назад до границы.
-    while c[c.len() - tail].is_alphanumeric() {
-        let prev = c.len() - tail - 1;
-        if prev == 0 || c[prev].is_whitespace() {
-            break;
-        }
-        tail += 1;
-    }
-    let mut out: String = c[..head].iter().collect();
-    while out.ends_with(char::is_whitespace) {
-        out.pop();
-    }
-    out.push_str("...");
-    out.extend(c[c.len() - tail..].iter());
-    out
-}
-
-/// Список аргументов вызова в условии: умещаем в `BUDGET`, ни одной
-/// переменной не выбрасывая.
-///
-/// Что режется — решает ХВОСТ, а не голова. У `scanf` хвост это адреса
-/// (`&radius, &chek, 1`): смысл там, голова — форматный шум, и режется
-/// он целиком. У `vvedi("Vvedite chislo A: ", &a)` смысл в строке, и три
-/// вызова с разными подсказками обязаны остаться разными — иначе схема
-/// не говорит, что увидит пользователь (инвариант коммита 0c6cc78).
-///
-/// Старый `ellipsize` резал середину и ронял переменную:
-/// `scanf_s("%lf%c", &radius, &chek, 1)` -> `scanf_s("%lf%c",...&chek, 1)`,
-/// то есть по схеме читалось, будто `radius` не читается. Умолчание о
-/// выброшенной переменной хуже переноса: перенос читается, а потеря
-/// переменной — нет.
-/// Строковый литерал ужимается ВНУТРИ кавычек. `ellipsize` режет
-/// середину строки, и на литерале `"\"xxxxxxx\", %d"` он давал
-/// `"\"xx..., %d"` — нечётное число кавычек, оборванный литерал и
-/// потерянный следом аргумент. Тот же приём, что в `abbrev_stmt`.
-fn shorten_literal(lit: &str, budget: usize) -> String {
-    let Some(inner) = lit.strip_prefix('"').and_then(|s| s.strip_suffix('"')) else {
-        return ellipsize(lit, budget);
-    };
-    if inner.chars().count() <= budget {
-        return lit.to_string();
-    }
-    format!("\"{}\"", ellipsize(inner, budget))
-}
-
-fn shorten_args(args: &str) -> String {
-    const BUDGET: usize = 20;
-    if args.chars().count() <= BUDGET {
-        return args.to_string();
-    }
-    // конец литерала ищем по символам, а не поиском подстроки: внутри
-    // формата встречается экранированная кавычка (`"%d\"x", %d"`), и
-    // `find("\", ")` цеплялся за неё — на схему попадал обрывок
-    // формата вроде `%d",`. Тот же обход, что в call_close.
-    let chars: Vec<char> = args.chars().collect();
-    let mut i = 1;
-    while i < chars.len() {
-        match chars[i] {
-            '\\' => i += 2,
-            '"' => break,
-            _ => i += 1,
-        }
-    }
-    // не строковый первый аргумент — нечего определять: режем середину
-    if i >= chars.len() || chars.get(i + 1) != Some(&',') {
-        return ellipsize(args, BUDGET);
-    }
-    let head: String = chars[..=i].iter().collect();
-    let tail: String = chars[i + 2..].iter().collect();
-    let tail = tail.trim_start();
-    // хвост влезает в бюджет — ужимаем строку и оставляем хвост целиком.
-    // `, ` между ними занимает два символа, не один.
-    let room = BUDGET.saturating_sub(tail.chars().count() + 2);
-    if room >= 5 {
-        return format!("{}, {tail}", shorten_literal(&head, room));
-    }
-    // хвост сам не влезает: адреса и есть смысл, строка уходит целиком.
-    // ponytail: длинный список переменных раздувает блок и жмёт лист —
-    // это видно и честно; молча выбросить переменную нельзя.
-    format!("... {tail}")
-}
-
+/// scanf("%d", &x) -> scanf(...) — форматные строки в условиях не нужны.
 fn shorten_calls(cond: &str) -> String {
     let chars: Vec<char> = cond.chars().collect();
     let n = chars.len();
@@ -789,11 +647,8 @@ fn shorten_calls(cond: &str) -> String {
             let name: String = chars[start..i].iter().collect();
             if i + 1 < n && chars[i] == '(' && chars[i + 1] == '"' {
                 if let Some(close) = call_close(&chars, i) {
-                    let args: String = chars[i + 1..close].iter().collect();
                     out.push_str(&name);
-                    out.push('(');
-                    out.push_str(&shorten_args(&args));
-                    out.push(')');
+                    out.push_str("(...)");
                     i = close + 1;
                     continue;
                 }
@@ -839,27 +694,13 @@ fn call_close(chars: &[char], open: usize) -> Option<usize> {
     None
 }
 
-/// Длинные printf("…") сокращаем, СОХРАНЯЯ хвост строки: различия
-/// между кейсами обычно в конце («(1-12)» против «(13-24)»), а резать
-/// надо середину. Бюджет 19 символов на содержимое — столько же, сколько
-/// занимало прежнее усечение до 15 символов плюс «...».
+/// Длинные printf("…") сокращаем до printf("Начало фразы...") —
+/// как принято в учебных схемах; условия и присваивания не трогаем.
 fn abbrev_stmt(s: &str) -> String {
-    const CONTENT_BUDGET: usize = 19;
-    // аргументы после строки сохраняем: printf("%d", n) короче бюджета
-    // и должно остаться целиком. Ведущая запятая — часть разделителя
-    // аргументов, а формат ниже ставит свою: без trim_start_matches(',')
-    // печать давала `printf("...", , n)`.
-    let args = |q: usize| -> String {
-        s[q + 1..s.len() - 1]
-            .trim()
-            .trim_start_matches(',')
-            .trim()
-            .to_string()
-    };
-    // суффиксные варианты MSVC (`printf_s`) — тот же вывод, значит и то же
-    // сокращение: без них длинная строка ввода/вывода занимала две строки
-    // плитки и раздувала лист ниже читаемого кегля
-    for w in ["printf", "printf_s", "puts", "print", "echo", "write"] {
+    if s.chars().count() <= 26 {
+        return s.to_string();
+    }
+    for w in ["printf", "puts", "print", "echo", "write"] {
         let Some(rest) = s.strip_prefix(w) else {
             continue;
         };
@@ -882,18 +723,17 @@ fn abbrev_stmt(s: &str) -> String {
             continue;
         }
         let content = &s[content_start..q];
-        if content.chars().count() <= CONTENT_BUDGET {
-            return s.to_string();
-        }
-        let a = args(q);
-        return if a.is_empty() {
-            format!("{w}(\"{}\")", ellipsize(content, CONTENT_BUDGET))
-        } else {
-            format!("{w}(\"{}\", {})", ellipsize(content, CONTENT_BUDGET), a)
+        let cut15: String = content.chars().take(15).collect();
+        let cut = match cut15.rfind(' ') {
+            Some(p) => &cut15[..p],
+            None => &cut15[..],
         };
+        return format!("{w}(\"{cut}...\")");
     }
     s.to_string()
 }
+
+/// инструкция return (в ветке — тупик)
 
 fn syntax_err(e: SyntaxError, orig: &str) -> ParseError {
     let mut exp: Vec<&str> = e.expected.iter().copied().collect();
@@ -911,16 +751,11 @@ fn syntax_err(e: SyntaxError, orig: &str) -> ParseError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::style::Style;
 
-    /// Узлы тела main БЕЗ терминаторов: тесты этого модуля проверяют
-    /// разбор операторов, а не оформление схемы. Фронтенд добавляет
-    /// «начало»/«конец» — инвариант схемы, проверяется в layout.
     fn parse_ok(src: &str) -> Vec<Node> {
         match parse_c_to_nodes(src, "en") {
-            Ok(nodes) => nodes
-                .into_iter()
-                .filter(|n| n.kind != NodeKind::Term)
-                .collect(),
+            Ok(nodes) => nodes,
             Err(e) => panic!("parse failed: {}", e),
         }
     }
@@ -977,23 +812,18 @@ mod tests {
         {
             assert!(tiles.iter().any(|t| t.contains(word)), "lost: {}", word);
         }
-        // длинный printf сокращён по _abbrev_stmt, но ХВОСТ сохранён
+        // длинный printf сокращён по _abbrev_stmt
         assert!(
-            tiles
-                .iter()
-                .any(|t| t.contains("Введите") && t.contains("1-12")),
-            "хвост с диапазоном должен сохраниться: {:?}",
+            tiles.iter().any(|t| t == "printf(\"Введите номер...\")"),
+            "{:?}",
             tiles
         );
-        // условие: формат scanf сокращён, переменная сохранена
+        // условие: scanf(...) != 1 || ... по _shorten_calls
         let dec = nodes
             .iter()
             .find(|n| n.kind == NodeKind::Decision && n.switch_var.is_none())
             .unwrap();
-        assert_eq!(
-            dec.text,
-            "if (scanf(\"%d\", &month) != 1 || month < 1 || month > 12)"
-        );
+        assert_eq!(dec.text, "if (scanf(...) != 1 || month < 1 || month > 12)");
         // return 1 в ветке присутствует как текст (тупик)
         assert_eq!(dec.branches[0].label, "yes");
         assert!(
@@ -1015,13 +845,38 @@ mod tests {
         assert!(!tiles.iter().any(|t| t.contains("return 0")));
     }
 
-    /// Метки case несут префикс переменной ровно один раз:
-    /// «month / 3 = 1», а не «month / 3 = month / 3 = 1». Склейка
-    /// алиасов (case 1: case 2:) этот префикс тоже не дублирует.
     #[test]
-    fn switch_labels_single_prefix() {
+    fn gvn_roundtrip_parses() {
         let src = include_str!("../../examples/main.c");
-        let nodes = parse_ok(src);
+        let gvn = c_to_gvn(src, "en").unwrap();
+        let style = Style::default();
+        let nodes = crate::frontend::gvn::parse(&gvn, &style, "en").unwrap();
+        assert_eq!(nodes[0].kind, NodeKind::Term);
+        assert_eq!(nodes.last().unwrap().kind, NodeKind::Term);
+        // Start + End + if + switch + 6 printf + (return 1 считается текстом ветки)
+        let decisions = nodes
+            .iter()
+            .filter(|n| n.kind == NodeKind::Decision)
+            .count();
+        assert_eq!(decisions, 2);
+        let io = gvn
+            .lines()
+            .filter(|l| l.trim().starts_with("printf("))
+            .count();
+        assert_eq!(io, 6, "{}", gvn);
+    }
+
+    /// Префикс «svar = » навешивает только gvn::parse: c_to_gvn пишет
+    /// сырые значения, иначе раундтрип даёт «month / 3 = month / 3 = 1».
+    #[test]
+    fn roundtrip_switch_labels_single_prefix() {
+        let src = include_str!("../../examples/main.c");
+        let gvn = c_to_gvn(src, "en").unwrap();
+        assert!(
+            !gvn.contains("month / 3 = month"),
+            "двойной префикс в gvn:\n{gvn}"
+        );
+        let nodes = crate::frontend::gvn::parse(&gvn, &Style::default(), "en").unwrap();
         let sw = nodes
             .iter()
             .find(|n| n.kind == NodeKind::Decision && n.switch_var.is_some())
@@ -1071,14 +926,9 @@ mod tests {
 
     #[test]
     fn ru_labels() {
-        let src = "int main(void) { if (a > 0) printf(\"1\"); }";
-        let nodes = parse_c_to_nodes(src, "ru").unwrap();
-        let dec = nodes
-            .iter()
-            .find(|n| n.kind == NodeKind::Decision)
-            .expect("ветвление не разобрано");
-        assert_eq!(dec.branches[0].label, "да");
-        assert_eq!(dec.branches[1].label, "нет");
+        let nodes = parse_c_to_nodes("int main(void) { if (a > 0) printf(\"1\"); }", "ru").unwrap();
+        assert_eq!(nodes[0].branches[0].label, "да");
+        assert_eq!(nodes[0].branches[1].label, "нет");
     }
 
     #[test]
@@ -1118,69 +968,21 @@ mod tests {
     }
 
     #[test]
-    fn for_header_keeps_init_cond_step() {
-        let nodes = parse_ok("int main(void) { for (int i = 0; i < 5; i = i + 1) { x = 1; } }");
-        assert_eq!(nodes[0].text, "i = 0; i < 5; i = i + 1");
+    fn for_header_keeps_keyword_in_gvn() {
+        let gvn = c_to_gvn(
+            "int main(void) { for (int i = 0; i < 5; i = i + 1) { } }",
+            "en",
+        )
+        .unwrap();
+        assert!(gvn.contains("for i = 0; i < 5; i = i + 1\n"), "{}", gvn);
     }
 
-    /// do-while рисуется как цикл: тело в содержимом трапеции,
-    /// условие — в заголовке с пометкой «do while». Раньше он
-    /// отвергался с требованием переписать на while, что меняло
-    /// семантику: тело do выполняется до проверки.
     #[test]
-    fn dowhile_is_a_loop_with_body_and_marked_header() {
-        let nodes = parse_ok("int main(void) { do { x = x + 1; } while (x < 3); }");
-        let loop_node = nodes
-            .iter()
-            .find(|n| n.kind == NodeKind::Loop)
-            .expect("do-while должен стать узлом-циклом");
-        assert_eq!(loop_node.loop_kind, Some(LoopKind::DoWhile));
-        let body = loop_node.body.as_ref().expect("тело do-while");
-        assert!(
-            body.iter()
-                .any(|s| matches!(s, Stmt::Tile { text, .. } if text.contains("x = x + 1"))),
-            "тело do-while должно попасть в содержимое трапеции: {body:?}"
-        );
-        // на схеме видно, что это именно do-while
-        assert_eq!(loop_node.loop_label(), "do while x < 3");
-    }
-
-    /// Вид цикла виден в IR и в подписи на схеме: без этого цикл
-    /// терял бы различие между while / for / do while.
-    #[test]
-    fn loop_kind_and_label_survive() {
-        for (src, kind, label) in [
-            (
-                "int main(void){ do { x++; } while (x<3); }",
-                LoopKind::DoWhile,
-                "do while x < 3",
-            ),
-            (
-                "int main(void){ while (x<3) x++; }",
-                LoopKind::While,
-                "while x < 3",
-            ),
-            (
-                "int main(void){ for(int i=0;i<3;i++) x++; }",
-                LoopKind::For,
-                "for i = 0; i < 3; i++",
-            ),
-        ] {
-            let nodes = parse_ok(src);
-            let lp = nodes
-                .iter()
-                .find(|n| n.kind == NodeKind::Loop)
-                .expect("цикл не разобран");
-            assert_eq!(lp.loop_kind, Some(kind), "вид цикла потерян");
-            assert_eq!(lp.loop_label(), label);
-            assert!(lp.body.is_some(), "тело цикла потерялось");
-        }
-    }
-
-    /// goto по-прежнему не поддерживается — в отличие от do-while,
-    /// который рисовать можно честно.
-    #[test]
-    fn goto_still_rejected() {
+    fn dowhile_and_goto_rejected() {
+        let e =
+            parse_c_to_nodes("int main(void) { do { x = 1; } while (x < 3); }", "en").unwrap_err();
+        assert!(e.msg.contains("do-while"), "{}", e.msg);
+        assert_eq!(e.line, Some(1));
         let e2 = parse_c_to_nodes("int main(void) {\n  goto end;\n  end: ;\n}", "en").unwrap_err();
         assert!(e2.msg.contains("goto"), "{}", e2.msg);
         assert_eq!(e2.line, Some(2));
@@ -1226,96 +1028,7 @@ mod tests {
     #[test]
     fn scanf_cond_shortened() {
         let nodes = parse_ok("int main(void) { if (scanf(\"%d\", &x)) printf(\"ok\"); }");
-        // форматная строка — шум, переменная — нет
-        assert_eq!(nodes[0].text, "if (scanf(\"%d\", &x))");
-    }
-
-    /// scanf с несколькими переменными: усечение условия не вправе
-    /// ВЫБРОСИТЬ переменную. Раньше резалась середина списка аргументов,
-    /// и `scanf_s("%lf%c", &radius, &chek, 1)` доходил до схемы как
-    /// `scanf_s("%lf%c",...&chek, 1)` — по схеме выглядело, будто
-    /// `radius` не читается. Умолчание хуже переноса.
-    #[test]
-    fn scanf_cond_keeps_every_variable() {
-        let nodes = parse_ok(
-            "int main(void) { if (scanf_s(\"%lf%c\", &radius, &chek, 1) != 2) return 1; }",
-        );
-        let cond = &nodes[0].text;
-        assert!(cond.contains("&radius"), "потеряна &radius: {cond}");
-        assert!(cond.contains("&chek"), "потеряна &chek: {cond}");
-        assert!(!cond.contains("%lf"), "форматная строка — шум: {cond}");
-    }
-
-    /// printf_s — тот же вывод, что printf, значит и сокращается так же.
-    /// Сверяем с printf на ОДИНАКОВОЙ строке: раньше printf_s не сокращался
-    /// вовсе, и одинаковый вывод давал разные плитки.
-    #[test]
-    fn printf_s_is_abbreviated_like_printf() {
-        let arg = "plashad shara : %.2f\\n";
-        let io = |f: &str| {
-            let src = format!("int main(void) {{ {f}(\"{arg}\", s); }}");
-            texts(&parse_ok(&src), NodeKind::Io)
-        };
-        let (a, b) = (io("printf"), io("printf_s"));
-        assert_eq!(a.len(), 1, "{a:?}");
-        // различается только имя функции — сравниваем хвост плитки
-        let tail = |s: &str| s[s.find('"').unwrap_or(0)..].to_string();
-        assert_eq!(
-            tail(&b[0]),
-            tail(&a[0]),
-            "printf_s сокращён иначе, чем printf"
-        );
-        assert!(b[0].contains("..."), "строка не сокращена: {b:?}");
-    }
-
-    /// Два вызова с РАЗНЫМИ строками обязаны остаться разными: сокращать
-    /// строку до `...` нельзя. На этом стоит коммит 0c6cc78, и этим же
-    /// ловится ошибка «схема не говорит, что увидит пользователь».
-    #[test]
-    fn different_prompt_strings_stay_distinguishable() {
-        let src = "int main(void) {
-            if (vvedi(\"Vvedite chislo A: \", &a) != 1) return 1;
-            if (vvedi(\"Vvedite chislo B: \", &a) != 2) return 2;
-        }";
-        let conds: Vec<String> = parse_ok(src)
-            .iter()
-            .filter(|n| n.kind == NodeKind::Decision)
-            .map(|n| n.text.clone())
-            .collect();
-        assert_eq!(conds.len(), 2, "{conds:?}");
-        assert_ne!(conds[0], conds[1], "подсказки слились: {conds:?}");
-    }
-
-    /// Хвост аргументов не должен получить вторую запятую: разделитель
-    /// аргументов и запятая из формата складывались в `printf("...", , n)`.
-    #[test]
-    fn no_double_comma_in_abbreviated_printf() {
-        let nodes = parse_ok("int main(void) { printf(\"plashad shara : %.2f\\n\", s); }");
-        let io = texts(&nodes, NodeKind::Io);
-        assert!(!io[0].contains(", ,"), "двойная запятая: {io:?}");
-        assert!(io[0].ends_with(", s)"), "аргумент потерян: {io:?}");
-    }
-
-    /// Экранированная кавычка внутри формата: конец литерала ищется по
-    /// символам, а ужимается он ВНУТРИ кавычек. Обе ошибки рвали
-    /// литерал: поиск подстроки `", ` цеплялся за `\"`, а `ellipsize`
-    /// резал середину и давал нечётное число кавычек. Инвариант —
-    /// кавычки сбалансированы и ни одна переменная не потеряна.
-    #[test]
-    fn escaped_quote_in_format_keeps_literal_balanced() {
-        let nodes = parse_ok(
-            "int main(void) { if (scanf(\"\\\"xxxxxxx\\\", %d\", &a, &b) != 2) return 1; }",
-        );
-        let cond = &nodes[0].text;
-        assert_eq!(
-            cond.matches('"').count() % 2,
-            0,
-            "литерал разорван, кавычек нечётно: {cond}"
-        );
-        assert!(
-            cond.contains("&a") && cond.contains("&b"),
-            "аргумент потерян: {cond}"
-        );
+        assert_eq!(nodes[0].text, "if (scanf(...))");
     }
 
     #[test]
@@ -1350,32 +1063,12 @@ mod tests {
         assert_eq!(dec.text, "if (a % 2 == 0)");
     }
 
-    /// Усечение сохраняет ХВОСТ строки: различия между кейсами обычно
-    /// в конце («(1-12)» против «(13-24)»), а резать надо середину.
-    /// Раньше четыре кейса давали четыре одинаковых
-    /// `printf("Введите номер...")`.
     #[test]
-    fn abbrev_long_printf_keeps_the_tail() {
-        let cases = [
-            "printf(\"Введите номер месяца (1-12): \")",
-            "printf(\"Введите номер месяца (13-24): \")",
-            "printf(\"Введите номер месяца (25-36): \")",
-        ];
-        let got: Vec<String> = cases.iter().map(|c| abbrev_stmt(c)).collect();
-        for g in &got {
-            println!("{g}");
-        }
-        // все три различимы: в каждом виден свой диапазон
-        assert!(got[0].contains("(1-12)"), "{}", got[0]);
-        assert!(got[1].contains("(13-24)"), "{}", got[1]);
-        assert!(got[2].contains("(25-36)"), "{}", got[2]);
-        // и ни одна не равна другой
-        assert_ne!(got[0], got[1]);
-        assert_ne!(got[1], got[2]);
-        // хвост не режется посреди числа: скобка на месте
-        assert!(got[1].contains("13-24)"), "скобка потеряна: {}", got[1]);
-
-        // короткие и не-printf не трогаем
+    fn abbrev_long_printf() {
+        assert_eq!(
+            abbrev_stmt("printf(\"Введите номер месяца (1-12): \")"),
+            "printf(\"Введите номер...\")"
+        );
         assert_eq!(abbrev_stmt("printf(\"Весна\\n\")"), "printf(\"Весна\\n\")");
         assert_eq!(
             abbrev_stmt("a = 111111 + 222222 + 333333"),
@@ -1387,46 +1080,11 @@ mod tests {
         );
     }
 
-    /// Условие с вызовом: форматная строка — шум, переменная — нет.
-    /// Раньше отбрасывался весь список аргументов, и разные переменные
-    /// давали одинаковый `scanf(...)`.
     #[test]
-    fn shorten_calls_keeps_the_target_variable() {
-        let a = shorten_calls("scanf(\"%d\", &month) != 1");
-        let b = shorten_calls("scanf(\"%d\", &day) != 1");
-        assert!(a.contains("month"), "{a}");
-        assert!(b.contains("day"), "{b}");
-        assert_ne!(a, b, "разные переменные должны различаться");
+    fn shorten_calls_only_string_first_arg() {
+        assert_eq!(shorten_calls("scanf(\"%d\", &x) != 1"), "scanf(...) != 1");
         assert_eq!(shorten_calls("f(x) != 1"), "f(x) != 1");
         assert_eq!(shorten_calls("a || b"), "a || b");
-    }
-
-    /// Пробелы вокруг бинарных операторов: автор может написать
-    /// `a= a` или `a =a`, и на схеме это читалось как опечатка.
-    /// `++`/`--`/`->` приклеены к операнду, унарные знаки — тоже.
-    #[test]
-    fn space_operators_normalises_spacing() {
-        for (src, want) in [
-            ("a= a", "a = a"),
-            ("a =a", "a = a"),
-            ("a = a", "a = a"),
-            ("x=1", "x = 1"),
-            ("a<b", "a < b"),
-            ("a % b", "a % b"),
-            ("b = a*2+1", "b = a * 2 + 1"),
-            ("a++", "a++"),
-            ("a--", "a--"),
-            ("p->x", "p->x"),
-            ("&month, &day", "&month, &day"),
-        ] {
-            assert_eq!(space_operators(src), want, "{src:?}");
-        }
-        // содержимое строкового литерала не трогаем
-        assert_eq!(
-            space_operators("q = \"x =y\""),
-            "q = \"x =y\"",
-            "операторы внутри строки не нормализуются"
-        );
     }
 
     #[test]
@@ -1439,10 +1097,11 @@ mod tests {
         assert_eq!(out.len(), src.len());
     }
 
-    /// те же примеры C, что гоняет selftest.py, — через полный путь
-    /// C -> узлы, как это делает main.rs
+    /// те же примеры C, что гоняет selftest.py, — через полный
+    /// путь c_to_gvn -> gvn::parse, как это делает main.rs
     #[test]
     fn python_selftest_c_sources() {
+        let style = Style::default();
         let cases: &[(&str, &str, &[&str])] = &[
             (
                 "switch с return в кейсе",
@@ -1466,20 +1125,18 @@ mod tests {
             ),
         ];
         for (name, src, wants) in cases {
-            let nodes = match parse_c_to_nodes(src, "en") {
-                Ok(n) => n,
-                Err(e) => panic!("{}: parse failed: {}", name, e),
+            let gvn = match c_to_gvn(src, "en") {
+                Ok(g) => g,
+                Err(e) => panic!("{}: c_to_gvn failed: {}", name, e),
             };
-            let tiles = all_tiles(&nodes);
             for w in *wants {
-                assert!(
-                    tiles.iter().any(|t| t.contains(w)),
-                    "{}: lost {:?} in {:?}",
-                    name,
-                    w,
-                    tiles
-                );
+                assert!(gvn.contains(w), "{}: lost {:?} in:\n{}", name, w, gvn);
             }
+            let nodes = match crate::frontend::gvn::parse(&gvn, &style, "en") {
+                Ok(n) => n,
+                Err(e) => panic!("{}: gvn reparse failed: {}\n{}", name, e, gvn),
+            };
+            assert_eq!(nodes[0].kind, NodeKind::Term, "{}", name);
         }
     }
 

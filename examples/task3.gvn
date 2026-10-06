@@ -1,0 +1,12 @@
+input scanf("%f %f %f", ...)
+if scanf(...) != 3
+    yes -> end: printf("Ошибка..."); return 1
+    no:
+if fmodf(a, 1) == 0
+    yes: printf("Число 1...")
+if fmodf(b, 1) == 0
+    yes: printf("Число 2...")
+if fmodf(c, 1) == 0
+    yes: printf("Число 3...")
+if fmodf(a, 1) != 0 && ...
+    yes: printf("Ни одно...")

@@ -3,8 +3,7 @@
 
 use super::*;
 use crate::layout::{
-    crossings_ok, dangling_ok, layout, measure, normalize, overlaps_ok, single_entry_ok,
-    split_scheme,
+    crossings_ok, layout, measure, normalize, overlaps_ok, single_entry_ok, split_scheme,
 };
 
 #[test]
@@ -97,18 +96,12 @@ fn nested_loop_numbering() {
     assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
 }
 
-/// На шестиугольнике «подготовка» видно, какой это цикл:
-/// while / for / do while.
+/// На шестиугольнике «подготовка» видно, какой это цикл: while/for.
 #[test]
 fn loop_begin_shows_keyword() {
-    let text = "\
-int i, a, b, c;
-while (i < 5) { a = 1; }
-for (i = 0; i < 10; i++) { b = 2; }
-do { c = 3; } while (i < 7);
-printf(1);
-";
-    let nodes = nodes(text);
+    let st = Style::default();
+    let text = "while i < 5\n    a = 1\nfor i = 0; i < 10; i++\n    b = 2\noutput printf(1)\n";
+    let nodes = crate::frontend::gvn::parse(text, &st, "").unwrap();
     let l = lay(&nodes);
     let begins: Vec<String> = l
         .shapes
@@ -121,74 +114,6 @@ printf(1);
         begins.iter().any(|t| t == "for i = 0; i < 10; i++"),
         "{begins:?}"
     );
-    assert!(begins.iter().any(|t| t == "do while i < 7"), "{begins:?}");
-}
-
-/// do-while рисуется тем же циклом, что и остальные: та же пара
-/// трапеций с номерами, та же высота, тот же срез углов. Отличается
-/// только подпись в заголовке, и трапеция от неё шире — на столько,
-/// на сколько подпись длиннее. Поэтому сравниваем высоту и срез, а не
-/// ширину: совпадать она и не должна.
-#[test]
-fn dowhile_is_drawn_as_the_same_loop_shape() {
-    let st = Style::default();
-    let a = lay(&nodes("int i, a;\nwhile (i < 5) { a = 1; }\nprintf(1);\n"));
-    let b = lay(&nodes(
-        "int i, a;\ndo { a = 1; } while (i < 5);\nprintf(1);\n",
-    ));
-
-    let traps = |l: &Layout| -> Vec<Shape> {
-        l.shapes
-            .iter()
-            .filter(|sh| sh.kind == "loop_begin" || sh.kind == "loop_end")
-            .cloned()
-            .collect()
-    };
-    let (ta, tb) = (traps(&a), traps(&b));
-    assert_eq!(ta.len(), 2, "пара трапеций: подготовка и конец цикла");
-    assert_eq!(tb.len(), 2, "у do-while тоже пара трапеций");
-    for (x, y) in ta.iter().zip(tb.iter()) {
-        assert!(
-            (x.h - y.h).abs() < 1e-9,
-            "высота трапеции: {} против {}",
-            x.h,
-            y.h
-        );
-        assert!(
-            (x.skew - y.skew).abs() < 1e-9,
-            "срез углов: {} против {}",
-            x.skew,
-            y.skew
-        );
-        assert!(y.skew > 0.0, "трапеция срезана под 45°, как у всех циклов");
-    }
-    // ширина растёт на подпись, но по модульной сетке
-    let w_diff = tb[0].w - ta[0].w;
-    assert!(w_diff > 0.0, "заголовок do-while не уже: {w_diff}");
-    let modules = w_diff / st.grid;
-    assert!(
-        (modules - modules.round()).abs() < 1e-6 && modules >= 1.0,
-        "разница ширины {w_diff} — не целое число модулей сетки"
-    );
-    assert_eq!(
-        a.shapes.len(),
-        b.shapes.len(),
-        "блоков столько же: различается только подпись"
-    );
-
-    let header = |l: &Layout| -> String {
-        l.shapes
-            .iter()
-            .find(|sh| sh.kind == "loop_begin")
-            .map(|sh| sh.lines.join(" "))
-            .unwrap()
-    };
-    assert_eq!(header(&a), "while i < 5");
-    assert_eq!(header(&b), "do while i < 5");
-
-    assert!(crossings_ok(&b.shapes, &b.edges).is_ok());
-    assert!(overlaps_ok(&b.shapes));
-    assert!(single_entry_ok(&b));
 }
 
 /// Репорт (задача 3): у ромба с одной непустой веткой, ушедшей рельсой
@@ -234,8 +159,139 @@ fn merge_bus_reaches_continuation_below_it() {
     assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
 }
 
-/// Когда колонка плитки накрыта трапецией слияния, рельса continue
-/// идёт через коридор левее — иначе вертикаль проткнула бы трапецию.
+/// Репорт (задача 3): рельса break уходила из блока горизонталью с высоты
+/// его низа — отрезок ложился вдоль границы плитки, и линия читалась как
+/// выход из угла.
+///
+/// Колонка плитки в задаче 3 целиком левее трапеции слияния, поэтому
+/// вертикаль можно вести прямо: рельса выходит из центра плитки, падает
+/// на merge и вправо на ось — один изгиб. Раньше сюда вклинивался коридор
+/// с отступом вниз на в-gap, и у плитки выходило три лишних изгиба.
+#[test]
+fn break_rail_from_clear_column_falls_straight() {
+    let src = "\
+int main() {
+    for (d = 2; d <= m; d++) {
+        if (p % d == 0) {
+            coprime = 0;
+            break;
+        }
+    }
+    return 0;
+}
+";
+    let nodes = crate::frontend::c::parse_c_to_nodes(src, "ru").unwrap();
+    let l = lay(&nodes);
+    let tile = l
+        .shapes
+        .iter()
+        .find(|sh| sh.lines == vec!["coprime = 0".to_string()])
+        .expect("плитка перед break");
+    let le = l.shapes.iter().find(|sh| sh.kind == "loop_end").unwrap();
+    let cx = tile.cx;
+    let bottom = tile.cy + tile.h / 2.0;
+    // колонка плитки должна быть вне трапеции слияния — иначе тест проверяет
+    // не тот маршрут и падает не по делу
+    assert!(
+        cx < le.cx - le.w / 2.0 || cx > le.cx + le.w / 2.0,
+        "колонка плитки вне трапеции слияния: cx={cx}, трапеция {}..{}",
+        le.cx - le.w / 2.0,
+        le.cx + le.w / 2.0
+    );
+    let rail = l
+        .edges
+        .iter()
+        .find(|e| e.points.len() == 3 && (e.points[0].0 - cx).abs() < 1e-9)
+        .expect("рельса из центра плитки прямо вниз");
+    assert!(
+        (rail.points[0].1 - bottom).abs() < 1e-9,
+        "рельса начинается с низа плитки: {:?}",
+        rail.points[0]
+    );
+    assert!(
+        rail.points[1].0 == cx && rail.points[1].1 > bottom,
+        "падение строго вниз по оси плитки: {:?}",
+        &rail.points[1..2]
+    );
+    assert!(
+        rail.points[2].0 == le.cx && rail.points[2].1 == rail.points[1].1,
+        "вправо на ось цикла, на той же высоте: {:?}",
+        &rail.points[2..3]
+    );
+    // без коридора: рельса не заходит влево от своей колонки
+    assert!(
+        rail.points.iter().all(|p| p.0 >= cx - 1e-9),
+        "рельса не уходит влево от оси плитки: {:?}",
+        rail.points
+    );
+    // ровно два изгиба вместо четырёх: ступеньки вниз и влево нет
+    assert_eq!(
+        rail.points.len(),
+        3,
+        "прямая рельса: центр плитки -> вниз -> ось цикла: {:?}",
+        rail.points
+    );
+    assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
+}
+
+/// Когда колонка плитки накрыта трапецией слияния, рельса идёт через
+/// коридор левее — иначе вертикаль проткнула бы трапецию.
+#[test]
+fn break_rail_under_trapezoid_uses_corridor() {
+    let nodes = vec![
+        node(NodeKind::Term, "начало"),
+        loop_node("while i < 5", vec![s("a = 1"), sbrk()]),
+        node(NodeKind::Term, "конец"),
+    ];
+    let st = Style::default();
+    let (lw, _) = measure(&st, "loop", "while i < 5");
+    let l = lay(&nodes);
+    // плитка стоит на оси цикла, то есть прямо под трапецией слияния:
+    // рельса обязана уйти в коридор левее, иначе проткнёт трапецию
+    let rail = l
+        .edges
+        .iter()
+        .find(|e| e.points.iter().any(|p| p.0 < -lw / 2.0))
+        .expect("рельса ушла в левый коридор мимо трапеции");
+    let leftmost = rail.points.iter().map(|p| p.0).fold(f64::MAX, f64::min);
+    assert!(
+        leftmost < -lw / 2.0,
+        "рельса заходит левее половины ширины трапеции: {leftmost} против {}",
+        -lw / 2.0
+    );
+    // коридор значит лишний изгиб: вниз, влево, вниз, вправо
+    assert!(
+        rail.points.len() == 5,
+        "через коридор — четыре сегмента: {:?}",
+        rail.points
+    );
+    assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
+}
+
+#[test]
+fn break_goes_left_rail_below_loop() {
+    let nodes = vec![
+        node(NodeKind::Term, "начало"),
+        loop_node("while i < 5", vec![s("a = 1"), sbrk()]),
+        node(NodeKind::Term, "конец"),
+    ];
+    let st = Style::default();
+    let l = lay(&nodes);
+    let (lw, _) = measure(&st, "loop", "while i < 5");
+    let le = l.shapes.iter().find(|sh| sh.kind == "loop_end").unwrap();
+    let rail = l
+        .edges
+        .iter()
+        .find(|e| !e.arrow && e.points.iter().any(|p| p.0 < -lw / 2.0))
+        .expect("рельса break через левый канал");
+    let last = rail.points.last().unwrap();
+    assert!(
+        last.0 == 0.0 && last.1 > le.cy + le.h / 2.0,
+        "рельса сливается с магистралью ниже loop_end: {last:?}"
+    );
+    assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
+}
+
 #[test]
 fn to_end_single_arrow_into_end() {
     let mut d = node(NodeKind::Decision, "if a > 0");
@@ -281,11 +337,12 @@ fn examples_layout_invariants() {
     let mut checked = 0;
     for entry in std::fs::read_dir(&dir).unwrap() {
         let path = entry.unwrap().path();
-        if path.extension().and_then(|e| e.to_str()) != Some("c") {
+        if path.extension().and_then(|e| e.to_str()) != Some("gvn") {
             continue;
         }
         let src = std::fs::read_to_string(&path).unwrap();
-        let nodes = CParser::new().parse(&src, "ru");
+        let nodes = crate::frontend::gvn::parse(&src, &Style::default(), "ru")
+            .unwrap_or_else(|e| panic!("{}: {e:?}", path.display()));
         let st = Style::default();
         let sizes = normalize(&nodes, &st);
         let l = layout(&nodes, &sizes, &st);
@@ -301,12 +358,12 @@ fn examples_layout_invariants() {
         );
         checked += 1;
     }
-    assert!(checked >= 6, "ожидался набор примеров, проверено {checked}");
+    assert!(checked >= 5, "ожидалось >=5 примеров, проверено {checked}");
 }
 
 #[test]
 fn split_scheme_single_part_for_short_scheme() {
-    let (parts, _) = split_scheme(
+    let parts = split_scheme(
         linear(),
         &normalize(&linear(), &Style::default()),
         &Style::default(),
@@ -351,20 +408,9 @@ fn orthogonal_edges() {
 #[test]
 fn pend_flush_when_loop_is_last() {
     let st = Style::default();
-    // Ветку «-> end» C-фронтенд выразить не может: to_end ставит только
-    // удалённый парсер .gvn. Поэтому узлы собираем руками — проверяет
-    // тест раскладку, а не парсер.
-    let mut d = node(NodeKind::Decision, "if (a > 0)");
-    d.branches = vec![
-        br("yes", vec![sio("printf(1)")], true),
-        br("no", vec![], false),
-    ];
-    // «конец» не добавляем: последний узел — цикл
-    let nodes = vec![
-        node(NodeKind::Term, "Start"),
-        d,
-        loop_node("a < 5", vec![s("a = a + 1")]),
-    ];
+    let text = "if a > 0\n    yes -> end: printf(1)\n    no:\nwhile a < 5\n    a = a + 1\n";
+    let mut nodes = crate::frontend::gvn::parse(text, &st, "en").unwrap();
+    nodes.pop(); // убираем «конец»: последний узел — цикл
     assert_eq!(nodes.last().unwrap().kind, NodeKind::Loop);
     let sizes = normalize(&nodes, &st);
     let l = layout(&nodes, &sizes, &st);
@@ -500,10 +546,10 @@ fn empty_scheme_layout_no_panic() {
 #[test]
 fn single_entry_allows_inbound_conns() {
     let st = Style::default();
-    let text = "int a, b; if (a > 0) { printf(1); } b = 111111;\n".repeat(14);
-    let nodes = nodes(&text);
+    let text = "if a > 0\n    yes -> end: printf(1)\n    no:\nb = 111111\n".repeat(14);
+    let nodes = crate::frontend::gvn::parse(&text, &st, "en").unwrap();
     let sizes = normalize(&nodes, &st);
-    let (parts, _) = split_scheme(nodes, &sizes, &st);
+    let parts = split_scheme(nodes, &sizes, &st);
     assert!(parts.len() >= 2, "схема должна разрезаться на листы");
     for part in &parts {
         let l = layout(part, &sizes, &st);
@@ -516,15 +562,8 @@ fn single_entry_allows_inbound_conns() {
 #[test]
 fn single_entry_without_end_shape_is_ok() {
     let st = Style::default();
-    // верхнеуровневый return C-фронтенд отбрасывает (терминатор «конец»
-    // его заменяет), поэтому тупик собираем руками
-    let nodes = vec![
-        node(NodeKind::Term, "Start"),
-        node(NodeKind::Act, "a = 1"),
-        node(NodeKind::Return, "return 1"),
-        node(NodeKind::Act, "b = 2"),
-        node(NodeKind::Term, "End"),
-    ];
+    let text = "a = 1\nreturn 1\nb = 2\n";
+    let nodes = crate::frontend::gvn::parse(text, &st, "en").unwrap();
     let sizes = normalize(&nodes, &st);
     let l = layout(&nodes, &sizes, &st);
     assert_eq!(
@@ -541,18 +580,15 @@ fn single_entry_without_end_shape_is_ok() {
 #[test]
 fn switch_dead_axis_column_counts_into_merge_y() {
     let st = Style::default();
-    // C-эквивалент: case 2 — тупик return, ветки 1 и default сливаются
     let text = "\
-int x;
-scanf(\"%d\", &x);
-switch (x) {
-case 1: printf(\"раз\"); break;
-case 2: printf(\"два\"); return 1;
-default: printf(\"три\"); break;
-}
-printf(\"%d\", x);
+input scanf(\"%d\", &x)
+if switch (x)
+    1: printf(\"раз\")
+    2 -> end: printf(\"два\"); return 1
+    иначе: printf(\"три\")
+output printf(x)
 ";
-    let nodes = nodes(text);
+    let nodes = crate::frontend::gvn::parse(text, &st, "ru").unwrap();
     let sizes = normalize(&nodes, &st);
     let l = layout(&nodes, &sizes, &st);
     assert_eq!(
@@ -569,8 +605,8 @@ printf(\"%d\", x);
 #[test]
 fn empty_branch_rail_hugs_diamond() {
     let st = Style::default();
-    let text = "int x, y;\nif (x <= 0) { printf(\"bad\"); return 1; }\ny = x + 1;\n";
-    let nodes = nodes(text);
+    let text = "if x <= 0\n    да: printf(\"bad\"); return 1\n    нет:\ny = x + 1\n";
+    let nodes = crate::frontend::gvn::parse(text, &st, "ru").unwrap();
     let sizes = normalize(&nodes, &st);
     let l = layout(&nodes, &sizes, &st);
     let dsh = l.shapes.iter().find(|s| s.kind == "if").unwrap();
@@ -598,8 +634,8 @@ fn empty_branch_rail_hugs_diamond() {
 #[test]
 fn if_yes_branch_goes_left() {
     let st = Style::default();
-    let text = "int x = 0, y = 0;\nif (x <= 0) { printf(\"bad\"); }\ny = x + 1;\n";
-    let nodes = nodes(text);
+    let text = "if x <= 0\n    да: printf(\"bad\")\n    нет:\ny = x + 1\n";
+    let nodes = crate::frontend::gvn::parse(text, &st, "ru").unwrap();
     let sizes = normalize(&nodes, &st);
     let l = layout(&nodes, &sizes, &st);
     let dsh = l.shapes.iter().find(|s| s.kind == "if").unwrap();
@@ -677,13 +713,15 @@ fn if_else_columns_symmetric_at_base() {
 fn nested_if_yes_left_with_mirror_rail() {
     let st = Style::default();
     let text = "\
-int a, b, c;
-if (a > 0) {
-    if (b > 0) { printf(\"внутри\"); }
-    c = 1;
-} else { printf(\"минус\"); }
+if a > 0
+    да:
+    if b > 0
+        да: printf(\"внутри\")
+        нет:
+    c = 1
+    нет: printf(\"минус\")
 ";
-    let nodes = nodes(text);
+    let nodes = crate::frontend::gvn::parse(text, &st, "ru").unwrap();
     let sizes = normalize(&nodes, &st);
     let l = layout(&nodes, &sizes, &st);
     let nhe = super::nhe_of(&sizes, &nodes, &st);
@@ -893,13 +931,17 @@ fn grid_invariant() {
 fn elseif_cascade_trunk_and_bus() {
     let st = Style::default();
     let text = "\
-int a;
-if (a < 0) { printf(\"neg\"); }
-else if (a == 0) { printf(\"zero\"); }
-else if (a > 0) { printf(\"pos\"); }
-else { printf(\"?\"); }
+if a < 0
+    да: printf(\"neg\")
+    нет:
+    if a == 0
+        да: printf(\"zero\")
+        нет:
+        if a > 0
+            да: printf(\"pos\")
+            нет: printf(\"?\")
 ";
-    let nodes = nodes(text);
+    let nodes = crate::frontend::gvn::parse(text, &st, "ru").unwrap();
     let sizes = normalize(&nodes, &st);
     let l = layout(&nodes, &sizes, &st);
     let mut ifs: Vec<&Shape> = l.shapes.iter().filter(|s| s.kind == "if").collect();
@@ -937,15 +979,11 @@ else { printf(\"?\"); }
     let zero = at("zero");
     let pos = at("pos");
     let other = at("?");
-    // Колонки каскада — ДВЕ, слева и справа, и укладываются одна под
-    // другой. Раньше каждый ярус отодвигался наружу на `pitch`, и
-    // восемь else-if давали ширину 3677 pt: общий масштаб
-    // лабораторной работы из-за одного такого файла падал до 15 %.
     for (sh, x, name) in [
-        (neg, -base, "neg"),
-        (pos, -base, "pos — та же левая колонка, ниже"),
-        (zero, base, "zero"),
-        (other, base, "? — та же правая колонка, ниже"),
+        (neg, -base, "neg L0"),
+        (zero, base, "zero R0"),
+        (pos, -(base + pitch), "pos L1"),
+        (other, base + pitch, "? R1"),
     ] {
         assert!(
             (sh.cx - x).abs() < 1e-9,
@@ -954,42 +992,31 @@ else { printf(\"?\"); }
         );
     }
     let top = |s: &Shape| s.cy - s.h / 2.0;
-    // вторая колонка стороны стоит ниже первой: иначе они бы наехали
-    assert!(
-        top(pos) >= top(neg) + st.vgap - 1e-9 && top(other) >= top(zero) + st.vgap - 1e-9,
-        "вторая колонка стороны должна быть ниже первой"
-    );
-    let _ = pitch;
-    // шина: ровно один горизонтальный сегмент через ось, ниже всех
-    // колонок и от крайней левой до крайней правой. Абсциссу и
-    // высоту не проверяем: колонки уложены одна под другой, и шина
-    // зависит от их высоты
-    let col_bottom = l
-        .shapes
-        .iter()
-        .filter(|s| matches!(s.kind.as_str(), "io" | "act"))
-        .map(|s| s.cy + s.h / 2.0)
-        .fold(f64::MIN, f64::max);
+    for sh in [neg, zero, pos, other] {
+        assert!(
+            (top(sh) - top(neg)).abs() < 1e-9,
+            "все колонки на одном top0"
+        );
+    }
+    // шина: ровно один горизонтальный сегмент на merge_y, через 0,
+    // накрывает крайние колонки; merge_y = низ последнего ромба + 2g
+    let dsh_last = ifs[2];
+    let my = dsh_last.cy + dsh_last.h / 2.0 + 2.0 * st.grid;
     let bus: Vec<&crate::layout::Edge> = l
         .edges
         .iter()
         .filter(|e| {
             e.points
                 .windows(2)
-                .any(|w| (w[0].1 - w[1].1).abs() < 1e-9 && w[0].0 < 0.0 && w[1].0 > 0.0)
+                .any(|w| (w[0].1 - w[1].1).abs() < 1e-9 && (w[0].1 - my).abs() < 1e-9)
         })
         .collect();
-    assert_eq!(bus.len(), 1, "ровно одна шина через ось: {}", bus.len());
+    assert_eq!(bus.len(), 1, "ровно одна горизонтальная шина на merge_y");
     let xs: Vec<f64> = bus[0].points.iter().map(|p| p.0).collect();
-    let lo = xs.iter().cloned().fold(f64::MAX, f64::min);
-    let hi = xs.iter().cloned().fold(f64::MIN, f64::max);
     assert!(
-        lo <= -base + 1e-9 && hi >= base - 1e-9,
-        "шина не накрывает колонки: {xs:?}"
-    );
-    assert!(
-        bus[0].points[0].1 >= col_bottom - 1e-9,
-        "шина выше низа колонок"
+        xs.iter().cloned().fold(f64::MAX, f64::min) <= -(base + pitch) + 1e-9
+            && xs.iter().cloned().fold(f64::MIN, f64::max) >= base + pitch - 1e-9,
+        "шина от крайней левой до крайней правой колонки через 0: {xs:?}"
     );
     assert_eq!(crossings_ok(&l.shapes, &l.edges), Ok(()));
     assert!(overlaps_ok(&l.shapes));
@@ -1003,11 +1030,14 @@ else { printf(\"?\"); }
 fn elseif_cascade_two_links_empty_else() {
     let st = Style::default();
     let text = "\
-int a;
-if (a < 0) { printf(\"neg\"); }
-else if (a == 0) { printf(\"zero\"); }
+if a < 0
+    да: printf(\"neg\")
+    нет:
+    if a == 0
+        да: printf(\"zero\")
+        нет:
 ";
-    let nodes = nodes(text);
+    let nodes = crate::frontend::gvn::parse(text, &st, "ru").unwrap();
     let sizes = normalize(&nodes, &st);
     let l = layout(&nodes, &sizes, &st);
     let mut ifs: Vec<&Shape> = l.shapes.iter().filter(|s| s.kind == "if").collect();
@@ -1046,139 +1076,118 @@ else if (a == 0) { printf(\"zero\"); }
         "bx = {}, ожидался -up(base + nhe) = {want}",
         rail.points[1].0
     );
-    // шина слияния — ровно одна, и она ниже всех колонок. Абсциссу
-    // не проверяем: колонки укладываются одна под другой, и шина
-    // зависит от их высоты, а не от кегля ромба
-    let lowest = l
-        .shapes
-        .iter()
-        .filter(|s| s.kind == "io" || s.kind == "act")
-        .map(|s| s.cy + s.h / 2.0)
-        .fold(f64::MIN, f64::max);
-    let buses: Vec<f64> = l
+    let my = d2.cy + d2.h / 2.0 + 2.0 * st.grid;
+    let buses = l
         .edges
         .iter()
-        .filter_map(|e| {
+        .filter(|e| {
             e.points
                 .windows(2)
-                .find(|w| (w[0].1 - w[1].1).abs() < 1e-9 && w[0].0 < 0.0 && w[1].0 > 0.0)
-                .map(|w| w[0].1)
+                .any(|w| (w[0].1 - w[1].1).abs() < 1e-9 && (w[0].1 - my).abs() < 1e-9)
         })
-        .collect();
-    assert_eq!(buses.len(), 1, "ровно одна шина через ось: {buses:?}");
-    assert!(
-        buses[0] >= lowest - 1e-9,
-        "шина на {} выше низа колонок {lowest}",
-        buses[0]
-    );
+        .count();
+    assert_eq!(buses, 1, "ровно одна шина на merge_y");
     assert_eq!(crossings_ok(&l.shapes, &l.edges), Ok(()));
     assert!(overlaps_ok(&l.shapes));
     assert!(single_entry_ok(&l));
 }
 
-/// Ширина каскада не зависит от числа веток.
-///
-/// Раньше каждый ярус да-колонок отодвигался наружу на `pitch`, и
-/// восемь else-if давали 3677 pt. Поскольку масштаб общий на всю
-/// лабораторную работу, один такой файл ронял все листы до 15 %.
-/// Колонки теперь две и уложены одна под другой — проверяем, что
-/// длина цепочки на ширину не влияет.
+/// Большой переключатель (>= 5 кейсов): кейсы сеткой по два на ряд —
+/// все колонки на ±base, второй ряд ниже первого; ряды слиты в ствол.
 #[test]
-fn cascade_width_does_not_grow_with_branches() {
+fn switch_rows_grid_for_five_cases() {
     let st = Style::default();
-    let span = |text: &str| -> f64 {
-        let nodes = nodes(text);
-        let sizes = normalize(&nodes, &st);
-        let l = layout(&nodes, &sizes, &st);
-        let hi = l
-            .shapes
-            .iter()
-            .map(|s| s.cx + s.w / 2.0)
-            .fold(f64::MIN, f64::max);
-        let lo = l
-            .shapes
-            .iter()
-            .map(|s| s.cx - s.w / 2.0)
-            .fold(f64::MAX, f64::min);
-        hi - lo
-    };
-    let two = span("int a;\nif (a < 0) { printf(\"neg\"); }\nelse { printf(\"p\"); }\n");
-    let eight = span(
-        "int a;\n\
-if (a < 0) { printf(\"1\"); }\n\
-else if (a == 1) { printf(\"2\"); }\n\
-else if (a == 2) { printf(\"3\"); }\n\
-else if (a == 3) { printf(\"4\"); }\n\
-else if (a == 4) { printf(\"5\"); }\n\
-else if (a == 5) { printf(\"6\"); }\n\
-else if (a == 6) { printf(\"7\"); }\n\
-else { printf(\"8\"); }\n",
-    );
-    assert!(
-        eight <= two + 1e-6,
-        "ширина выросла с 2 веток до 8: {two} -> {eight}"
-    );
-}
-
-/// Диспетч: все кейсы на ОДНОЙ шине, в один ряд — и на трёх, и на
-/// пяти, и на двенадцати. Ряд на два кейса и столбик по одному кейсу в
-/// ряду пробовались ради ширины, но оба читаются хуже: пары ничего не
-/// значат, а столбик — не переключатель, а список. Ширину добирает лист
-/// (он альбомный), а слишком широкий диспетч режет порезка по ветвям —
-/// на каждом листе всё равно один ряд.
-#[test]
-fn switch_cases_share_one_line() {
-    let st = Style::default();
-    for cases in [3usize, 4, 5, 12] {
-        let text = dispatch(cases);
-        let nodes = nodes(&text);
-        let sizes = normalize(&nodes, &st);
-        let l = layout(&nodes, &sizes, &st);
-        assert_eq!(
-            rows_of_cases(&l),
-            1,
-            "{cases} кейсов: кейсы обязаны стоять на одной линии"
-        );
-        assert!(
-            crossings_ok(&l.shapes, &l.edges).is_ok(),
-            "{cases} кейсов: пересечения"
-        );
-        assert!(overlaps_ok(&l.shapes), "{cases} кейсов: фигуры наехали");
-    }
-}
-
-/// Сколько рядов заняли кейсы диспетча: одна шина — один ряд,
-/// столбик по одному кейсу в ряду — столько рядов, сколько кейсов. Ряд
-/// опознаём по ВЕРХНЕЙ кромке: плитки в ряду могут быть разной высоты
-/// (разная длина текста), и по центру они разъезжаются, хотя стоят на
-/// одной линии.
-///
-/// Считает ВСЕ плитки ввода-вывода, поэтому тестовые схемы не должны
-/// заканчиваться ещё одной `output`-плиткой — иначе она добавит ряд.
-fn rows_of_cases(l: &Layout) -> usize {
-    let mut tops: Vec<f64> = l
+    let text = "\
+if switch (d)
+    1: printf(\"один\"); break
+    2: printf(\"два\"); break
+    3: printf(\"три\"); break
+    4: printf(\"четыре\"); break
+    5: printf(\"пять\"); break
+output printf(d)
+";
+    let nodes = crate::frontend::gvn::parse(text, &st, "").unwrap();
+    let sizes = normalize(&nodes, &st);
+    let l = layout(&nodes, &sizes, &st);
+    let nhe = super::nhe_of(&sizes, &nodes, &st);
+    let dsh = l.shapes.iter().find(|s| s.kind == "if").unwrap();
+    let base = dsh.w / 2.0 + st.hgap + nhe;
+    let ios: Vec<&Shape> = l
         .shapes
         .iter()
-        .filter(|s| s.kind == "io")
-        .map(|s| s.cy - s.h / 2.0)
+        .filter(|s| s.kind == "io" && s.cx != 0.0)
         .collect();
-    tops.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    tops.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
-    tops.len()
+    assert_eq!(ios.len(), 5, "пять кейсов");
+    // все колонки строго на ±base — ширина сетки постоянна
+    for io in &ios {
+        assert!(
+            ((io.cx - base).abs() < 1e-9) || ((io.cx + base).abs() < 1e-9),
+            "кейс на ±base = ±{base}, а он в {}",
+            io.cx
+        );
+    }
+    // ряды: три кейса слева (1, 3, 5), два справа (2, 4); ряд 1 ниже ряда 0
+    let mut lefts: Vec<f64> = ios.iter().filter(|s| s.cx < 0.0).map(|s| s.cy).collect();
+    lefts.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert_eq!(lefts.len(), 3);
+    // кейсы больше не таскают плитки break, поэтому ряды опираются на
+    // высоту самой плитки кейса, а не ромба
+    let (_, io_h) = measure(&st, "io", "printf(\"один\")");
+    assert!(
+        lefts[1] > lefts[0] + io_h && lefts[2] > lefts[1] + io_h,
+        "каждый следующий ряд ниже предыдущего: {:?}",
+        lefts
+    );
+    // ширина схемы меньше, чем была бы одной шиной (2 яруса вширь)
+    let (minx, ..) = l.bounds;
+    let w = {
+        let xs: Vec<f64> = l
+            .shapes
+            .iter()
+            .flat_map(|s| [s.cx - s.w / 2.0, s.cx + s.w / 2.0])
+            .collect();
+        xs.iter().cloned().fold(f64::MAX, f64::min)
+    };
+    let _ = (minx, w);
+    assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
+    assert!(overlaps_ok(&l.shapes));
+    assert!(single_entry_ok(&l));
 }
 
-/// Схема-диспетч из `cases` кейсов без завершающей плитки: в
-/// rows_of_cases попадают только кейсы.
-/// Диспетчер на N кейсов. `int d;` объявляется с инициализатором: без
-/// него это пустое объявление, которое фронтенд не рисует, и тест ловит
-/// не схему, а пустую.
-fn dispatch(cases: usize) -> String {
-    let mut t = String::from("int d = 1;\nswitch (d) {\n");
-    for k in 1..=cases {
-        t.push_str(&format!("case {k}: printf(\"кейс {k}\"); break;\n"));
+/// Четыре кейса — ещё одна шина (как на доске), не сетка: все четыре
+/// кейса на одном верхнем ряду, на ±base и ±(base + pitch).
+#[test]
+fn switch_four_cases_stay_single_bus() {
+    let st = Style::default();
+    let text = "\
+if switch (d)
+    1: printf(\"один\"); break
+    2: printf(\"два\"); break
+    3: printf(\"три\"); break
+    4: printf(\"четыре\"); break
+output printf(d)
+";
+    let nodes = crate::frontend::gvn::parse(text, &st, "").unwrap();
+    let sizes = normalize(&nodes, &st);
+    let l = layout(&nodes, &sizes, &st);
+    let nhe = super::nhe_of(&sizes, &nodes, &st);
+    let dsh = l.shapes.iter().find(|s| s.kind == "if").unwrap();
+    let base = dsh.w / 2.0 + st.hgap + nhe;
+    let pitch = 2.0 * nhe + st.colgap;
+    let want = [-base - pitch, -base, base, base + pitch];
+    let mut got: Vec<f64> = l
+        .shapes
+        .iter()
+        .filter(|s| s.kind == "io" && s.cx != 0.0)
+        .map(|s| s.cx)
+        .collect();
+    got.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    for (g, w) in got.iter().zip(want.iter()) {
+        assert!((g - w).abs() < 1e-9, "cx {g}, ожидалось {w}");
     }
-    t.push('}');
-    t
+    assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
+    assert!(overlaps_ok(&l.shapes));
+    assert!(single_entry_ok(&l));
 }
 
 /// Рельса пустой ветки не разлетается за широкой левой колонкой:
@@ -1187,11 +1196,12 @@ fn dispatch(cases: usize) -> String {
 fn empty_rail_hugs_despite_wide_left_column() {
     let st = Style::default();
     let text = "\
-int a;
-if (a > 0) { printf(\"очень широкий текст printf\"); }
-printf(\"1\");
+if a > 0
+    да: printf(\"очень широкий текст printf\")
+    нет:
+output printf(1)
 ";
-    let nodes = nodes(text);
+    let nodes = crate::frontend::gvn::parse(text, &st, "").unwrap();
     let sizes = normalize(&nodes, &st);
     let l = layout(&nodes, &sizes, &st);
     let dsh = l.shapes.iter().find(|s| s.kind == "if").unwrap();
@@ -1211,95 +1221,123 @@ printf(\"1\");
     assert!(single_entry_ok(&l));
 }
 
-/// break — обычный прямоугольник процесса, без рельсы (ADR-0004).
-///
-/// Проверяем все три контекста, где break встречается в коде студента:
-/// прямо в теле цикла, в ветке if внутри цикла и в кейсе switch.
-/// Везде это видимый блок «break», поток после него идёт обычным
-/// порядком, и выхода из цикла на схеме не появляется.
+/// Репорт: ветка «да» из одного break рисовала вторую линию к слиянию
+/// if и стрелку в пустоту. Теперь колонка без плиток не дорисовывается
+/// к слиянию, вход без стрелки, выход — только рельса под цикл.
 #[test]
-fn break_is_a_plain_process_block_everywhere() {
+fn break_only_branch_no_merge_descent() {
     let st = Style::default();
-    let parse = |t: &str| lay(&nodes(t));
-    let count_break = |l: &Layout| {
-        l.shapes
+    let text = "\
+while true
+    input scanf(\"%d\", &a)
+    if a > 0
+        yes:
+        break
+        no:
+        printf(\"нет\")
+output printf(\"далее\")
+";
+    let nodes = crate::frontend::gvn::parse(text, &st, "").unwrap();
+    let sizes = normalize(&nodes, &st);
+    let l = lay(&nodes);
+    assert!(
+        !l.shapes
             .iter()
-            .filter(|sh| sh.lines == vec!["break".to_string()])
-            .count()
-    };
-    let header = |l: &Layout| -> String {
-        l.shapes
-            .iter()
-            .find(|sh| sh.kind == "loop_begin")
-            .map(|sh| sh.lines.join(" "))
-            .unwrap_or_default()
-    };
-    // рельса выхода из цикла: вертикаль в левом канале мимо нижней
-    // трапеции. Её быть не должно ни в одной из схем.
-    let has_exit_rail = |l: &Layout| -> bool {
-        let Some(le) = l.shapes.iter().find(|sh| sh.kind == "loop_end") else {
-            return false;
-        };
-        let merge = le.cy + le.h / 2.0 + st.mgap;
-        l.edges.iter().any(|e| {
-            e.points.iter().any(|p| p.0 < le.cx - le.w / 2.0)
+            .any(|sh| sh.lines == vec!["break".to_string()]),
+        "блок break не рисуется: {:?}",
+        l.shapes.iter().map(|s| s.lines.clone()).collect::<Vec<_>>()
+    );
+    let dsh = l.shapes.iter().find(|s| s.kind == "if").unwrap();
+    let nhe = super::nhe_of(&sizes, &nodes, &st);
+    let base = dsh.w / 2.0 + st.hgap + nhe;
+    let top2 = dsh.cy + dsh.h / 2.0 + st.vgap;
+    let le = l.shapes.iter().find(|sh| sh.kind == "loop_end").unwrap();
+    let merge_y = le.cy + le.h / 2.0 + st.mgap;
+    // вход в «да»-колонку без стрелки
+    let entry = l
+        .edges
+        .iter()
+        .find(|e| {
+            let last = e.points.last().unwrap();
+            (last.0 + base).abs() < 1e-9 && (last.1 - top2).abs() < 1e-9
+        })
+        .expect("вход в да-колонку");
+    assert!(!entry.arrow, "стрелки в пустую колонку нет");
+    // ложный спуск колонки к слиянию исчез: вертикали на x = -base
+    // ниже верха колонки нет
+    let bogus = l.edges.iter().any(|e| {
+        e.points.windows(2).any(|w| {
+            let (p, q) = (w[0], w[1]);
+            (p.0 + base).abs() < 1e-9 && (q.0 + base).abs() < 1e-9 && q.1.max(p.1) > top2 + 1e-9
+        })
+    });
+    assert!(!bogus, "спуск rail-колонки к шине слияния не рисуется");
+    // рельса break: левый канал ниже loop_end, T-стык на продолжении
+    let (lw, _) = measure(&st, "loop", "while true");
+    let rail = l
+        .edges
+        .iter()
+        .find(|e| {
+            e.points.iter().any(|p| p.0 < -lw / 2.0)
                 && e.points
                     .last()
-                    .is_some_and(|p| p.0 == 0.0 && (p.1 - merge).abs() < 1e-9)
+                    .map(|p| p.0 == 0.0 && (p.1 - merge_y).abs() < 1e-9)
+                    .unwrap_or(false)
         })
-    };
-
-    // 1. прямо в теле цикла
-    let a = parse("int i, a, b;\nwhile (i < 5) { a = 1; break; b = 2; }\nprintf(1);\n");
-    assert_eq!(count_break(&a), 1, "break виден прямоугольником");
-    assert_eq!(header(&a), "while i < 5");
-    assert!(!has_exit_rail(&a), "рельсы выхода из цикла нет");
-    // инструкция после break рисуется: break теперь обычный блок, а не
-    // обрыв колонки
+        .expect("рельса break в левом канале");
+    let last = rail.points.last().unwrap();
     assert!(
-        a.shapes
-            .iter()
-            .any(|sh| sh.lines == vec!["b = 2".to_string()]),
-        "после break колонка продолжается как обычно"
+        last.0 == 0.0 && (last.1 - merge_y).abs() < 1e-9,
+        "рельса приходит на выход цикла: {last:?} vs {merge_y}"
     );
+    assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
+    assert!(single_entry_ok(&l));
+}
 
-    // 2. в ветке if внутри цикла
-    let b =
-        parse("int i;\nwhile (i < 5) { if (i > 2) { break; } else { i = i + 1; } }\nprintf(1);\n");
-    assert_eq!(count_break(&b), 1, "break в ветке виден");
-    assert!(!has_exit_rail(&b), "рельсы выхода из цикла нет");
-    assert!(crossings_ok(&b.shapes, &b.edges).is_ok());
-
-    // 3. в кейсе switch
-    let c = parse(
-        "int k;\nswitch (k) {\ncase 1: printf(\"a\"); break;\ncase 2: printf(\"b\"); break;\n}\nprintf(1);\n",
+/// Репорт: break в кейсе switch внутри цикла считался выходом из ЦИКЛА.
+/// В C он покидает только switch — схема с break обязана совпадать
+/// со схемой без него.
+#[test]
+fn case_break_inside_loop_changes_nothing() {
+    let st = Style::default();
+    let with_b = "\
+while i < 5
+    if switch (a)
+        1: printf(\"один\"); break
+        2: printf(\"два\"); break
+output printf(\"далее\")
+";
+    let without = "\
+while i < 5
+    if switch (a)
+        1: printf(\"один\")
+        2: printf(\"два\")
+output printf(\"далее\")
+";
+    let a = lay(&crate::frontend::gvn::parse(with_b, &st, "").unwrap());
+    let b = lay(&crate::frontend::gvn::parse(without, &st, "").unwrap());
+    assert_eq!(a.shapes, b.shapes, "фигуры совпадают");
+    assert_eq!(
+        a.edges, b.edges,
+        "рёбра совпадают: break растворён в слиянии кейса"
     );
-    assert_eq!(count_break(&c), 2, "break виден в каждом кейсе");
-    assert!(crossings_ok(&c.shapes, &c.edges).is_ok());
-    assert!(single_entry_ok(&c));
+}
 
-    // прямоугольник break — обычный процесс, а не отдельный символ
-    let brk = a
+/// То же на верхнем уровне: раньше break в кейсе рисовался прямоугольником.
+#[test]
+fn top_level_case_break_dissolves() {
+    let st = Style::default();
+    let with_b = "if switch (a)\n    1: printf(\"один\"); break\n    2: printf(\"два\"); break\noutput printf(\"k\")\n";
+    let without =
+        "if switch (a)\n    1: printf(\"один\")\n    2: printf(\"два\")\noutput printf(\"k\")\n";
+    let a = lay(&crate::frontend::gvn::parse(with_b, &st, "").unwrap());
+    let b = lay(&crate::frontend::gvn::parse(without, &st, "").unwrap());
+    assert!(!a
         .shapes
         .iter()
-        .find(|sh| sh.lines == vec!["break".to_string()])
-        .unwrap();
-    assert_eq!(brk.kind, "act", "break рисуется как процесс");
-    let act_w = a
-        .shapes
-        .iter()
-        .find(|sh| sh.lines == vec!["a = 1".to_string()])
-        .unwrap()
-        .w;
-    assert!(
-        (brk.w - act_w).abs() < 1e-9,
-        "блок break той же ширины, что любой процесс: {} против {act_w}",
-        brk.w
-    );
-
-    // и continue при этом остался рельсой — он не выход, а возврат
-    let d = parse("int i;\nwhile (i < 5) { continue; }\nprintf(1);\n");
-    assert_eq!(count_break(&d), 0, "continue не рисуется прямоугольником");
+        .any(|sh| sh.lines == vec!["break".to_string()]));
+    assert_eq!(a.shapes, b.shapes);
+    assert_eq!(a.edges, b.edges);
 }
 
 /// continue: рельса к выходу loop_end (следующая итерация); мёртвый
@@ -1308,11 +1346,13 @@ fn break_is_a_plain_process_block_everywhere() {
 fn continue_rails_to_loop_end_output() {
     let st = Style::default();
     let text = "\
-int i, a, b;
-while (i < 5) { a = 1; continue; b = 2; }
-printf(\"далее\");
+while i < 5
+    a = 1
+    continue
+    b = 2
+output printf(\"далее\")
 ";
-    let nodes = nodes(text);
+    let nodes = crate::frontend::gvn::parse(text, &st, "").unwrap();
     let l = lay(&nodes);
     assert!(!l
         .shapes
@@ -1335,100 +1375,4 @@ printf(\"далее\");
         "T-стык на выходе loop_end, не ниже: {yj} vs {merge_y}"
     );
     assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
-}
-
-/// «Нет» без тела садится на ствол НИЖЕ нижней вершины ромба. Раньше
-/// рельса пустой ветки приходила ровно в вершину: линия втыкалась в
-/// угол фигуры, и стык читался как «идёт в ромб».
-#[test]
-fn empty_branch_joins_below_the_diamond() {
-    let nodes = nodes(
-        "int a;\nif (scanf(\"%d\", &a) != 1) { printf(\"плохо\"); return 1; }\nprintf(\"ok\");\n",
-    );
-    let l = lay(&nodes);
-    let d = l.shapes.iter().find(|sh| sh.kind == "if").expect("ромб");
-    let vb = (d.cx, d.cy + d.h / 2.0);
-    let at_vertex: Vec<&crate::layout::Edge> = l
-        .edges
-        .iter()
-        .filter(|e| {
-            e.points
-                .iter()
-                .any(|p| (p.0 - vb.0).abs() < 1e-6 && (p.1 - vb.1).abs() < 1e-6)
-        })
-        .collect();
-    assert_eq!(
-        at_vertex.len(),
-        1,
-        "в нижней вершине ромба сходится ровно один отрезок (ствол продолжения), а не {}",
-        at_vertex.len()
-    );
-}
-
-/// Пустое тело цикла (`while (getchar() != '\n');`) — ровно одна
-/// стрелка: из верхней трапеции прямо в нижнюю. Раньше рисовались две:
-/// вход «в тело» вставал в середине прямой линии, и читатель видел два
-/// наконечника подряд на одном отрезке (пользователь обвёл такой стык).
-#[test]
-fn empty_loop_body_has_one_arrow() {
-    let nodes = nodes("int c;\nwhile (getchar() != '\\n');\nprintf(\"ok\");\n");
-    let l = lay(&nodes);
-    let lb = l
-        .shapes
-        .iter()
-        .find(|sh| sh.kind == "loop_begin")
-        .expect("верхняя трапеция");
-    let le = l
-        .shapes
-        .iter()
-        .find(|sh| sh.kind == "loop_end")
-        .expect("нижняя трапеция");
-    let top = lb.cy + lb.h / 2.0;
-    let bot = le.cy - le.h / 2.0;
-    // вход в цикл сверху и выход снизу лежат ВНЕ промежутка трапеций
-    let inside: Vec<f64> = l
-        .edges
-        .iter()
-        .filter(|e| e.arrow)
-        .map(|e| e.points[e.points.len() - 1])
-        .filter(|p| p.0.abs() < 1e-9 && p.1 > top + 1e-9 && p.1 <= bot + 1e-9)
-        .map(|p| p.1)
-        .collect();
-    assert_eq!(
-        inside.len(),
-        1,
-        "между трапециями пустого цикла одна стрелка, а не две: {inside:?}"
-    );
-    assert!(
-        (inside[0] - bot).abs() < 1e-9,
-        "стрелка стоит у входа в нижнюю трапецию: {} vs {bot}",
-        inside[0]
-    );
-}
-
-/// Обрывы линий — одной проверкой: конец ребра либо касается фигуры,
-/// либо лежит на другом ребре (T-стык). Ловит три разные по причине,
-/// но одинаковые по виду обрыва: коридор каскада, свисавший над первой
-/// ветвью и под последней горизонталью; спуск верхней колонки,
-/// кончавшийся в пустоте над блоком нижней; конец на границе листа,
-/// оставшийся без кружка-соединителя.
-#[test]
-fn no_dangling_line_ends() {
-    let st = Style::default();
-    for text in [
-        "int a, b;\nif (scanf(\"%d %d\", &a, &b) != 2) { printf(\"bad\"); }\nelse if (a == b) { printf(\"eq\"); }\nelse { printf(\"lt\"); }\n",
-        "int a;\nif (a < 0) { printf(\"neg\"); }\nelse if (a == 0) { printf(\"zero\"); }\nelse if (a > 0) { printf(\"pos\"); }\nelse { printf(\"?\"); }\n",
-        "int a;\nif (a < 0) { printf(\"n\"); }\nelse if (a == 0) { printf(\"z\"); }\n",
-        "int i;\nfor (i = 0; i < 3; i++) { if (i == 1) { printf(\"y\"); } else { printf(\"n\"); } }\n",
-        "int k;\nswitch (k) {\ncase 1: printf(\"a\"); break;\ncase 2: printf(\"b\"); break;\ndefault: printf(\"c\");\n}\n",
-    ] {
-        let nodes = nodes(text);
-        let sizes = normalize(&nodes, &st);
-        let l = layout(&nodes, &sizes, &st);
-        assert_eq!(dangling_ok(&l), Ok(()), "цельная схема: {text}");
-        for part in split_scheme(nodes, &sizes, &st).0 {
-            let p = layout(&part, &sizes, &st);
-            assert_eq!(dangling_ok(&p), Ok(()), "лист после разреза: {text}");
-        }
-    }
 }

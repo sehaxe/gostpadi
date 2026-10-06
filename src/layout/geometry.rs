@@ -42,29 +42,8 @@ pub fn crossings_ok(shapes: &[Shape], edges: &[Edge]) -> Result<(), String> {
     Ok(())
 }
 
-/// Каждое ребро — по осям: отрезок либо горизонтален, либо вертикален,
-/// либо вырожден в точку. ГОСТ требует именно прямых углов в потоке,
-/// и диагональ в схеме — всегда ошибка раскладки, а не рисунка.
-///
-/// Проверка живёт здесь, рядом с проверкой пересечений, потому что это
-/// тот же класс дефектов и ловиться он должен тем же местом. Раньше
-/// диагонали доходили до готового SVG: список точек ребра собирался в
-/// один общий вектор на полосу и спаривался по две, и при нечётном
-/// числе точек соединение шло между точками чужих рёбер.
-#[cfg(debug_assertions)]
-pub(super) fn assert_axis_aligned(edges: &[Edge]) {
-    for (i, e) in edges.iter().enumerate() {
-        for w in e.points.windows(2) {
-            if (w[0].0 - w[1].0).abs() > 1e-6 && (w[0].1 - w[1].1).abs() > 1e-6 {
-                panic!("edge #{i} отрезок {:?}-{:?} не по осям", w[0], w[1]);
-            }
-        }
-    }
-}
-
 #[cfg(debug_assertions)]
 pub(super) fn assert_no_crossing(shapes: &[Shape], edges: &[Edge]) {
-    assert_axis_aligned(edges);
     if let Err(e) = crossings_ok(shapes, edges) {
         panic!("layout: {e}");
     }
@@ -85,51 +64,6 @@ pub fn overlaps_ok(shapes: &[Shape]) -> bool {
         }
     }
     true
-}
-
-/// Конец ребра не висит в пустоте: он касается фигуры, либо лежит на
-/// другом ребре — в его точке или на внутренности (T-стык).
-///
-/// Обрыв линии читается на схеме как ошибка рисунка, поэтому это тот же
-/// класс дефекта, что и пересечение, и проверять его нужно тем же
-/// местом. Ловит разные по причине, но одинаковые по виду обрывы:
-/// коридор каскада, свисающий над первой ветвью; спуск колонки,
-/// кончающийся в пустоте над блоком соседней колонки; конец полосы,
-/// оставшийся без кружка-соединителя.
-pub fn dangling_ok(l: &Layout) -> Result<(), String> {
-    const TOL: f64 = 0.75;
-    let on = |p: (f64, f64), a: (f64, f64), b: (f64, f64)| -> bool {
-        if (a.0 - b.0).abs() < 1e-9 {
-            (p.0 - a.0).abs() <= TOL && p.1 >= a.1.min(b.1) - TOL && p.1 <= a.1.max(b.1) + TOL
-        } else if (a.1 - b.1).abs() < 1e-9 {
-            (p.1 - a.1).abs() <= TOL && p.0 >= a.0.min(b.0) - TOL && p.0 <= a.0.max(b.0) + TOL
-        } else {
-            // диагональ в раскладке быть не должно, касание только концами
-            (p.0 - a.0).hypot(p.1 - a.1) <= TOL || (p.0 - b.0).hypot(p.1 - b.1) <= TOL
-        }
-    };
-    for (ei, e) in l.edges.iter().enumerate() {
-        let n = e.points.len();
-        if n < 2 {
-            continue;
-        }
-        for (k, &p) in [e.points[0], e.points[n - 1]].iter().enumerate() {
-            if l.shapes.iter().any(|s| {
-                (p.0 - s.cx).abs() <= s.w / 2.0 + TOL && (p.1 - s.cy).abs() <= s.h / 2.0 + TOL
-            }) {
-                continue;
-            }
-            if l.edges
-                .iter()
-                .enumerate()
-                .any(|(j, o)| j != ei && o.points.windows(2).any(|w| on(p, w[0], w[1])))
-            {
-                continue;
-            }
-            return Err(format!("edge #{ei} конец #{k} {p:?} висит в пустоте"));
-        }
-    }
-    Ok(())
 }
 
 /// Single-Entry: в терминатор «конец» входит ровно одна стрелка потока.

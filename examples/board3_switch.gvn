@@ -1,0 +1,7 @@
+# Switch: one column per case, all cases hang
+# on the horizontal line from the bottom corner
+input scanf("%d", &a)
+if switch (a)
+    1: printf(y); break
+    2: printf(z); break
+    default: a = 10; break
