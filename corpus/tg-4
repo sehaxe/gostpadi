@@ -1,0 +1,61 @@
+#include <stdio.h>
+#include <stdbool.h>
+int main()
+{
+	bool keep = true;
+
+	while (keep) 
+	{
+		int a;
+
+		printf("Vvedite luboe chslo ot 0 do 10: ");
+		
+		if (scanf_s("%d", &a) != 1) 
+		{
+			while (getchar() != '\n');
+			printf("Oshibka vvoda. Poprobuyte eshche raz.\n");
+			continue;
+		}
+		if (a > 10 || a < 0)
+		{
+			printf("Chislo ne v diapazone\n ");
+		}
+
+		switch (a) {
+		case 0:  
+			printf("Chislo nol\n");     
+			break;
+		case 1:  
+			printf("Chislo odin\n");    
+			break;
+		case 2:  
+			printf("Chislo dva\n");     
+			break;
+		case 3:  
+			printf("Chislo tri\n");     
+			break;
+		case 4:  
+			printf("Chislo chetiri\n"); 
+			break;
+		case 5:  
+			printf("Chislo piat\n");    
+			break;
+		case 6:  
+			printf("Chislo shest\n");   
+			break;
+		case 7:  
+			printf("Chislo sem\n");     
+			break;
+		case 8: 
+			printf("Chislo vosem\n");   
+			break;
+		case 9:  
+			printf("Chislo deviat\n");  
+			break;
+		case 10: 
+			printf("Chislo desiat\n");  
+			break;
+		}
+	}
+	return 0;
+}

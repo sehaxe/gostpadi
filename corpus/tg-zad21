@@ -1,0 +1,44 @@
+#include <stdio.h>
+#include <stdbool.h>
+
+int main() {
+    // инициализируем
+    int sum;
+    int elems[10];
+    // проверка
+    while(true){
+        printf("enter your sum (10 < sum < 50)\n");
+        scanf_s("%d", &sum);
+        if (sum > 10 && sum < 50) {
+            break;
+        } 
+        else {
+            printf("enter correct...\n");
+        }
+    // сам рассчет 
+    }
+    if (sum % 2 == 0){
+        printf("starting kalkulating...\n");
+        for(int i = 0; i < 10; i++){
+            if((sum - 5) >= (10 - (i+1))){
+                elems[i] = 5;
+                sum -= 5;
+            }
+            else if((sum - 3) >= (10 - (i+1))){
+                elems[i] = 3;
+                sum -= 3;
+            }
+            else{
+                elems[i] = 1;
+                sum--;
+            }
+        }
+        for (int i = 0; i < 10; i++){
+            printf("%d ", elems[i]);
+        }
+    }
+    else{
+        printf("ne razlozhit");
+    }
+    return 0;
+}

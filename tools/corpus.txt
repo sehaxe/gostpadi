@@ -1,0 +1,34 @@
+lab1-h1 <- /home/sehaxe/ОАиП-Лаба1/home/1/main.c
+lab1-anna1 <- /home/sehaxe/ОАиП-Лаба1/anna/1/main.c
+lab1-h2 <- /home/sehaxe/ОАиП-Лаба1/home/2/main.c
+lab1-anna2 <- /home/sehaxe/ОАиП-Лаба1/anna/2/main.c
+lab1-anna2-scheme.gvn <- /home/sehaxe/ОАиП-Лаба1/anna/2/scheme.gvn
+lab1-h3 <- /home/sehaxe/ОАиП-Лаба1/home/3/main.c
+lab1-anna3 <- /home/sehaxe/ОАиП-Лаба1/anna/3/main.c
+lab1-anna3-scheme.gvn <- /home/sehaxe/ОАиП-Лаба1/anna/3/scheme.gvn
+lab1-h4 <- /home/sehaxe/ОАиП-Лаба1/home/4/main.c
+lab1-anna4 <- /home/sehaxe/ОАиП-Лаба1/anna/4/main.c
+lab1-anna4-scheme.gvn <- /home/sehaxe/ОАиП-Лаба1/anna/4/scheme.gvn
+lab2-h1 <- /home/sehaxe/OAiP-Laba2/home/1/main.c
+oaiplab2-1 <- /home/sehaxe/oaiplab2/1.c
+lab2-h2 <- /home/sehaxe/OAiP-Laba2/home/2/main.c
+oaiplab2-2 <- /home/sehaxe/oaiplab2/2.c
+lab2-h3 <- /home/sehaxe/OAiP-Laba2/home/3/main.c
+oaiplab2-3 <- /home/sehaxe/oaiplab2/3.c
+oaiplab2-shedevrok <- /home/sehaxe/oaiplab2/Шедеврокод.c
+tg-1zad <- /home/sehaxe/Downloads/Telegram Desktop/1 задание.c
+tg-2zad <- /home/sehaxe/Downloads/Telegram Desktop/2 задание.c
+tg-3zad <- /home/sehaxe/Downloads/Telegram Desktop/3 задание.c
+tg-4zad <- /home/sehaxe/Downloads/Telegram Desktop/4 задание.c
+tg-4 <- /home/sehaxe/Downloads/Telegram Desktop/4.c
+tg-kapec <- /home/sehaxe/Downloads/Telegram Desktop/kapec.c
+tg-kapec3 <- /home/sehaxe/Downloads/Telegram Desktop/kapec3.c
+tg-lab21 <- /home/sehaxe/Downloads/Telegram Desktop/lab2_1.c
+tg-lab22 <- /home/sehaxe/Downloads/Telegram Desktop/lab2_2.c
+tg-lab23 <- /home/sehaxe/Downloads/Telegram Desktop/lab2_3.c
+tg-zad21 <- /home/sehaxe/Downloads/Telegram Desktop/zad2.1.c
+strany.c <- pasted 06.10
+nomer-avto.c <- pasted 06.10
+ctg-taylor.c <- pasted 06.10
+menu.c <- pasted 06.10
+firsttask.h <- pasted 06.10

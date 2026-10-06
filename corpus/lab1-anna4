@@ -1,0 +1,52 @@
+#include <stdio.h>
+void main()
+{
+    int a;
+    printf("Vvedite nomer mesyatsa: ");
+    if (scanf("%d", &a) != 1 || a < 1 || a > 12)
+    {
+        printf("O net, moi kod vse propalooo");
+    }
+    else
+    {
+        switch (a)
+        {
+        case 1:
+            printf("Yanvar\n");
+            break;
+        case 2:
+            printf("Fevral\n");
+            break;
+        case 3:
+            printf("Mart\n");
+            break;
+        case 4:
+            printf("Aprel\n");
+            break;
+        case 5:
+            printf("May\n");
+            break;
+        case 6:
+            printf("Iyun\n");
+            break;
+        case 7:
+            printf("Iyul\n");
+            break;
+        case 8:
+            printf("Avgust\n");
+            break;
+        case 9:
+            printf("Sentyabr\n");
+            break;
+        case 10:
+            printf("Oktyabr\n");
+            break;
+        case 11:
+            printf("Noyabr\n");
+            break;
+        case 12:
+            printf("Dekabr\n");
+            break;
+        }
+    }
+}

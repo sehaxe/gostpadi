@@ -1,0 +1,11 @@
+#include <stdio.h>
+int main () {
+int number, a, b;
+    for (number=10; number <=99; number++) {
+        a=number/10;
+        b=number%10;
+        if (a*a+b*b==3*a*b+1 && number==7*(a+b)+6)
+        printf("%d", number);
+    }
+    return 0;
+}

@@ -1,0 +1,42 @@
+#include <stdio.h>
+
+#define cube(x) ((x)*(x)*(x))
+
+int main()
+{
+  int n, i, j, k, c;
+  int ok = 0;
+
+  while (!ok)
+  {
+    printf("Введите число: ");
+    ok = scanf("%d", &n) == 1 && n > 1;
+
+    if (!ok)
+    {
+      printf("Ашыбка, введите положительное число\n");
+      while ((c = getchar()) != '\n' && c != EOF);
+    }
+
+  }
+
+  k = 0;
+  i = 0;
+
+  while (cube(i) < n)
+  {
+    j = i;
+    while (cube(j) <= n)
+    {
+      if (n == cube(i) + cube(j))
+      {
+        k++;
+      }
+      j++;
+    }
+    i++;
+  }
+
+  printf("Кол-во способов: %d", k);
+  return 0;
+}

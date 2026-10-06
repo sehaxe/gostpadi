@@ -1,0 +1,17 @@
+input scanf("%d", &a)
+if a < 1 || a > 12
+    да -> end: printf("O net...")
+    нет:
+switch (a)
+    1: printf("Yanvar")
+    2: printf("Fevral")
+    3: printf("Mart")
+    4: printf("Aprel")
+    5: printf("May")
+    6: printf("Iyun")
+    7: printf("Iyul")
+    8: printf("Avgust")
+    9: printf("Sentyabr")
+    10: printf("Oktyabr")
+    11: printf("Noyabr")
+    12: printf("Dekabr")

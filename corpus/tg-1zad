@@ -1,0 +1,16 @@
+#include <stdio.h>
+#include <math.h>
+#define PI 3.141592
+void main()
+{
+    double h, r, Sb, Sp, V;
+    printf("Vvedite visotu cilindra: ");
+    scanf("%lf", &h);
+    printf("Vvedite radius cilindra: ");
+    scanf("%lf", &r);
+
+    Sb = 2 * PI * r * h;
+    Sp = 2 * PI * r * (r + h);
+    V = PI * r * r * h;
+    printf("Sb: %.2lf\nSp: %.2lf\nV: %.2lf", Sb, Sp, V);
+}

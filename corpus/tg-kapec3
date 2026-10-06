@@ -1,0 +1,36 @@
+#include <stdio.h>
+#include <math.h>
+
+int main() {
+    double a, b, c;
+    double ca, ab, bc;
+    printf("Vvedite pervoe chislo: \n");
+   while (scanf("%lf" , &a ) !=1) {
+    printf("Oshibka! Vvedite chislo: ");
+
+    while (getchar() != '\n');
+   }
+    printf("Vvedite vtoroie chislo: \n");
+   while (scanf("%lf", &b) !=1) {
+    printf("Oshibka! Vvedite chislo: ");
+
+    while (getchar() != '\n');
+   }
+    printf("Vvedite tretie chislo: \n");
+   while (scanf("%lf", &c) !=1) {
+    printf("Oshibka! Vvedite  chislo: ");
+
+    while (getchar() != '\n');
+   }
+
+   ab=(a+b)/2;
+   bc=(b+c)/2;
+   ca=(c+a)/2;
+   
+    if (ab==c || bc==a || ca==b) {
+        printf ("Mozhno");
+    } else {
+        printf("Nelzia");
+    }
+    return 0;
+}

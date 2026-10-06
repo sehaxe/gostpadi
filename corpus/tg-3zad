@@ -1,0 +1,20 @@
+#include <stdio.h>
+void main()
+{
+    int a, b, c;
+    printf("Vvedite chislo a: ");
+    scanf("%d", &a);
+    printf("Vvedite chislo b: ");
+    scanf("%d", &b);
+    printf("Vvedite chislo c: ");
+    scanf("%d", &c);
+
+    if (a == -b)
+        printf("%d", c);
+    else if (a == -c)
+        printf("%d", b);
+    else if (b == -c)
+        printf("%d", a);
+    else
+        printf("Net");
+}

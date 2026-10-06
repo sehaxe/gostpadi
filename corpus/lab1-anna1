@@ -1,0 +1,19 @@
+#include <stdio.h>
+#include <math.h>
+void main()
+{
+    const float PI = 3.141592;
+    double h, r, Sb, Sp, V;
+    printf("Vvedite visotu i radius cilindra: ");
+    if (scanf("%lf %lf", &h, &r) != 2 || h <= 0 || r <= 0)
+    {
+        printf("O net, moi kod vse propalooo");
+    }
+    else
+    {
+        Sb = 2 * PI * r * h;
+        Sp = 2 * PI * r * (r + h);
+        V = PI * r * r * h;
+        printf("Sb: %.2lf\nSp: %.2lf\nV: %.2lf", Sb, Sp, V);
+    }
+}

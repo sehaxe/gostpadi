@@ -1,0 +1,7 @@
+input scanf("%d %d", &a, &b)
+if scanf(...) != 2
+    да -> end: printf("O net...")
+    нет:
+if a == b
+    да: printf("Chisla a i b ravni")
+    нет: printf("Net")

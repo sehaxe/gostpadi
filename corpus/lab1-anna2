@@ -1,0 +1,19 @@
+#include <stdio.h>
+void main()
+{
+
+    int a, b;
+    printf("Vvedite chislo a, b: ");
+    if (scanf("%d %d", &a, &b) != 2)
+    {
+        printf("O net, moi kod vse propalooo");
+    }
+    else if (a == b)
+    {
+        printf(" Chisla a i b ravni");
+    }
+    else
+    {
+        printf("Net");
+    }
+}

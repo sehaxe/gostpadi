@@ -1,0 +1,50 @@
+#include <stdio.h>
+
+#define COPRIME_TRUE 1
+#define COPRIME_FALSE 0
+#define MIN_DIVISOR 2
+int main()
+{
+    int c, d, q, p, min_num, coprime;
+    int ok = 0;
+    while (!ok)
+    {
+        printf("Введите числа P и Q: \n");
+        ok = scanf("%d %d", &p, &q) == 2;
+
+        if (!ok)
+        {
+            printf("Ашыбка, введите число\n");
+            while ((c = getchar()) != '\n' && c != EOF);
+        }
+    }
+
+    if (p < q)
+    {
+        min_num = p;
+    }
+    else
+    {
+        min_num = q;
+    }
+
+    coprime = COPRIME_TRUE;
+    for (d = MIN_DIVISOR; d <= min_num; d++)
+    {
+        if (p % d == 0 && q % d == 0)
+        {
+            coprime = COPRIME_FALSE;
+            break;
+        }
+    }
+
+    if (coprime)
+    {
+        printf("Числа взаимно простые\n");
+    }
+    else
+    {
+        printf("Числа не взаимно простые\n");
+    }
+    return 0;
+}

@@ -1,0 +1,15 @@
+#include <stdio.h>
+int main () {
+int m, n, z;
+double sum = 0;
+printf ("Vvedite m i n - dva naturalnih chisla ");
+while (scanf ("%d %d", &m, &n) !=2 || m<=0 || n <=0 || m>=n) {
+    printf("Ohibka, vvedite dva naturalnih chisla, m<n ");
+    while (getchar () != '\n'); 
+}
+ for (z=m; z<=(m+n); z++) {
+    sum+= 1.0/z;
+ }
+ printf ("Rezultat = %lf", sum);
+    return 0;
+}

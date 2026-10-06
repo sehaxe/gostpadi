@@ -1,0 +1,15 @@
+#include <stdio.h>
+void main()
+{
+    
+ int a, b;
+ printf("Vvedite chislo a: ");
+ scanf("%d", &a);
+ printf("Vvedite chislo b: ");
+  scanf("%d", &b);
+  if (a==b)
+  printf(" Chisla a i b ravni");
+  else 
+  printf("Net");
+
+}

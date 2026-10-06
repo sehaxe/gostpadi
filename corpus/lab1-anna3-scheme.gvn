@@ -1,0 +1,13 @@
+input scanf("%f %f %f", ...)
+if scanf(...) != 3
+    да -> end: printf("O net...")
+    нет:
+if a == -b
+    да: printf("%.2f — третье число (c)")
+    нет:
+if a == -c
+    да: printf("%.2f — третье число (b)")
+    нет:
+if b == -c
+    да: printf("%.2f — третье число (a)")
+    нет: printf("Net")

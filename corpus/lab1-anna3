@@ -1,0 +1,26 @@
+#include <stdio.h>
+void main()
+{
+    float a, b, c;
+    printf("Vvedite chislo a, b, c: ");
+    if (scanf("%f %f %f", &a, &b, &c) != 3)
+    {
+        printf("O net, moi kod vse propalooo");
+    }
+    else if (a == -b)
+    {
+        printf("%.2f", c);
+    }
+    else if (a == -c)
+    {
+        printf("%.2f", b);
+    }
+    else if (b == -c)
+    {
+        printf("%.2f", a);
+    }
+    else
+    {
+        printf("Net");
+    }
+}
