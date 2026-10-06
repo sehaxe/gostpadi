@@ -470,7 +470,10 @@
         <button id="dcollage" class="btn" disabled title="все листы сразу">коллаж</button>
         <button id="dsvg" class="btn" disabled title="SVG по содержимому, в миллиметрах — для вставки в отчёт">SVG</button>
         <button id="dpng" class="btn" disabled>PNG</button>
-        <button id="ddrawio" class="btn" disabled title="файл draw.io с редактируемыми блоками">draw.io</button>
+        <!-- draw.io прячем: движок на main (16e67e4) экспорта не умеет,
+             кнопка отвечала тостом «движок без экспорта». Вернуть, когда
+             на main приедет переработка из ветки dev. -->
+        <button id="ddrawio" class="btn" disabled hidden title="файл draw.io с редактируемыми блоками">draw.io</button>
         <button id="dall" class="btn" disabled title="скачать SVG каждого файла">скачать всё</button>
         <button id="copy" class="btn" disabled title="скопировать SVG в буфер">копировать</button>
       </span>
