@@ -50,13 +50,17 @@ impl Ctx<'_> {
         let saved_direct = self.case_direct;
         self.case_direct = false;
         let (yend, end) = match &nd.body {
-            Some(body) => {
+            Some(body) if !body.is_empty() => {
                 if !nd.cont {
                     self.edge(&[(tx, cy1 + lh / 2.0), (tx, top0)], true);
                 }
                 self.render_column(body, tx, top0)
             }
-            None => (top0, ColEnd::Flow),
+            // Пустое тело (`while (getchar() != '\n');`): рисовать нечего,
+            // и стрелка «в тело» встала бы в середине прямой линии —
+            // вторая стрелка у нижней трапеции осталась бы ниже. Поток
+            // идёт из верхней трапеции прямо в нижнюю, одной стрелкой.
+            _ => (if nd.cont { top0 } else { cy1 + lh / 2.0 }, ColEnd::Flow),
         };
         self.case_direct = saved_direct;
         if nd.cont_out {

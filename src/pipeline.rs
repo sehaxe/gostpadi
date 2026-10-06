@@ -145,8 +145,8 @@ fn lay_out(
     schemes
         .into_iter()
         .map(|(path, nodes)| {
-            let parts = if st.no_split {
-                vec![nodes]
+            let (parts, mut next_letter) = if st.no_split {
+                (vec![nodes], 0)
             } else {
                 split_scheme(nodes, sizes, st)
             };
@@ -160,7 +160,9 @@ fn lay_out(
                     // раскладку на полосы. Граница идёт между блоками
                     // там, где до неё дошло место, — так режется то,
                     // что недоступно сверху: пять вложенных циклов.
-                    pages.extend(crate::layout::band::band_split(&l, st));
+                    let (bands, next) = crate::layout::band::band_split(&l, st, next_letter);
+                    next_letter = next;
+                    pages.extend(bands);
                 }
             }
             (path, pages)
@@ -654,6 +656,61 @@ mod tests {
         rb.dedup();
         assert!(ra.iter().all(|d| rb.contains(d)), "{ra:?} vs {rb:?}");
     }
+
+    /// Буквы на кружках нумеруются сквозь всю схему. Узловой разрез
+    /// (`split_scheme`) и полосовой (`band_split`) раньше считали буквы
+    /// каждый сам по себе: на лист попадали два РАЗНЫХ шва с одной
+    /// буквой «А», и читатель не мог понять, какой шов куда ведёт.
+    /// Инвариант: каждая буква стоит ровно на двух концах своего шва.
+    #[test]
+    fn conn_letters_are_unique_across_sheets() {
+        let mut src = String::from("int main(void) {\n    int i, a, b, c;\n");
+        for k in 0..18 {
+            src.push_str(&format!("    a = {k};\n"));
+        }
+        src.push_str("    while (a < 9) {\n");
+        for k in 0..9 {
+            src.push_str(&format!("        b = {k}; c = {k}; a = a + 1;\n"));
+        }
+        src.push_str("    }\n}\n");
+        let o = opts();
+        let st = o.style();
+        let nodes = to_nodes(&src, &o);
+        let sizes = normalize(&nodes, &st);
+        let laid = lay_out(vec![("t.c".to_string(), nodes)], &sizes, &st);
+        let pages = &laid[0].1;
+        let mut all: Vec<String> = Vec::new();
+        for p in pages {
+            let here: Vec<String> = p
+                .shapes
+                .iter()
+                .filter(|s| s.kind == "conn")
+                .flat_map(|s| s.lines.clone())
+                .collect();
+            for l in &here {
+                assert_eq!(
+                    here.iter().filter(|x| *x == l).count(),
+                    1,
+                    "буква {l} стоит дважды на одном листе: {here:?}"
+                );
+            }
+            all.extend(here);
+        }
+        assert!(
+            all.len() >= 4,
+            "схема должна резаться не одним швом: {all:?}"
+        );
+        let mut uniq = all.clone();
+        uniq.sort();
+        uniq.dedup();
+        for l in uniq {
+            assert_eq!(
+                all.iter().filter(|x| **x == l).count(),
+                2,
+                "буква {l} должна стоять ровно на двух концах шва: {all:?}"
+            );
+        }
+    }
 }
 
 /// Экспорт для отчёта: без листа A4, размер в миллиметрах, вписывания
@@ -872,7 +929,7 @@ int main() {
         let st = opts.style();
         let nodes = to_nodes(LAB, &opts);
         let sizes = normalize(&nodes, &st);
-        for part in crate::layout::split_scheme(nodes, &sizes, &st) {
+        for part in crate::layout::split_scheme(nodes, &sizes, &st).0 {
             let l = layout(&part, &sizes, &st);
             assert!(
                 crate::layout::crossings_ok(&l.shapes, &l.edges).is_ok(),

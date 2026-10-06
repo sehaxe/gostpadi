@@ -7,7 +7,12 @@ use crate::style::Style;
 /// Не влезает в А4 -> части, соединённые кружками «А», «Б», ...
 /// Межстраничный соединитель: буква + номер листа, где продолжение
 /// (ГОСТ 19.701-90: первая строка — номер листа).
-pub fn split_scheme(mut items: Vec<Node>, sizes: &Sizes, st: &Style) -> Vec<Vec<Node>> {
+///
+/// Возвращает части и число израсходованных букв: полосовой разрез
+/// (`band_split`) дорисовывает швы уже после раскладки, и ему нужен
+/// свободный диапазон букв. Пока счётчики были раздельными, лист
+/// получал два РАЗНЫХ шва с одной буквой «А».
+pub fn split_scheme(mut items: Vec<Node>, sizes: &Sizes, st: &Style) -> (Vec<Vec<Node>>, usize) {
     // поиск точки реза ведётся по нижним 88% текстовой зоны листа
     const CUT_SEARCH_FRAC: f64 = 0.88;
     let mut parts: Vec<Vec<Node>> = Vec::new();
@@ -245,7 +250,7 @@ pub fn split_scheme(mut items: Vec<Node>, sizes: &Sizes, st: &Style) -> Vec<Vec<
         let at = parts[last].len() - 1;
         parts[last].insert(at, Node::new(NodeKind::Conn, l.to_string()));
     }
-    parts
+    (parts, li)
 }
 
 #[cfg(test)]
@@ -267,7 +272,7 @@ mod tests {
         nodes.extend((0..4).map(|_| Node::new(NodeKind::Act, "z = 222222")));
         nodes.push(Node::new(NodeKind::Term, "End"));
         let sizes = normalize(&nodes, &st);
-        let parts = split_scheme(nodes, &sizes, &st);
+        let (parts, _) = split_scheme(nodes, &sizes, &st);
         assert!(!parts.is_empty());
         assert!(parts.iter().all(|p| !p.is_empty()));
     }
@@ -318,7 +323,7 @@ mod branch_cut_tests {
             !st.sheet.fits(whole.2, whole.3, st.split_scale),
             "схема должна быть не по листу, иначе тест бессмыслен"
         );
-        let parts = split_scheme(items, &sizes, &st);
+        let (parts, _) = split_scheme(items, &sizes, &st);
         assert!(parts.len() > 1, "резать нечем: порезка вернула один лист");
         assert!(parts.iter().all(|p| !p.is_empty()), "пустой лист");
     }
@@ -331,7 +336,7 @@ mod branch_cut_tests {
         let st = Style::default();
         let items = scheme(12);
         let sizes = normalize(&items, &st);
-        for part in split_scheme(items, &sizes, &st) {
+        for part in split_scheme(items, &sizes, &st).0 {
             let b = layout(&part, &sizes, &st).bounds;
             assert!(
                 st.sheet.fits(b.2, b.3, st.split_scale),
@@ -349,7 +354,7 @@ mod branch_cut_tests {
         let st = Style::default();
         let items = scheme(12);
         let sizes = normalize(&items, &st);
-        let parts = split_scheme(items, &sizes, &st);
+        let (parts, _) = split_scheme(items, &sizes, &st);
         let a = parts.first().unwrap().last().unwrap();
         let b = parts.get(1).unwrap().first().unwrap();
         assert_eq!(a.kind, NodeKind::Conn, "нет кружка в конце листа");
@@ -366,6 +371,7 @@ mod branch_cut_tests {
             let items = scheme(n);
             let sizes = normalize(&items, &st);
             let seen: usize = split_scheme(items, &sizes, &st)
+                .0
                 .iter()
                 .flatten()
                 .filter(|nd| nd.kind == NodeKind::Decision && nd.switch_var.is_some())
@@ -382,7 +388,7 @@ mod branch_cut_tests {
         let items = scheme(2);
         let sizes = normalize(&items, &st);
         assert_eq!(
-            split_scheme(items, &sizes, &st).len(),
+            split_scheme(items, &sizes, &st).0.len(),
             1,
             "мелкий ромб не режется"
         );

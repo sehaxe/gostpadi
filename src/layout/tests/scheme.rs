@@ -306,7 +306,7 @@ fn examples_layout_invariants() {
 
 #[test]
 fn split_scheme_single_part_for_short_scheme() {
-    let parts = split_scheme(
+    let (parts, _) = split_scheme(
         linear(),
         &normalize(&linear(), &Style::default()),
         &Style::default(),
@@ -503,7 +503,7 @@ fn single_entry_allows_inbound_conns() {
     let text = "int a, b; if (a > 0) { printf(1); } b = 111111;\n".repeat(14);
     let nodes = nodes(&text);
     let sizes = normalize(&nodes, &st);
-    let parts = split_scheme(nodes, &sizes, &st);
+    let (parts, _) = split_scheme(nodes, &sizes, &st);
     assert!(parts.len() >= 2, "схема должна разрезаться на листы");
     for part in &parts {
         let l = layout(part, &sizes, &st);
@@ -1337,6 +1337,75 @@ printf(\"далее\");
     assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
 }
 
+/// «Нет» без тела садится на ствол НИЖЕ нижней вершины ромба. Раньше
+/// рельса пустой ветки приходила ровно в вершину: линия втыкалась в
+/// угол фигуры, и стык читался как «идёт в ромб».
+#[test]
+fn empty_branch_joins_below_the_diamond() {
+    let nodes = nodes(
+        "int a;\nif (scanf(\"%d\", &a) != 1) { printf(\"плохо\"); return 1; }\nprintf(\"ok\");\n",
+    );
+    let l = lay(&nodes);
+    let d = l.shapes.iter().find(|sh| sh.kind == "if").expect("ромб");
+    let vb = (d.cx, d.cy + d.h / 2.0);
+    let at_vertex: Vec<&crate::layout::Edge> = l
+        .edges
+        .iter()
+        .filter(|e| {
+            e.points
+                .iter()
+                .any(|p| (p.0 - vb.0).abs() < 1e-6 && (p.1 - vb.1).abs() < 1e-6)
+        })
+        .collect();
+    assert_eq!(
+        at_vertex.len(),
+        1,
+        "в нижней вершине ромба сходится ровно один отрезок (ствол продолжения), а не {}",
+        at_vertex.len()
+    );
+}
+
+/// Пустое тело цикла (`while (getchar() != '\n');`) — ровно одна
+/// стрелка: из верхней трапеции прямо в нижнюю. Раньше рисовались две:
+/// вход «в тело» вставал в середине прямой линии, и читатель видел два
+/// наконечника подряд на одном отрезке (пользователь обвёл такой стык).
+#[test]
+fn empty_loop_body_has_one_arrow() {
+    let nodes = nodes("int c;\nwhile (getchar() != '\\n');\nprintf(\"ok\");\n");
+    let l = lay(&nodes);
+    let lb = l
+        .shapes
+        .iter()
+        .find(|sh| sh.kind == "loop_begin")
+        .expect("верхняя трапеция");
+    let le = l
+        .shapes
+        .iter()
+        .find(|sh| sh.kind == "loop_end")
+        .expect("нижняя трапеция");
+    let top = lb.cy + lb.h / 2.0;
+    let bot = le.cy - le.h / 2.0;
+    // вход в цикл сверху и выход снизу лежат ВНЕ промежутка трапеций
+    let inside: Vec<f64> = l
+        .edges
+        .iter()
+        .filter(|e| e.arrow)
+        .map(|e| e.points[e.points.len() - 1])
+        .filter(|p| p.0.abs() < 1e-9 && p.1 > top + 1e-9 && p.1 <= bot + 1e-9)
+        .map(|p| p.1)
+        .collect();
+    assert_eq!(
+        inside.len(),
+        1,
+        "между трапециями пустого цикла одна стрелка, а не две: {inside:?}"
+    );
+    assert!(
+        (inside[0] - bot).abs() < 1e-9,
+        "стрелка стоит у входа в нижнюю трапецию: {} vs {bot}",
+        inside[0]
+    );
+}
+
 /// Обрывы линий — одной проверкой: конец ребра либо касается фигуры,
 /// либо лежит на другом ребре (T-стык). Ловит три разные по причине,
 /// но одинаковые по виду обрыва: коридор каскада, свисавший над первой
@@ -1357,7 +1426,7 @@ fn no_dangling_line_ends() {
         let sizes = normalize(&nodes, &st);
         let l = layout(&nodes, &sizes, &st);
         assert_eq!(dangling_ok(&l), Ok(()), "цельная схема: {text}");
-        for part in split_scheme(nodes, &sizes, &st) {
+        for part in split_scheme(nodes, &sizes, &st).0 {
             let p = layout(&part, &sizes, &st);
             assert_eq!(dangling_ok(&p), Ok(()), "лист после разреза: {text}");
         }

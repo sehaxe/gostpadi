@@ -84,10 +84,16 @@ fn band_cuts(l: &Layout, st: &Style) -> Vec<f64> {
 }
 
 /// Раскладка -> полосы листов. Если влезает, возвращается как есть.
-pub fn band_split(l: &Layout, st: &Style) -> Vec<Layout> {
+///
+/// `first` — номер первой свободной буквы: узловой разрез
+/// (`split_scheme`) уже израсходовал столько-то букв на свои швы, и
+/// полосовой обязан продолжить нумерацию, иначе на листе окажутся два
+/// разных шва с одной буквой. Возвращает листы и следующую свободную
+/// букву — для следующих частей той же схемы.
+pub fn band_split(l: &Layout, st: &Style, first: usize) -> (Vec<Layout>, usize) {
     let cuts = band_cuts(l, st);
     if cuts.is_empty() {
-        return vec![l.clone()];
+        return (vec![l.clone()], first);
     }
     let mut starts = vec![l.bounds.1];
     starts.extend_from_slice(&cuts);
@@ -190,7 +196,7 @@ pub fn band_split(l: &Layout, st: &Style) -> Vec<Layout> {
     // на каждом шве две отметки с одной буквой: конец в нижней полосе
     // и начало в верхней
     for (si, (low, x, y)) in seams.iter().enumerate() {
-        let letter = st.letters.chars().nth(si % n_letters).unwrap();
+        let letter = st.letters.chars().nth((first + si) % n_letters).unwrap();
         for (k, cy) in [(*low, y - starts[*low]), (*low + 1, 0.0)] {
             if k >= n {
                 continue;
@@ -216,7 +222,7 @@ pub fn band_split(l: &Layout, st: &Style) -> Vec<Layout> {
             anchors: Vec::new(),
         });
     }
-    out
+    (out, first + seams.len())
 }
 
 /// Точка ломаной в список, если она не совпадает с последней: два
@@ -265,7 +271,7 @@ mod band_tests {
             !st.sheet.fits(l.bounds.2, l.bounds.3, st.split_scale),
             "схема должна быть не по листу, иначе тест бессмыслен"
         );
-        let bands = band_split(&l, &st);
+        let bands = band_split(&l, &st, 0).0;
         assert!(bands.len() > 1, "полос не получилось: {}", bands.len());
         for b in &bands {
             assert!(
@@ -287,7 +293,7 @@ mod band_tests {
         );
         let sizes = normalize(&nodes, &st);
         let l = layout(&nodes, &sizes, &st);
-        let bands = band_split(&l, &st);
+        let bands = band_split(&l, &st, 0).0;
         let total = |ls: &[Layout]| ls.iter().map(|x| x.shapes.len()).sum::<usize>();
         assert_eq!(total(&bands), l.shapes.len(), "часть блоков пропала");
     }
@@ -315,7 +321,7 @@ mod band_tests {
         );
         let sizes = normalize(&nodes, &st);
         let l = layout(&nodes, &sizes, &st);
-        let bands = band_split(&l, &st);
+        let bands = band_split(&l, &st, 0).0;
         assert!(
             bands.len() > 1,
             "нужно несколько полос, получилось {}",
@@ -347,7 +353,7 @@ mod band_tests {
         );
         let sizes = normalize(&nodes, &st);
         let l = layout(&nodes, &sizes, &st);
-        let bands = band_split(&l, &st);
+        let bands = band_split(&l, &st, 0).0;
         // сколько отрезков ушло в полосы, столько же должно остаться:
         // разрез ребра по шву добавляет парность, но не теряет отрезки
         let orig: usize = l
@@ -373,6 +379,6 @@ mod band_tests {
         let (nodes, st) = laid("int main(void){ x = 1; }");
         let sizes = normalize(&nodes, &st);
         let l = layout(&nodes, &sizes, &st);
-        assert_eq!(band_split(&l, &st).len(), 1);
+        assert_eq!(band_split(&l, &st, 0).0.len(), 1);
     }
 }
