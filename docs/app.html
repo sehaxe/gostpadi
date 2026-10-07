@@ -634,7 +634,14 @@ function packInputs(items) {
   const parts = [new Uint8Array(new Uint32Array([items.length]).buffer)];
   for (const it of items) {
     const n = enc.encode(it.name), t = enc.encode(it.text);
+    // протокол движка: [длина имени][имя][байт «это C»][длина текста][текст].
+    // «это C» — по расширению: .c/.h рисует C-фронтенд, остальное (.gvn) —
+    // как есть. Байта не было: движок читал первый байт длины текста
+    // как признак C, съезжал на 4 байта и отвечал null — «движок не
+    // ответил» на любом коде.
+    const isC = /\.(c|h)$/i.test(it.name) ? 1 : 0;
     parts.push(new Uint8Array(new Uint32Array([n.length]).buffer), n,
+               new Uint8Array([isC]),
                new Uint8Array(new Uint32Array([t.length]).buffer), t);
   }
   // склейка: части идут подряд, без неё движок получает нули
