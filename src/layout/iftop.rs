@@ -2,7 +2,7 @@
 //! метки да/нет/кейсов, слияние, рельсы «-> конец» (pend) и кружки link.
 
 use super::column::rail_only;
-use super::ctx::{ColEnd, Ctx, Pend};
+use super::ctx::{BreakAt, ColEnd, Ctx, Pend};
 use super::ifnode::{build_plan, cascade_cols, Side};
 use super::types::{Anchor, Label};
 use crate::ir::{Branch, Node, NodeKind, Stmt};
@@ -73,10 +73,16 @@ impl Ctx<'_> {
         if matches!(cascade_cols(nd), Some((k, _)) if k >= 2) {
             return self.decision_cascade(nd, prev, cursor, 0.0);
         }
-        // Диспетч: все кейсы на одной шине, в один ряд. Ряд на два кейса
-        // и столбик по одному кейсу в ряду пробовались ради ширины, но
-        // оба читаются хуже: пары ничего не значат, а столбик — не
-        // переключатель, а список. Ширину добирает лист: он альбомный.
+        // Большой переключатель: кейсы сеткой, по два на ряд (эталон
+        // старого движка, strany-2). Один ряд на все кейсы пробовался
+        // ради ширины «лист всё равно альбомный», но 13 кейсов — это
+        // 3790 pt ширины: лист не спасает, и нарезка рвала диспетч
+        // по кейсу на страницу. Пары ничего не «значат» — они держат
+        // ширину диспетча в пределах листа.
+        let n_ne = nd.branches.iter().filter(|b| !b.stmts.is_empty()).count();
+        if nd.switch_var.is_some() && n_ne >= 5 {
+            return self.switch_rows(nd, prev, cursor);
+        }
         let (dw, dh) = self.sizes["if"];
         let cy = cursor + self.st.vgap + dh / 2.0;
         self.add("if", 0.0, cy, &nd.text);
@@ -505,5 +511,195 @@ impl Ctx<'_> {
         let cursor = merge_y.max(col_bottom).max(link_bottom);
         self.anchors.push(Anchor { y: cursor });
         (Some((axis, merge_y)), cursor)
+    }
+}
+
+/// Сеть кейсов «по два на ряд» (ГОСТ): шина от нижней вершины ромба,
+/// пары кейс-колонок по бокам, слияние каждого ряда на стволе, дренаж
+/// break и рельсы «-> конец» за сеткой. Порт geometry старого движка:
+/// это та раскладка, которую одобряют в отчётах.
+impl Ctx<'_> {
+    fn switch_rows(
+        &mut self,
+        nd: &Node,
+        prev: Option<(f64, f64)>,
+        cursor: f64,
+    ) -> (Option<(f64, f64)>, f64) {
+        let (dw, dh) = self.sizes["if"];
+        let cy = cursor + self.st.vgap + dh / 2.0;
+        self.add("if", 0.0, cy, &nd.text);
+        if let Some(p) = prev {
+            self.edge(&[p, (0.0, cy - dh / 2.0)], true);
+        }
+        let base = dw / 2.0 + self.st.hgap + self.nhe;
+        let saved_direct = self.case_direct;
+        let br_mark = self.continues.len();
+        self.switch_depth += 1;
+        self.case_direct = true;
+        let empty: Vec<String> = nd
+            .branches
+            .iter()
+            .filter(|b| b.stmts.is_empty())
+            .map(|b| b.label.clone())
+            .collect();
+        let cases: Vec<&Branch> = nd.branches.iter().filter(|b| !b.stmts.is_empty()).collect();
+        // коридоры за сеткой: сначала рельсы пустых кейсов, потом
+        // «-> конец» — чтобы вертикали не накладывались
+        let bx0 = super::geometry::up(
+            (base + self.nhe + self.st.grid).max(dw / 2.0 + 2.0 * self.st.grid),
+            self.st.grid,
+        );
+        // шина первого ряда: от нижней вершины ромба по стволу
+        let mut y_bus = cy + dh / 2.0 + self.st.vgap;
+        let mut trunk_from = cy + dh / 2.0;
+        self.edge(&[(0.0, trunk_from), (0.0, y_bus)], false);
+        let mut col_bottom = y_bus;
+        let mut merge_y = y_bus;
+        let mut link_bottom = y_bus;
+        let mut merged = false;
+        for (ri, row) in cases.chunks(2).enumerate() {
+            if ri > 0 {
+                // ствол от слияния предыдущего ряда к шине следующего
+                y_bus = merge_y + self.st.vgap;
+                self.edge(&[(0.0, trunk_from), (0.0, y_bus)], false);
+            }
+            let mut live: Vec<f64> = Vec::new();
+            let mut gone: Vec<(f64, f64, bool, Option<char>)> = Vec::new(); // x, yend, to_end, link
+            for (ci, b) in row.iter().enumerate() {
+                let left = ci == 0;
+                let sgn: f64 = if left { -1.0 } else { 1.0 };
+                let tx = sgn * base;
+                let top = y_bus + self.st.vgap;
+                // шина ряда: от ствола до колонки (два сегмента без
+                // наложения — вместе образуют шину через ось)
+                self.edge(&[(0.0, y_bus), (tx, y_bus)], false);
+                self.edge(&[(tx, y_bus), (tx, top)], !rail_only(&b.stmts));
+                self.labels.push(Label {
+                    x: tx
+                        + if left {
+                            -self.st.label_dx
+                        } else {
+                            self.st.label_dx
+                        },
+                    y: top - self.st.label_dy,
+                    text: b.label.clone(),
+                    ha: if left { "right" } else { "left" }.into(),
+                });
+                let (yend, end) = self.render_column(&b.stmts, tx, top);
+                col_bottom = col_bottom.max(yend);
+                if end != ColEnd::Flow {
+                    // тупик return или рельса break: слияния от колонки
+                    // нет — break дорисует дренаж switch
+                    continue;
+                }
+                if b.to_end {
+                    gone.push((tx, yend, true, b.link));
+                } else {
+                    live.push(tx);
+                    gone.push((tx, yend, false, None));
+                }
+            }
+            // слияние ряда: уровень ниже содержимого ряда; капли колонок
+            // не могут спускаться ниже — под ними следующие ряды сетки
+            merge_y = gone
+                .iter()
+                .map(|g| g.1)
+                .fold(y_bus + 2.0 * self.st.grid, f64::max)
+                + self.st.mgap;
+            for g in &gone {
+                if g.2 {
+                    continue; // «-> конец» уходит своим коридором ниже
+                }
+                self.edge(&[(g.0, g.1), (g.0, merge_y)], false);
+            }
+            if !live.is_empty() {
+                let lo = live.iter().cloned().fold(f64::MAX, f64::min);
+                let hi = live.iter().cloned().fold(f64::MIN, f64::max);
+                self.edge(&[(lo.min(0.0), merge_y), (hi.max(0.0), merge_y)], false);
+                merged = true;
+            }
+            trunk_from = merge_y;
+            // «-> конец»: спуск до уровня слияния ряда, наружу за сетку,
+            // дальше рельсу дорисует layout() над «концом»
+            for &(tx, yend, _, link) in gone.iter().filter(|g| g.2) {
+                let sgn: f64 = if tx > 0.0 { 1.0 } else { -1.0 };
+                let key = usize::from(tx > 0.0);
+                let out = sgn * (bx0 + empty.len() as f64 * 2.0 * self.st.grid);
+                self.edge(&[(tx, yend), (tx, merge_y), (out, merge_y)], false);
+                let pitch = 2.0 * self.nhe + self.st.colgap;
+                let rail = sgn
+                    * super::geometry::up(
+                        base + self.max_tier as f64 * pitch
+                            + self.colw / 2.0
+                            + self.st.rail
+                            + self.pend_count[key] as f64 * self.st.rail_step,
+                        self.st.grid,
+                    );
+                self.pend_count[key] += 1;
+                if let Some(letter) = link {
+                    let ccy = col_bottom + self.st.jog + self.st.vgap + self.st.conn_r;
+                    self.add("conn", rail, ccy, &letter.to_string());
+                    self.edge(
+                        &[
+                            (out, merge_y),
+                            (out, col_bottom + self.st.jog),
+                            (rail, col_bottom + self.st.jog),
+                            (rail, ccy - self.st.conn_r),
+                        ],
+                        true,
+                    );
+                    link_bottom = link_bottom.max(ccy + self.st.conn_r);
+                } else {
+                    self.pend.push(Pend {
+                        x: out,
+                        y: merge_y,
+                        cb: col_bottom,
+                        rail,
+                    });
+                }
+            }
+        }
+        // пустые кейсы: рельсы справа, чистят сетку, сливаются на стволе
+        if !empty.is_empty() {
+            for (k, lbl) in empty.iter().enumerate() {
+                let bx = bx0 + k as f64 * 2.0 * self.st.grid;
+                self.edge(
+                    &[(dw / 2.0, cy), (bx, cy), (bx, merge_y), (0.0, merge_y)],
+                    false,
+                );
+                self.labels.push(Label {
+                    x: dw / 2.0 + self.st.label_exit_dx + k as f64 * 2.0 * self.st.grid,
+                    y: cy - self.st.label_dy,
+                    text: lbl.clone(),
+                    ha: "center".into(),
+                });
+            }
+            merged = true;
+        }
+        if !merged {
+            // все живые кейсы в тупиках/«-> конец»: формальное
+            // продолжение ствола до точки выхода
+            self.edge(&[(0.0, trunk_from), (0.0, merge_y)], false);
+        }
+        // рельсы break из веток внутри кейсов (if внутри case): наружу
+        // за сетку, вниз к выходу switch, T-стык на стволе
+        let nested: Vec<BreakAt> = self.continues.drain(br_mark..).collect();
+        self.switch_depth -= 1;
+        self.case_direct = saved_direct;
+        let outer = base + self.nhe + self.st.grid;
+        for b in &nested {
+            let slot = self.break_slot;
+            self.break_slot += 1;
+            let sgn = if b.tx <= 0.0 { -1.0 } else { 1.0 };
+            let rx =
+                sgn * super::geometry::up(outer + slot as f64 * 2.0 * self.st.grid, self.st.grid);
+            self.edge(
+                &[(b.tx, b.y), (rx, b.y), (rx, merge_y), (0.0, merge_y)],
+                false,
+            );
+        }
+        let cursor = merge_y.max(col_bottom).max(link_bottom);
+        self.anchors.push(Anchor { y: cursor });
+        (Some((0.0, merge_y)), cursor)
     }
 }

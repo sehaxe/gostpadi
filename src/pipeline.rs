@@ -29,7 +29,12 @@ impl Options {
             } else {
                 crate::sheet::Sheet::A4
             },
-            ..Style::with_metrics(self.font.unwrap_or(14.0), self.lw.unwrap_or(0.75))
+            // Кегль 12, не 14: при 12 метрики замыкаются в модульную
+            // сетку — межстрочный шаг 18 pt + поле 14.04 − подрезка 4 =
+            // 28.04 pt ≤ 2a (28.5), каждый однострочный блок ровно 2a.
+            // При 14 шаг + поле = 32.7 pt -> 3a, все фигуры вырастают
+            // в полтора раза, и нарезка рвёт каждую схему в осколки.
+            ..Style::with_metrics(self.font.unwrap_or(12.0), self.lw.unwrap_or(0.75))
         }
     }
 }
@@ -145,12 +150,23 @@ fn lay_out(
     schemes
         .into_iter()
         .map(|(path, nodes)| {
-            let (parts, mut next_letter) = if st.no_split {
-                (vec![nodes], 0)
-            } else {
-                split_scheme(nodes, sizes, st)
-            };
             let mut pages: Vec<Layout> = Vec::new();
+            // Вписывание целиком первым делом: резать имеет смысл только
+            // когда схема не влезает даже на пороге читаемости листа.
+            // Осколки по 3 блока (menu-update: if на лист, голая шина
+            // switch на следующей странице) убивали картинку сильнее
+            // любых ошибок геометрии. Пол 0.45, не 0.5: эталон старого
+            // сам опускался до 0.263 (ctg-taylor), а tg-4zad (13 кейсов
+            // в рядах по два, 1510 pt) при 0.5 не хватает ровно 27 pt —
+            // и она рассыпалась бы на 4 листа вместо одного.
+            const FIT_FLOOR: f64 = 0.45;
+            let whole = layout(&nodes, sizes, st);
+            let fitok = st.sheet.fits(whole.bounds.2, whole.bounds.3, FIT_FLOOR);
+            if st.no_split || fitok {
+                pages.push(whole);
+                return (path, pages);
+            }
+            let (parts, mut next_letter) = split_scheme(nodes, sizes, st);
             for part in parts {
                 let l = layout(&part, sizes, st);
                 if st.no_split || st.sheet.fits(l.bounds.2, l.bounds.3, st.split_scale) {
@@ -184,16 +200,33 @@ fn lay_out(
 /// порога. Поэтому худший файл роняет масштаб только когда он и правда
 /// не влезает, а не потому что один диспетчер на 12 кейсов стоял рядом
 /// с тривиальным файлом.
-fn shared_scale(laid: &[(String, Vec<Layout>)], st: &Style) -> f64 {
-    let s = laid
-        .iter()
+/// То же вписывание, но БЕЗ ужатия в решётку — честная величина для
+/// СРАВНЕНИЯ ориентаций. Ужатая в 1/18 сетку книжная (63 %) проигрывала
+/// альбомной, порезанной на полосы (62 % до ужатия, 68 % после) —
+/// побеждал осколочный лист только потому, что сравнивались разные
+/// величины: ужатая против неужатой.
+fn raw_scale(laid: &[(String, Vec<Layout>)], st: &Style) -> f64 {
+    laid.iter()
         .flat_map(|(_, pages)| pages)
-        .map(|l| fit_scale(l.bounds, st))
-        .fold(1.0_f64, f64::min);
-    // Тот же масштаб, что и в рендере: модуль сетки обязан остаться
-    // целым числом пикселей, иначе линии «разной толщины» (см.
-    // generate::svg::snap_scale). Отчёт и картинка не должны расходиться.
-    crate::generate::snap_scale(s, st)
+        .map(|l| l.bounds)
+        .map(|b| fit_scale(b, st))
+        .fold(1.0_f64, f64::min)
+}
+
+/// Худшие вписывания по осям: (ширинное, высотное). Кто меньше — тот и
+/// бутылочное горлышко пачки.
+fn min_fits(laid: &[(String, Vec<Layout>)], st: &Style) -> (f64, f64) {
+    laid.iter()
+        .flat_map(|(_, pages)| pages)
+        .map(|l| {
+            (
+                st.sheet.text_w() / l.bounds.2,
+                st.sheet.text_h() / l.bounds.3,
+            )
+        })
+        .fold((f64::INFINITY, f64::INFINITY), |(a, b), (x, y)| {
+            (a.min(x), b.min(y))
+        })
 }
 
 /// Узлы из parse_batch + стиль -> (путь, страницы SVG). Размеры фигур,
@@ -212,21 +245,31 @@ pub fn render_batch(
     let sizes = uniform_sizes(&normed);
 
     let laid = lay_out(schemes.clone(), &sizes, st);
-    let s = shared_scale(&laid, st);
-    let (st, laid, s) = if s >= st.split_scale || st.no_split {
-        (st.clone(), laid, s)
+    // Что уронило масштаб — ширина или высота? Альбомный лист помогает
+    // только при ширинной нехватке: по высоте его зона хуже книжной
+    // (728.5 -> 481.9 pt), и высотную схему он не сжимает, а режет
+    // на полосы. Раньше сравнивались ужатые масштабы, и альбомная,
+    // набранная полосами по ~688 pt, выигрывала у книжной одним
+    // целым листом — схема дробилась на 11 осколков.
+    let (sw, sh) = min_fits(&laid, st);
+    let s = raw_scale(&laid, st);
+    let (st, laid, s) = if s >= st.split_scale || st.no_split || sw >= sh {
+        (st.clone(), laid, crate::generate::snap_scale(s, st))
     } else {
-        // книжная нечитаема: пробуем альбомную, лист у неё шире
+        // ширина — бутылочное горлышко: пробуем альбомную. Сравниваем
+        // сырые вписывания и ужмём победителя в решётку один раз.
         let alt = Style {
             sheet: crate::sheet::Sheet::A4_LANDSCAPE,
             ..st.clone()
         };
         let laid_alt = lay_out(schemes.clone(), &sizes, &alt);
-        let s_alt = shared_scale(&laid_alt, &alt);
-        if s_alt > s {
-            (alt, laid_alt, s_alt)
+        let raw_alt = raw_scale(&laid_alt, &alt);
+        if raw_alt > s {
+            let sa = crate::generate::snap_scale(raw_alt, &alt);
+            (alt, laid_alt, sa)
         } else {
-            (st.clone(), laid, s)
+            let sb = crate::generate::snap_scale(s, st);
+            (st.clone(), laid, sb)
         }
     };
 

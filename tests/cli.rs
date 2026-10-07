@@ -358,8 +358,9 @@ fn font_flag_grows_svg() {
     );
     let svg_def = render_svg(&d, "fdef", &[]);
     assert!(
-        svg_def.contains("font-size=\"14\""),
-        "кегль по умолчанию 14"
+        svg_def.contains("font-size=\"12\""),
+        "кегль по умолчанию 12: метрики замыкаются в модульную сетку \
+         (шаг+поле−подрезка = 28.04 pt ≤ 2a), при 14 блоки растут до 3a"
     );
     assert!(
         rect_widths(&svg20)[0] > rect_widths(&svg_def)[0],

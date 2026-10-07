@@ -1129,7 +1129,10 @@ else { printf(\"8\"); }\n",
 #[test]
 fn switch_cases_share_one_line() {
     let st = Style::default();
-    for cases in [3usize, 4, 5, 12] {
+    // 3–4 кейса умещаются на одной шине; 5+ — сетка по два на ряд
+    // (эталон старого движка, strany-2): один ряд на 13 кейсов — это
+    // 3790 pt ширины, лист не спасает и нарезка рвёт диспетч.
+    for cases in [3usize, 4] {
         let text = dispatch(cases);
         let nodes = nodes(&text);
         let sizes = normalize(&nodes, &st);
@@ -1138,6 +1141,23 @@ fn switch_cases_share_one_line() {
             rows_of_cases(&l),
             1,
             "{cases} кейсов: кейсы обязаны стоять на одной линии"
+        );
+        assert!(
+            crossings_ok(&l.shapes, &l.edges).is_ok(),
+            "{cases} кейсов: пересечения"
+        );
+        assert!(overlaps_ok(&l.shapes), "{cases} кейсов: фигуры наехали");
+    }
+    // 5 и 12 кейсов: ряды по два (последний ряд может быть одиноким)
+    for (cases, rows) in [(5usize, 3usize), (12usize, 6usize)] {
+        let text = dispatch(cases);
+        let nodes = nodes(&text);
+        let sizes = normalize(&nodes, &st);
+        let l = layout(&nodes, &sizes, &st);
+        assert_eq!(
+            rows_of_cases(&l),
+            rows,
+            "{cases} кейсов: ряды по два кейса (последний ряд — остаток)"
         );
         assert!(
             crossings_ok(&l.shapes, &l.edges).is_ok(),
@@ -1274,7 +1294,13 @@ fn break_is_a_plain_process_block_everywhere() {
     let c = parse(
         "int k;\nswitch (k) {\ncase 1: printf(\"a\"); break;\ncase 2: printf(\"b\"); break;\n}\nprintf(1);\n",
     );
-    assert_eq!(count_break(&c), 2, "break виден в каждом кейсе");
+    // Раствор break (эталон старого движка, strany-2): кейс-колонка
+    // кончается на break и сливается швом — плитки не рисуется.
+    assert_eq!(
+        count_break(&c),
+        0,
+        "break в кейсе растворяется в слиянии кейса"
+    );
     assert!(crossings_ok(&c.shapes, &c.edges).is_ok());
     assert!(single_entry_ok(&c));
 
