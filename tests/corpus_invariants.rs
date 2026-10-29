@@ -3,6 +3,7 @@
 //! `pipeline::validate` — тот же набор инвариантов, что у `--check` и
 //! serve /lint; corpus-тест держит их обязательными для всего корпуса.
 
+use gostpadi::frontend::{input_kind, InputKind};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -13,9 +14,8 @@ fn corpus_has_no_edge_crossings_or_border_lines() {
         .unwrap()
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| {
-            p.extension()
-                .map(|x| x == "c" || x == "gvn")
-                .unwrap_or(false)
+            p.to_str()
+                .is_some_and(|s| input_kind(s) != InputKind::Gvn || s.ends_with(".gvn"))
         })
         .collect();
     files.sort();
@@ -33,7 +33,7 @@ fn corpus_has_no_edge_crossings_or_border_lines() {
     for f in &files {
         let p = f.to_str().unwrap();
         let text = std::fs::read_to_string(f).unwrap();
-        let inputs = vec![(p.to_string(), text, p.ends_with(".c"))];
+        let inputs = vec![(p.to_string(), text, input_kind(p))];
         let schemes = gostpadi::pipeline::parse_batch(&inputs, &opts)
             .unwrap_or_else(|(path, e)| panic!("{path}: разбор: {e:?}"));
         for (name, res) in gostpadi::pipeline::validate(&schemes, &st) {

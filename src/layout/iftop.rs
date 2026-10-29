@@ -759,6 +759,17 @@ impl Ctx<'_> {
         if tail.stmts.is_empty() {
             has_rail = true;
             let bx = super::geometry::up(dw / 2.0 + 2.0 * self.st.grid, self.st.grid);
+            // Ветка каскада может вынести вложенный switch правее оси
+            // ромба: фиксированный отступ от ромба садился на кромку её
+            // плитки. Рельса уходит за фактические фигуры с зазором.
+            let bx = super::geometry::clear_rail_x(
+                &self.shapes,
+                bx,
+                y_last,
+                merge_y,
+                true,
+                self.st.grid,
+            );
             self.edge(&[(dw / 2.0, y_last), (bx, y_last), (bx, merge_y)], false);
             bus_xs.push(bx);
             self.labels.push(Label {

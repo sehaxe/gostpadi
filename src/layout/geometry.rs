@@ -8,6 +8,46 @@ pub(super) fn up(v: f64, g: f64) -> f64 {
 
 const EPS: f64 = 1e-6;
 
+/// Абсцисса вертикальной рельсы, отведённой от фигур на её участке.
+/// Рельса не должна идти по кромке блока или сквозь него: если желаемый
+/// x попадает в bbox фигуры, пересекающей [y0, y1] по высоте, рельса
+/// уходит за её кромку на clearance. right — сторона обхода: правые
+/// рельсы уходят вправо, левые влево, иначе рельса залезла бы в чужую
+/// колонку. Обход повторяется, пока новая абсцисса не очистит все
+/// фигуры: сдвиг за одну может попасть в соседнюю.
+pub(super) fn clear_rail_x(
+    shapes: &[Shape],
+    x: f64,
+    y0: f64,
+    y1: f64,
+    right: bool,
+    clearance: f64,
+) -> f64 {
+    const TOL: f64 = 0.01;
+    if clearance <= TOL {
+        return x;
+    }
+    let (lo, hi) = (y0.min(y1), y0.max(y1));
+    let mut out = x;
+    loop {
+        let mut moved = false;
+        for sh in shapes {
+            let (sy0, sy1) = (sh.cy - sh.h / 2.0, sh.cy + sh.h / 2.0);
+            if sy1 <= lo + TOL || sy0 >= hi - TOL {
+                continue;
+            }
+            let (l, r) = (sh.cx - sh.w / 2.0, sh.cx + sh.w / 2.0);
+            if out > l - TOL && out < r + TOL {
+                out = if right { r + clearance } else { l - clearance };
+                moved = true;
+            }
+        }
+        if !moved {
+            return out;
+        }
+    }
+}
+
 /// Ни один сегмент ребра не проходит через внутренность фигуры
 /// (касание границы в конечных точках разрешено). Прямоугольная
 /// аппроксимация консервативна: трапеции/ромбы уже своего bbox.

@@ -1,7 +1,27 @@
 use std::fmt;
 
+/// Вид отказа: от него зависят CLI-коды, HTTP-ответы и «empty» на сайте.
+/// Сообщение — для человека, вид — для кода.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParseErrorKind {
+    Syntax,
+    Empty,
+    Unsupported,
+}
+
+impl ParseErrorKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ParseErrorKind::Syntax => "syntax",
+            ParseErrorKind::Empty => "empty",
+            ParseErrorKind::Unsupported => "unsupported",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ParseError {
+    pub kind: ParseErrorKind,
     pub msg: String,
     pub line: Option<usize>,
     pub col: Option<usize>,
@@ -11,11 +31,22 @@ pub struct ParseError {
 impl ParseError {
     pub fn new(msg: impl Into<String>) -> Self {
         Self {
+            kind: ParseErrorKind::Syntax,
             msg: msg.into(),
             line: None,
             col: None,
             src: None,
         }
+    }
+
+    /// Вход разобран, но рисовать нечего (пустое тело, одни return).
+    pub fn empty(msg: impl Into<String>) -> Self {
+        Self::new(msg).with_kind(ParseErrorKind::Empty)
+    }
+
+    pub fn with_kind(mut self, kind: ParseErrorKind) -> Self {
+        self.kind = kind;
+        self
     }
     pub fn with_line(mut self, line: usize) -> Self {
         self.line = Some(line);

@@ -1,9 +1,8 @@
-//! Сборка пайплайна: текст (.gvn или C) -> узлы -> страницы SVG.
+//! Сборка пайплайна: текст (.gvn), C или C++ -> узлы -> страницы SVG.
 //! Геометрия живёт в layout, отрисовка в generate; здесь только склейка.
 
 use crate::error::ParseError;
-use crate::frontend::c::c_to_gvn_functions_full;
-use crate::frontend::gvn::parse;
+use crate::frontend::{CodeFrontend, Frontend, GvnFrontend, InputKind, Lang};
 use crate::generate::{fit_scale, render_svg_at, render_svg_tight};
 use crate::ir::Node;
 use crate::layout::{
@@ -82,50 +81,39 @@ pub fn validate(schemes: &[Scheme], st: &Style) -> Vec<(String, Result<String, S
         .collect()
 }
 
-/// Пачка входов (путь, текст, это C?) -> схемы.
+/// Пачка входов (путь, текст, вид входа) -> схемы.
 /// Ошибка разбора возвращается вместе с путём входа.
-/// C-вход с несколькими функциями даёт по схеме на функцию:
+/// Код с несколькими функциями даёт по схеме на функцию:
 /// путь схемы «файл.c#имя_функции» (решение 06.10: рисуем все функции).
 pub fn parse_batch(
-    inputs: &[(String, String, bool)],
+    inputs: &[(String, String, InputKind)],
     opts: &Options,
 ) -> Result<Vec<Scheme>, (String, ParseError)> {
     let st = opts.style();
     let mut out = Vec::with_capacity(inputs.len());
-    for (path, text, is_c) in inputs {
-        let res = if *is_c {
-            c_to_gvn_functions_full(text, &opts.labels).and_then(|fs| {
-                fs.into_iter()
-                    .map(|(fname, signature, gvn)| {
-                        // main — схема самого входа (main.c -> main.svg),
-                        // прочие функции получают суффикс: main.c#sum_neg ->
-                        // main-sum_neg.svg, иначе схема main переписала бы их.
-                        // main — программа, а не функция: подписи нет.
-                        let (scheme_path, title) = if fname == "main" {
-                            (path.clone(), None)
-                        } else {
-                            (format!("{path}#{fname}"), Some(signature))
-                        };
-                        parse(&gvn, &st, &opts.labels).map(|n| Scheme {
-                            path: scheme_path,
-                            nodes: n,
-                            title,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, _>>()
-            })
-        } else {
-            parse(text, &st, &opts.labels).map(|n| {
-                vec![Scheme {
-                    path: path.clone(),
-                    nodes: n,
-                    title: None,
-                }]
-            })
+    for (path, text, kind) in inputs {
+        let frontend: Box<dyn Frontend> = match kind {
+            InputKind::Gvn => Box::new(GvnFrontend),
+            InputKind::C => Box::new(CodeFrontend { lang: Lang::C }),
+            InputKind::Cpp => Box::new(CodeFrontend { lang: Lang::Cpp }),
         };
-        match res {
-            Ok(mut s) => out.append(&mut s),
+        let funcs = match frontend.parse(text, &st, &opts.labels) {
+            Ok(f) => f,
             Err(e) => return Err((path.clone(), e)),
+        };
+        for f in funcs {
+            // main — схема самого входа (main.c -> main.svg), прочие
+            // функции получают суффикс: main.c#sum_neg -> main-sum_neg.svg.
+            // main — программа, а не функция: подписи нет.
+            let (scheme_path, title) = match f.name.as_deref() {
+                Some(name) if name != "main" => (format!("{path}#{name}"), f.signature),
+                _ => (path.clone(), None),
+            };
+            out.push(Scheme {
+                path: scheme_path,
+                nodes: f.nodes,
+                title,
+            });
         }
     }
     Ok(out)
@@ -369,9 +357,19 @@ fn batch_scale(laid: &[(String, Vec<Layout>)], st: &Style) -> f64 {
         .fold(1.0_f64, f64::min)
 }
 
-/// Один вход -> страницы SVG.
+/// Один вход -> страницы SVG. `is_c` — обратная совместимость wasm-моста.
 pub fn render_text(text: &str, is_c: bool, opts: &Options) -> Result<Vec<String>, ParseError> {
-    match parse_batch(&[(String::new(), text.to_string(), is_c)], opts) {
+    let kind = if is_c { InputKind::C } else { InputKind::Gvn };
+    render_text_kind(text, kind, opts)
+}
+
+/// Один вход с явным видом: C, C++ или .gvn.
+pub fn render_text_kind(
+    text: &str,
+    kind: InputKind,
+    opts: &Options,
+) -> Result<Vec<String>, ParseError> {
+    match parse_batch(&[(String::new(), text.to_string(), kind)], opts) {
         Ok(schemes) => Ok(render_batch(schemes, &opts.style()).remove(0).1),
         Err((_, e)) => Err(e),
     }
@@ -379,8 +377,8 @@ pub fn render_text(text: &str, is_c: bool, opts: &Options) -> Result<Vec<String>
 
 /// JSON-ответ пачки: страницы каждой схемы + два вида отказов
 /// («empty» для входа без рисуемых операторов, «errors» для прочего).
-/// Одна форма для wasm и serve — у протокола один словарь, расходятся
-/// только HTTP-статусы.
+/// У ошибки есть `kind` (`syntax`/`unsupported`/`empty`) — клиент не
+/// угадывает по тексту сообщения. Одна форма для wasm и serve.
 pub fn batch_json(
     files: &[(String, Vec<String>)],
     empty: &[(String, ParseError)],
@@ -411,8 +409,9 @@ pub fn batch_json(
     };
     let err_item = |(name, e): &(String, ParseError)| {
         format!(
-            "{{\"name\":\"{}\",\"msg\":\"{}\",\"line\":{},\"col\":{},\"src\":{}}}",
+            "{{\"name\":\"{}\",\"kind\":\"{}\",\"msg\":\"{}\",\"line\":{},\"col\":{},\"src\":{}}}",
             esc(name),
+            e.kind.as_str(),
             esc(&e.msg),
             e.line.map_or("null".into(), |l| l.to_string()),
             e.col.map_or("null".into(), |c| c.to_string()),
@@ -436,6 +435,7 @@ pub fn batch_json(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frontend::gvn::parse;
 
     fn opts() -> Options {
         Options {
@@ -523,6 +523,17 @@ mod tests {
         assert!(pages[0].starts_with("<?xml"));
     }
 
+    /// Вид ошибки — полем `kind`, а не догадкой по тексту.
+    #[test]
+    fn batch_json_carries_error_kind() {
+        let json = batch_json(
+            &[],
+            &[("a.c".into(), ParseError::empty("нет операторов"))],
+            &[],
+        );
+        assert!(json.contains("\"kind\":\"empty\""), "{json}");
+    }
+
     #[test]
     fn batch_uses_uniform_sizes() {
         // широкая плитка в A должна раздуть act-размер и в B
@@ -530,8 +541,8 @@ mod tests {
         let b = "input scanf(1)\nx = 1\noutput printf(2)\n";
         let schemes = parse_batch(
             &[
-                ("a.gvn".into(), a.into(), false),
-                ("b.gvn".into(), b.into(), false),
+                ("a.gvn".into(), a.into(), InputKind::Gvn),
+                ("b.gvn".into(), b.into(), InputKind::Gvn),
             ],
             &opts(),
         )
@@ -556,8 +567,8 @@ mod tests {
         let b = "input scanf(1)\nx = 1\noutput printf(2)\n";
         let schemes = parse_batch(
             &[
-                ("a.gvn".into(), a.into(), false),
-                ("b.gvn".into(), b.into(), false),
+                ("a.gvn".into(), a.into(), InputKind::Gvn),
+                ("b.gvn".into(), b.into(), InputKind::Gvn),
             ],
             &opts(),
         )
@@ -602,7 +613,7 @@ mod tests {
             &[(
                 "a.gvn".into(),
                 "input scanf(1)\nx = 2\noutput printf(3)\n".into(),
-                false,
+                InputKind::Gvn,
             )],
             &opts(),
         )
@@ -618,8 +629,11 @@ mod tests {
     /// Draw.io-книга — редактируемый XML со ГОСТ-формами, одна на вход.
     #[test]
     fn drawio_export_is_editable_mxfile() {
-        let schemes =
-            parse_batch(&[("a.gvn".into(), "x = 1\ny = 2\n".into(), false)], &opts()).unwrap();
+        let schemes = parse_batch(
+            &[("a.gvn".into(), "x = 1\ny = 2\n".into(), InputKind::Gvn)],
+            &opts(),
+        )
+        .unwrap();
         let out = render_drawio_batch(schemes, &opts().style());
         assert_eq!(out.len(), 1);
         let xml = &out[0].1;
@@ -641,9 +655,9 @@ mod tests {
                 (
                     "short.gvn".into(),
                     "x = 1\noutput printf(1)\n".into(),
-                    false,
+                    InputKind::Gvn,
                 ),
-                ("long.gvn".into(), long, false),
+                ("long.gvn".into(), long, InputKind::Gvn),
             ],
             &opts(),
         )
@@ -691,7 +705,7 @@ mod tests {
         assert!(!pages[0].contains("перенос"), "маркер попал в SVG");
         assert!(!pages[0].contains("<circle"), "сиротский кружок-маркер");
         // экспорт отчёта — тот же стрип
-        let schemes = parse_batch(&[("a.c".into(), src.into(), true)], &opts()).unwrap();
+        let schemes = parse_batch(&[("a.c".into(), src.into(), InputKind::C)], &opts()).unwrap();
         let xml = &render_drawio_batch(schemes, &opts().style())[0].1;
         assert!(!xml.contains("перенос"), "маркер попал в draw.io");
     }
@@ -743,13 +757,8 @@ mod tests {
         for n in 1..=4 {
             let path = format!("{}/corpus/oap-lab{n}.c", env!("CARGO_MANIFEST_DIR"));
             let text = std::fs::read_to_string(&path).unwrap();
-            for (name, sig, gvn) in c_to_gvn_functions_full(&text, "en").unwrap() {
-                schemes.push(Scheme {
-                    path: format!("lab{n}#{name}"),
-                    nodes: parse(&gvn, &st, "en").unwrap(),
-                    title: Some(sig),
-                });
-            }
+            let inputs = vec![(format!("lab{n}"), text, InputKind::C)];
+            schemes.extend(parse_batch(&inputs, &opts()).unwrap());
         }
         let normed: Vec<Sizes> = schemes.iter().map(|s| normalize(&s.nodes, &st)).collect();
         let sizes = uniform_sizes(&normed);

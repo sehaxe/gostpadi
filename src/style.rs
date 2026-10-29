@@ -50,7 +50,7 @@ pub struct Style {
 
 const IO_WORDS: &[&str] = &[
     "printf", "printf_s", "scanf", "scanf_s", "scan", "print", "println", "puts", "putchar",
-    "echo", "getchar", "gets", "cin", "cout", "read", "write",
+    "echo", "getchar", "gets", "getline", "cin", "cout", "cerr", "clog", "read", "write",
 ];
 
 /// Коэффициенты производных метрик от кегля: значения при font = 12 pt.
@@ -166,6 +166,11 @@ impl Style {
 
     pub fn is_io(&self, text: &str) -> bool {
         let t = text.trim_start();
+        // C++: `std::cout`, `::std::printf` — то же имя в пространстве std.
+        let t = t
+            .strip_prefix("std::")
+            .or_else(|| t.strip_prefix("::std::"))
+            .unwrap_or(t);
         for w in self.io_words {
             if let Some(rest) = t.strip_prefix(*w) {
                 if rest.is_empty() {
@@ -237,6 +242,10 @@ mod tests {
         assert!(s.is_io("scanf(\"%d\", &a)"));
         assert!(s.is_io("scanf_s(\"%d\", &a)"), "суффиксная _s-версия scanf");
         assert!(s.is_io("printf_s(\"hi\")"), "суффиксная _s-версия printf");
+        assert!(s.is_io("std::cin >> a"), "C++ ввод с квалификатором");
+        assert!(s.is_io("std::cout << a"), "C++ вывод с квалификатором");
+        assert!(s.is_io("::std::printf(\"hi\")"), "глобальный std::");
+        assert!(s.is_io("getline(cin, s)"), "C++ getline");
         assert!(
             !s.is_io("scanf_sx(\"%d\", &a)"),
             "_s не ловит длиннее слово"

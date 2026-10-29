@@ -2,8 +2,8 @@
 //! Грамматику читает lang-c; препроцессор (комментарии и директивы)
 //! снимается сам — с сохранением нумерации строк, как в Python-версии.
 
-use crate::error::ParseError;
-use crate::frontend::{tile_kind, MARKER};
+use crate::error::{ParseError, ParseErrorKind};
+use crate::frontend::{cpp, tile_kind, Lang, MARKER};
 use crate::ir::{Branch, LoopKind, Node, NodeKind, Stmt};
 use lang_c::ast::*;
 use lang_c::driver::{parse_preprocessed, Config, Flavor, SyntaxError};
@@ -13,16 +13,25 @@ use lang_c::span::Node as LangNode;
 /// его узнаёт stmt() по точному тексту выражения.
 const MARKER_CALL: &str = "__gsplit__ ()";
 
-/// Код C -> узлы схемы (без Start/End, их добавляет layout).
+/// Код C -> узлы схемы без Start/End: их добавляет `CodeFrontend`.
 /// labels: "en" -> yes/no, "ru" -> да/нет.
 pub fn parse_c_to_nodes(src: &str, labels: &str) -> Result<Vec<Node>, ParseError> {
-    let prepared = prepare(src);
+    parse_code_to_nodes(src, labels, Lang::C)
+}
+
+/// Код C++ -> узлы `main` (для тестов и обратной совместимости).
+pub fn parse_cpp_to_nodes(src: &str, labels: &str) -> Result<Vec<Node>, ParseError> {
+    parse_code_to_nodes(src, labels, Lang::Cpp)
+}
+
+fn parse_code_to_nodes(src: &str, labels: &str, lang: Lang) -> Result<Vec<Node>, ParseError> {
+    let prepared = prepare(src, lang);
     let config = Config {
         cpp_command: String::new(),
         cpp_options: Vec::new(),
         flavor: Flavor::StdC11,
     };
-    let ast = match parse_preprocessed(&config, prepared.clone()) {
+    let ast = match parse_preprocessed(&config, prepared.parse.clone()) {
         Ok(p) => p,
         Err(e) => return Err(syntax_err(e, src)),
     };
@@ -46,24 +55,14 @@ pub fn parse_c_to_nodes(src: &str, labels: &str) -> Result<Vec<Node>, ParseError
         _ => return Err(ParseError::new("тело main должно быть блоком в скобках")),
     };
     let ctx = Ctx {
-        src: &prepared,
+        src: &prepared.parse,
+        text: &prepared.text,
         orig: src,
         labels,
     };
-    let stmts = ctx.items(body)?;
-    let mut nodes = Vec::new();
-    for s in stmts {
-        match s {
-            // верхнеуровневый return не рисуем: терминатор «конец» и так завершает схему
-            Stmt::Return(_) => {}
-            Stmt::Tile { kind, text } => nodes.push(Node::new(NodeKind::from(kind), text)),
-            Stmt::Break => nodes.push(Node::new(NodeKind::Act, "break")),
-            Stmt::Continue => nodes.push(Node::new(NodeKind::Act, "continue")),
-            Stmt::Node(n) => nodes.push(*n),
-        }
-    }
+    let nodes = nodes_from_stmts(ctx.items(body)?);
     if nodes.is_empty() {
-        return Err(ParseError::new(
+        return Err(ParseError::empty(
             "в main нет рисуемых операторов — рисовать нечего (тело пусто \
              или состоит из одних return/объявлений)",
         ));
@@ -71,7 +70,24 @@ pub fn parse_c_to_nodes(src: &str, labels: &str) -> Result<Vec<Node>, ParseError
     Ok(nodes)
 }
 
-/// Код C -> текст схемы .gvn (обратная совместимость с main.rs).
+/// Верхний уровень функции -> узлы схемы. `return` на верхнем уровне не
+/// рисуется: терминатор «конец» и так завершает схему.
+fn nodes_from_stmts(stmts: Vec<Stmt>) -> Vec<Node> {
+    let mut nodes = Vec::new();
+    for s in stmts {
+        match s {
+            Stmt::Return(_) => {}
+            Stmt::Tile { kind, text } => nodes.push(Node::new(NodeKind::from(kind), text)),
+            Stmt::Break => nodes.push(Node::new(NodeKind::Act, "break")),
+            Stmt::Continue => nodes.push(Node::new(NodeKind::Act, "continue")),
+            Stmt::Node(n) => nodes.push(*n),
+        }
+    }
+    nodes
+}
+
+/// Код C -> текст схемы .gvn: отладочный/экспортный путь, пайплайн
+/// им больше не пользуется.
 pub fn c_to_gvn(src: &str, labels: &str) -> Result<String, ParseError> {
     let nodes = parse_c_to_nodes(src, labels)?;
     let mut out = String::from("#gostpadi 1\n");
@@ -90,20 +106,20 @@ pub fn c_to_gvn_functions(src: &str, labels: &str) -> Result<Vec<(String, String
         .collect())
 }
 
-/// То же, но с сигнатурой функции для подписи схемы: (имя, сигнатура, gvn).
-/// Сигнатура — из исходника как в C: `print_mas(const int a[], int n)`;
-/// без параметров — `print_mas(void)`.
-pub fn c_to_gvn_functions_full(
+/// Код C/C++ -> узлы каждой функции с телом: (имя, сигнатура, узлы).
+/// Это основной путь пайплайна: без сериализации в `.gvn` и обратно.
+pub fn parse_functions_full(
     src: &str,
     labels: &str,
-) -> Result<Vec<(String, String, String)>, ParseError> {
-    let prepared = prepare(src);
+    lang: Lang,
+) -> Result<Vec<(String, String, Vec<Node>)>, ParseError> {
+    let prepared = prepare(src, lang);
     let config = Config {
         cpp_command: String::new(),
         cpp_options: Vec::new(),
         flavor: Flavor::StdC11,
     };
-    let ast = match parse_preprocessed(&config, prepared.clone()) {
+    let ast = match parse_preprocessed(&config, prepared.parse.clone()) {
         Ok(p) => p,
         Err(e) => return Err(syntax_err(e, src)),
     };
@@ -115,28 +131,18 @@ pub fn c_to_gvn_functions_full(
         let Some(name) = declarator_name(&f.node.declarator) else {
             continue;
         };
-        let signature = declarator_signature(&f.node.declarator, &prepared)
+        let signature = declarator_signature(&f.node.declarator, &prepared.text)
             .unwrap_or_else(|| format!("{name}(void)"));
         let Statement::Compound(items) = &f.node.statement.node else {
             continue;
         };
         let ctx = Ctx {
-            src: &prepared,
+            src: &prepared.parse,
+            text: &prepared.text,
             orig: src,
             labels,
         };
-        let stmts = ctx.items(items)?;
-        let mut nodes = Vec::new();
-        for s in stmts {
-            match s {
-                // верхнеуровневый return не рисуем: терминатор «конец» и так завершает схему
-                Stmt::Return(_) => {}
-                Stmt::Tile { kind, text } => nodes.push(Node::new(NodeKind::from(kind), text)),
-                Stmt::Break => nodes.push(Node::new(NodeKind::Act, "break")),
-                Stmt::Continue => nodes.push(Node::new(NodeKind::Act, "continue")),
-                Stmt::Node(n) => nodes.push(*n),
-            }
-        }
+        let nodes = nodes_from_stmts(ctx.items(items)?);
         // пустое тело (одни объявления/return) рисует «Start → End» —
         // схему без содержимого. Она не несёт информации и выглядит
         // ошибкой движка, поэтому такую функцию пропускаем. Если в
@@ -144,17 +150,31 @@ pub fn c_to_gvn_functions_full(
         if nodes.is_empty() {
             continue;
         }
-        let mut gvn = String::from("#gostpadi 1\n");
-        emit_nodes(&nodes, 0, &mut gvn);
-        out.push((name, signature, gvn));
+        out.push((name, signature, nodes));
     }
     if out.is_empty() {
-        return Err(ParseError::new(
+        return Err(ParseError::empty(
             "в коде нет рисуемых операторов — рисовать нечего (тела функций \
              пусты или состоят из одних return/объявлений)",
         ));
     }
     Ok(out)
+}
+
+/// То же, но с текстом `.gvn` на функцию — для отладки и обратной
+/// совместимости. Пайплайн этим путём больше не ходит.
+pub fn c_to_gvn_functions_full(
+    src: &str,
+    labels: &str,
+) -> Result<Vec<(String, String, String)>, ParseError> {
+    Ok(parse_functions_full(src, labels, Lang::C)?
+        .into_iter()
+        .map(|(name, signature, nodes)| {
+            let mut gvn = String::from("#gostpadi 1\n");
+            emit_nodes(&nodes, 0, &mut gvn);
+            (name, signature, gvn)
+        })
+        .collect())
 }
 
 fn emit_nodes(nodes: &[Node], depth: usize, out: &mut String) {
@@ -236,8 +256,10 @@ fn pad(out: &mut String, depth: usize) {
 }
 
 struct Ctx<'a> {
-    /// подготовленный исходник (spans lang-c указывают в него)
+    /// подготовленный исходник для lang-c (spans указывают в него)
     src: &'a str,
+    /// тот же исходник без C++-масок: из него берётся текст подписей
+    text: &'a str,
     /// исходник для .locate у ошибок
     orig: &'a str,
     labels: &'a str,
@@ -290,7 +312,7 @@ impl<'a> Ctx<'a> {
 
     fn init_text(&self, init: &LangNode<Initializer>) -> String {
         match &init.node {
-            Initializer::Expression(e) => expr_text(self.src, e),
+            Initializer::Expression(e) => expr_text(self.text, e),
             Initializer::List(items) => {
                 let parts: Vec<String> = items
                     .iter()
@@ -308,7 +330,7 @@ impl<'a> Ctx<'a> {
             Statement::While(w) => {
                 let mut nd = Node::new(
                     NodeKind::Loop,
-                    shorten_calls(&expr_text(self.src, &w.node.expression)),
+                    shorten_calls(&expr_text(self.text, &w.node.expression)),
                 );
                 nd.loop_kind = Some(LoopKind::While);
                 nd.lang = self.labels.to_string();
@@ -318,7 +340,7 @@ impl<'a> Ctx<'a> {
             Statement::For(f) => {
                 let init = match &f.node.initializer.node {
                     ForInitializer::Empty | ForInitializer::StaticAssert(_) => String::new(),
-                    ForInitializer::Expression(e) => expr_text(self.src, e),
+                    ForInitializer::Expression(e) => expr_text(self.text, e),
                     ForInitializer::Declaration(d) => {
                         // тип счётчика в заголовке не нужен
                         d.node
@@ -341,13 +363,13 @@ impl<'a> Ctx<'a> {
                     .node
                     .condition
                     .as_ref()
-                    .map(|e| shorten_calls(&expr_text(self.src, e)))
+                    .map(|e| shorten_calls(&expr_text(self.text, e)))
                     .unwrap_or_default();
                 let step = f
                     .node
                     .step
                     .as_ref()
-                    .map(|e| expr_text(self.src, e))
+                    .map(|e| expr_text(self.text, e))
                     .unwrap_or_default();
                 let mut nd = Node::new(NodeKind::Loop, format!("{}; {}; {}", init, cond, step));
                 nd.loop_kind = Some(LoopKind::For);
@@ -362,23 +384,25 @@ impl<'a> Ctx<'a> {
                 // и без подписи он врал бы, что проверка идёт первой.
                 let mut nd = Node::new(
                     NodeKind::Loop,
-                    shorten_calls(&expr_text(self.src, &d.node.expression)),
+                    shorten_calls(&expr_text(self.text, &d.node.expression)),
                 );
                 nd.loop_kind = Some(LoopKind::DoWhile);
                 nd.lang = self.labels.to_string();
                 nd.body = Some(self.block_stmt(&d.node.statement)?);
                 Ok(vec![Stmt::Node(Box::new(nd))])
             }
-            Statement::Goto(g) => Err(self.err("в коде goto — не поддерживается", g.span.start)),
+            Statement::Goto(g) => Err(self
+                .err("в коде goto — не поддерживается", g.span.start)
+                .with_kind(ParseErrorKind::Unsupported)),
             Statement::Return(e) => Ok(vec![Stmt::Return(match e {
-                Some(x) => format!("return {}", expr_text(self.src, x)),
+                Some(x) => format!("return {}", expr_text(self.text, x)),
                 None => "return".to_string(),
             })]),
             Statement::Break => Ok(vec![Stmt::Break]),
             Statement::Continue => Ok(vec![Stmt::Continue]),
             Statement::Compound(items) => self.items(items),
             Statement::Expression(Some(e)) => {
-                let text = expr_text(self.src, e);
+                let text = expr_text(self.text, e);
                 // маркер ручного переноса: prepare() свёл `// перенос`
                 // к вызову `__gsplit__ ()`, здесь он становится узлом
                 if text == MARKER_CALL {
@@ -399,7 +423,9 @@ impl<'a> Ctx<'a> {
             }
             Statement::Expression(None) => Ok(vec![]),
             Statement::Labeled(l) => self.labeled(l),
-            Statement::Asm(_) => Err(self.err("inline asm не поддерживается", st.span.start)),
+            Statement::Asm(_) => Err(self
+                .err("inline asm не поддерживается", st.span.start)
+                .with_kind(ParseErrorKind::Unsupported)),
         }
     }
 
@@ -408,7 +434,7 @@ impl<'a> Ctx<'a> {
             Label::Identifier(id) => {
                 let text = match &l.node.statement.node {
                     Statement::Expression(Some(e)) => {
-                        format!("{}: {}", id.node.name, expr_text(self.src, e))
+                        format!("{}: {}", id.node.name, expr_text(self.text, e))
                     }
                     Statement::Expression(None) => format!("{}:", id.node.name),
                     _ => return Err(self.err("метка перед блоком не поддерживается", l.span.start)),
@@ -430,7 +456,7 @@ impl<'a> Ctx<'a> {
             NodeKind::Decision,
             format!(
                 "if ({})",
-                shorten_calls(&expr_text(self.src, i.node.condition.as_ref()))
+                shorten_calls(&expr_text(self.text, i.node.condition.as_ref()))
             ),
         );
         nd.lang = self.labels.to_string();
@@ -456,7 +482,7 @@ impl<'a> Ctx<'a> {
     }
 
     fn switch_node(&self, s: &LangNode<SwitchStatement>) -> Result<Node, ParseError> {
-        let var = expr_text(self.src, &s.node.expression);
+        let var = expr_text(self.text, &s.node.expression);
         let mut nd = Node::new(NodeKind::Decision, format!("switch ({})", var));
         nd.lang = self.labels.to_string();
         nd.switch_var = Some(var.clone());
@@ -511,7 +537,7 @@ impl<'a> Ctx<'a> {
                 Statement::Labeled(l) => {
                     let chained = match &l.node.label.node {
                         Label::Case(e) => {
-                            labs.push(format!("{} = {}", var, expr_text(self.src, e.as_ref())));
+                            labs.push(format!("{} = {}", var, expr_text(self.text, e.as_ref())));
                             true
                         }
                         Label::Default => {
@@ -687,6 +713,29 @@ fn strip_comments(src: &str) -> String {
     out
 }
 
+/// Подготовленный вход: `parse` читает lang-c, `text` — тот же текст для
+/// подписей блоков. Длины совпадают байт в байт: C++-обвязка маскируется
+/// пробелами, поэтому span'ы AST годятся для обоих срезов. В `text`
+/// остаются `&`, `string`, `auto` и `using`; `std::` в подписи опускается.
+struct Prepared {
+    parse: String,
+    text: String,
+}
+
+impl Prepared {
+    /// Инвариант C++-масок: `parse` и `text` совпадают байт в байт,
+    /// иначе span'ы lang-c указывают в разные места. Ловим это здесь,
+    /// а не в случайном тесте раскладки.
+    fn new(parse: String, text: String) -> Self {
+        assert_eq!(
+            parse.len(),
+            text.len(),
+            "C++-маска изменила длину строки: {parse:?} vs {text:?}"
+        );
+        Self { parse, text }
+    }
+}
+
 /// pyconverter-подготовка: снять комментарии и строки препроцессора.
 /// Директивы заменяются пустыми строками — нумерация строк сохраняется.
 ///
@@ -699,11 +748,11 @@ fn strip_comments(src: &str) -> String {
 /// это закомментированный код, рисовать его нельзя. Ветки `#ifdef /
 /// #ifndef / #if 1` считаются включёнными: заголовочные файлы студент
 /// underscope подключает осознанно.
-fn prepare(src: &str) -> String {
-    prepare_impl(src, crate::frontend::autofix_enabled())
+fn prepare(src: &str, lang: Lang) -> Prepared {
+    prepare_impl(src, crate::frontend::autofix_enabled(), lang)
 }
 
-fn prepare_impl(src: &str, autofix: bool) -> String {
+fn prepare_impl(src: &str, autofix: bool, lang: Lang) -> Prepared {
     #[cfg(feature = "autofix")]
     let src = if autofix {
         crate::frontend::fix::normalize(src)
@@ -724,20 +773,32 @@ fn prepare_impl(src: &str, autofix: bool) -> String {
     // 2) снять комментарии — по ВСЕМУ тексту: /* */ живёт через
     //    построчно строки, и на перловой строке его не видно
     let stripped = strip_comments(&marked);
+    // 2.5) namespace X { ... } — обёртка C++; функции внутри остаются
+    //      обычными функциями файла. Для C этот проход не нужен.
+    let stripped = if lang == Lang::Cpp {
+        cpp::strip_namespaces(&stripped)
+    } else {
+        stripped
+    };
     // 3) вырезать выключенные ветки и сами директивы
     let no_comments: Vec<String> = stripped.split('\n').map(str::to_string).collect();
     // стек условий препроцессора: (ветка_живая, была_ли_else)
     let mut cond: Vec<(bool, bool)> = Vec::new();
     let disabled = |cond: &Vec<(bool, bool)>| cond.iter().any(|(on, _)| !on);
-    let mut out = Vec::with_capacity(no_comments.len());
+    let mut out: Vec<(String, String)> = Vec::with_capacity(no_comments.len());
     for line in &no_comments {
         let t = line.trim_start();
         let Some(rest) = t.strip_prefix('#') else {
-            out.push(if disabled(&cond) {
-                String::new()
+            if disabled(&cond) {
+                out.push((String::new(), String::new()));
             } else {
-                expand_stdbool(line)
-            });
+                let text = expand_stdbool(line);
+                let (parse, display) = match lang {
+                    Lang::C => (text.clone(), text),
+                    Lang::Cpp => (cpp::normalize_line(&text), cpp::display_line(&text)),
+                };
+                out.push((parse, display));
+            }
             continue;
         };
         let rest = rest.trim();
@@ -780,9 +841,18 @@ fn prepare_impl(src: &str, autofix: bool) -> String {
             }
             _ => {}
         }
-        out.push(String::new());
+        out.push((String::new(), String::new()));
     }
-    out.join("\n")
+    Prepared::new(
+        out.iter()
+            .map(|(p, _)| p.as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        out.iter()
+            .map(|(_, t)| t.as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
 }
 
 /// `// перенос` -> `__gsplit__ ();` на той же позиции строки: маркер
@@ -1040,12 +1110,27 @@ fn syntax_err(e: SyntaxError, orig: &str) -> ParseError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn prep_c(src: &str) -> Prepared {
+        prepare(src, Lang::C)
+    }
+
+    fn prep_cpp(src: &str) -> Prepared {
+        prepare(src, Lang::Cpp)
+    }
+
     use crate::style::Style;
 
     fn parse_ok(src: &str) -> Vec<Node> {
         match parse_c_to_nodes(src, "en") {
             Ok(nodes) => nodes,
             Err(e) => panic!("parse failed: {}", e),
+        }
+    }
+
+    fn parse_cpp_ok(src: &str) -> Vec<Node> {
+        match parse_cpp_to_nodes(src, "en") {
+            Ok(nodes) => nodes,
+            Err(e) => panic!("cpp parse failed: {}", e),
         }
     }
 
@@ -1201,7 +1286,7 @@ mod tests {
             "    // переносить\n",
             "}\n",
         );
-        let p = prepare(src);
+        let p = prep_c(src).parse;
         assert_eq!(p.matches("__gsplit__ ();").count(), 2, "{p}");
         assert!(
             p.contains("    int a = 1; __gsplit__ ();"),
@@ -1563,12 +1648,22 @@ mod tests {
     fn main_with_only_return_is_refused() {
         let e = parse_c_to_nodes("int main(void) { return 0; }", "en").unwrap_err();
         assert!(e.msg.contains("нет рисуемых операторов"), "{}", e.msg);
+        assert_eq!(e.kind, ParseErrorKind::Empty);
         // и с выражениями в return — тоже: return что-то считает
         let e2 = parse_c_to_nodes("int main(void) { return a + 1; }", "en").unwrap_err();
         assert!(e2.msg.contains("нет рисуемых операторов"), "{}", e2.msg);
+        assert_eq!(e2.kind, ParseErrorKind::Empty);
         // объявления без инициализаторов не рисуются — тот же отказ
         let e3 = parse_c_to_nodes("int main(void) { int a; float b; }", "en").unwrap_err();
         assert!(e3.msg.contains("нет рисуемых операторов"), "{}", e3.msg);
+        assert_eq!(e3.kind, ParseErrorKind::Empty);
+    }
+
+    /// `goto` — не «пусто», а осознанно неподдерживаемая конструкция.
+    #[test]
+    fn goto_is_unsupported_kind() {
+        let e = parse_c_to_nodes("int main(void) { goto end; end: return 0; }", "en").unwrap_err();
+        assert_eq!(e.kind, ParseErrorKind::Unsupported, "{}", e.msg);
     }
 
     /// Функция-пустышка пропускается, main с телом рисуется: пустышка не
@@ -1604,6 +1699,7 @@ mod tests {
             "int add(int a, int b) { return a + b; }\nint sub(int a, int b) { return a - b; }";
         let e = c_to_gvn_functions(src, "en").unwrap_err();
         assert!(e.msg.contains("нет рисуемых операторов"), "{}", e.msg);
+        assert_eq!(e.kind, ParseErrorKind::Empty);
     }
 
     /// Подпись функции — сигнатура из C как её написал студент:
@@ -1666,7 +1762,7 @@ mod tests {
             nodes.iter().map(|n| &n.text).collect::<Vec<_>>()
         );
         // нумерация строк сохраняется: продолжения уходят пустыми строками
-        let prepared = prepare(src);
+        let prepared = prep_c(src).parse;
         assert_eq!(prepared.lines().count(), src.lines().count());
     }
 
@@ -1760,7 +1856,7 @@ mod tests {
     fn strict_mode_keeps_cr_only_file_unparseable() {
         let src = "int main(void)\r{\r// сумма\rint a = 1;\rprintf(\"%d\", a);\rreturn 0;\r}\r";
         assert!(parse_c_to_nodes(src, "en").is_ok(), "фикс должен спасти");
-        let strict = prepare_impl(src, false);
+        let strict = prepare_impl(src, false, Lang::C).parse;
         assert!(strict.contains('\r'), "строгий режим не должен трогать CR");
         let config = Config {
             cpp_command: String::new(),
@@ -1771,5 +1867,359 @@ mod tests {
             parse_preprocessed(&config, strict).is_err(),
             "строгий разбор CR-только файла обязан падать"
         );
+    }
+
+    /// C-вход не проходит C++-нормализацию: `constexpr` — обычное имя.
+    #[test]
+    fn c_code_is_not_cpp_normalized() {
+        let p = prep_c("int main() { int constexpr = 1; printf(\"%d\", constexpr); }");
+        assert!(p.parse.contains("constexpr"), "{}", p.parse);
+        assert_eq!(p.parse, p.text);
+    }
+
+    /// `using namespace std;` и `std::` — не C. Маскируются пробелами:
+    /// lang-c видит чистый C, а подпись блока остаётся исходной.
+    #[test]
+    fn cpp_using_and_scope_are_masked() {
+        let src = concat!(
+            "#include <iostream>\n",
+            "using namespace std;\n",
+            "using std::endl;\n",
+            "int main() {\n",
+            "    std::cout << \"hi\" << endl;\n",
+            "    return 0;\n",
+            "}\n",
+        );
+        let p = prep_cpp(src);
+        assert!(!p.parse.contains("using"), "{}", p.parse);
+        assert!(!p.parse.contains("std::"), "{}", p.parse);
+        assert!(
+            p.text.contains("cout << \"hi\" << endl"),
+            "подпись без std::: {}",
+            p.text
+        );
+        assert!(!p.text.contains("std::"), "{}", p.text);
+        assert_eq!(p.parse.lines().count(), src.lines().count());
+        assert_eq!(p.parse.len(), p.text.len(), "span'ы общие для двух срезов");
+    }
+
+    /// `using namespace std::chrono;` — тоже using-директива, а не код.
+    #[test]
+    fn cpp_using_qualified_namespace_is_masked() {
+        let p = prep_cpp("using namespace std::chrono;\nint main() { return 0; }");
+        assert!(!p.parse.contains("using"), "{}", p.parse);
+    }
+
+    /// Ссылка в объявлении: для разбора `*`, для схемы — исходный `&`.
+    #[test]
+    fn cpp_references_parse_as_pointers() {
+        let src = concat!(
+            "void swap(int &a, int &b) {\n",
+            "    int t = a;\n",
+            "    a = b;\n",
+            "    b = t;\n",
+            "}\n",
+            "int main() {\n",
+            "    int x = 1, y = 2;\n",
+            "    swap(x, y);\n",
+            "    return 0;\n",
+            "}\n",
+        );
+        let p = prep_cpp(src);
+        assert!(p.parse.contains("int *a, int *b"), "{}", p.parse);
+        assert!(p.text.contains("int &a, int &b"), "{}", p.text);
+        let schemes = parse_functions_full(src, "en", Lang::Cpp).expect("C++ с ссылками");
+        let swap = schemes.iter().find(|(n, _, _)| n == "swap").unwrap();
+        assert_eq!(swap.1, "swap(int &a, int &b)");
+    }
+
+    /// `&` в выражении и адрес переменной — не ссылки: их трогать нельзя.
+    #[test]
+    fn cpp_bitwise_and_and_address_of_are_kept() {
+        let src = concat!(
+            "int main() {\n",
+            "    int a = 6, b = 3;\n",
+            "    int c = a & b;\n",
+            "    int *p = &a;\n",
+            "    printf(\"%d %d\", c, *p);\n",
+            "    return 0;\n",
+            "}\n",
+        );
+        let p = prep_cpp(src);
+        assert!(p.parse.contains("a & b"), "{}", p.parse);
+        assert!(p.parse.contains("&a"), "{}", p.parse);
+        parse_cpp_ok(src);
+    }
+
+    /// `string` — не тип C: для разбора `int`, подпись остаётся `string s`.
+    #[test]
+    fn cpp_string_type_is_replaced_for_parser() {
+        let src = "int main() {\n    string s = \"hi\";\n    std::cout << s;\n    return 0;\n}\n";
+        let p = prep_cpp(src);
+        assert!(p.parse.contains("int    s = \"hi\""), "{}", p.parse);
+        assert!(p.text.contains("string s = \"hi\""), "{}", p.text);
+        assert_eq!(p.parse.len(), p.text.len());
+        let nodes = parse_cpp_ok(src);
+        let tiles = texts(&nodes, NodeKind::Act);
+        assert!(tiles.iter().any(|t| t == "s = \"hi\""), "{tiles:?}");
+        let io = texts(&nodes, NodeKind::Io);
+        assert!(io.iter().any(|t| t == "cout << s"), "{io:?}");
+    }
+
+    /// `string` как обычный идентификатор (`string = 1`) — не тип.
+    #[test]
+    fn cpp_string_variable_is_kept() {
+        let p = prep_cpp("int main() { int string = 1; printf(\"%d\", string); }");
+        assert!(p.parse.contains("int string = 1"), "{}", p.parse);
+    }
+
+    /// `cpplabs::readNumber` — `::` в C нет; для разбора `__`, подпись
+    /// остаётся с `::` (span начинается на первом имени).
+    #[test]
+    fn cpp_scope_is_replaced_for_parser() {
+        let src = "int main() { int n = cpplabs::readNumber(\"n: \"); printf(\"%d\", n); }";
+        let p = prep_cpp(src);
+        assert!(p.parse.contains("cpplabs__readNumber"), "{}", p.parse);
+        assert!(p.text.contains("cpplabs::readNumber"), "{}", p.text);
+        parse_cpp_ok(src);
+    }
+
+    /// `auto x = ...` — для разбора `int`; `auto [a, b]` не трогаем.
+    #[test]
+    fn cpp_auto_is_replaced() {
+        let p = prep_cpp("int main() { auto x = 1; auto& r = x; printf(\"%d\", r); }");
+        assert!(p.parse.contains("int  x = 1"), "{}", p.parse);
+        assert!(p.parse.contains("int * r"), "{}", p.parse);
+        assert!(
+            prep_cpp("int main() { auto [a, b] = f(); }")
+                .parse
+                .contains("auto [a, b]"),
+            "structured binding не трогаем"
+        );
+    }
+
+    /// `{}` и `{expr}` в объявлениях — C++11; для разбора `= 0`/`= expr`.
+    #[test]
+    fn cpp_brace_initializers() {
+        let p = prep_cpp(concat!(
+            "int main() {\n",
+            "    double a{};\n",
+            "    bool b = {};\n",
+            "    double c{1.5};\n",
+            "    int d{foo(1, 2)};\n",
+            "    printf(\"%f %d %f %d\", a, b, c, d);\n",
+            "}\n",
+        ));
+        assert!(p.parse.contains("double a  ;"), "{}", p.parse);
+        assert!(p.parse.contains("_Bool b = 0 ;"), "{}", p.parse);
+        assert!(p.parse.contains("double c=1.5;;"), "{}", p.parse);
+        assert!(p.parse.contains("int d=foo(1, 2);;"), "{}", p.parse);
+    }
+
+    /// `std::vector` — шаблон, вне поддержки: остаётся честная ошибка,
+    /// а не молчаливая кривая схема.
+    #[test]
+    fn cpp_stl_template_is_not_silently_mangled() {
+        assert!(parse_c_to_nodes("int main() { std::vector<int> v; return 0; }", "en").is_err());
+    }
+
+    /// `namespace X { ... }` — обёртка: функции внутри становятся
+    /// функциями файла, `X::f` для разбора — обычное имя.
+    #[test]
+    fn cpp_namespace_wrapper_is_stripped() {
+        let src = concat!(
+            "namespace lab {\n",
+            "int add(int a, int b) { int s = a + b; return s; }\n",
+            "}\n",
+            "int main() { printf(\"%d\", lab::add(1, 2)); return 0; }\n",
+        );
+        let p = prep_cpp(src);
+        assert!(!p.parse.contains("namespace"), "{}", p.parse);
+        assert_eq!(p.parse.lines().count(), src.lines().count());
+        let schemes = parse_functions_full(src, "en", Lang::Cpp).expect("namespace-обёртка");
+        assert!(schemes.iter().any(|(n, _, _)| n == "add"), "{schemes:?}");
+        parse_cpp_ok(src);
+    }
+
+    /// `namespace fs = std::filesystem;` — алиас, тоже обёртка.
+    #[test]
+    fn cpp_namespace_alias_is_stripped() {
+        let p = prep_cpp("namespace fs = std::filesystem;\nint main() { return 0; }");
+        assert!(!p.parse.contains("namespace"), "{}", p.parse);
+        assert!(!p.parse.contains("std::"), "{}", p.parse);
+    }
+
+    /// `static_cast<T>(x)` — для разбора `(T)(x)`, подпись исходная.
+    #[test]
+    fn cpp_static_cast_is_rewritten() {
+        let src = "int main() { double x = 1.5; int n = static_cast<int>(x); printf(\"%d\", n); }";
+        let p = prep_cpp(src);
+        assert!(!p.parse.contains("static_cast"), "{}", p.parse);
+        assert!(p.text.contains("static_cast<int>(x)"), "{}", p.text);
+        parse_cpp_ok(src);
+    }
+
+    /// Остальные C++-касты и `std::string` внутри каста.
+    #[test]
+    fn cpp_other_casts_are_rewritten() {
+        let src = concat!(
+            "int main() {\n",
+            "    long long n = 1;\n",
+            "    char *p = reinterpret_cast<char *>(n);\n",
+            "    string s = static_cast<std::string>(p);\n",
+            "    printf(\"%s %p\", s, (void *)p);\n",
+            "    return 0;\n",
+            "}\n",
+        );
+        let p = prep_cpp(src);
+        assert!(!p.parse.contains("reinterpret_cast"), "{}", p.parse);
+        assert!(!p.parse.contains("static_cast"), "{}", p.parse);
+        parse_cpp_ok(src);
+    }
+
+    /// `using ::std::cout;` — ведущий `::` в using-декларации.
+    #[test]
+    fn cpp_using_leading_scope_is_masked() {
+        let p = prep_cpp("using ::std::cout;\nint main() { cout << 1; }");
+        assert!(!p.parse.contains("using"), "{}", p.parse);
+    }
+
+    /// `auto int x` — storage class C, а не вывод типа: не трогаем.
+    #[test]
+    fn cpp_auto_storage_class_is_kept() {
+        let p = prep_cpp("int main() { auto int x = 1; printf(\"%d\", x); }");
+        assert!(p.parse.contains("auto int x"), "{}", p.parse);
+    }
+
+    /// Блочные `{}` и списки инициализации не принимаются за `{expr}`.
+    #[test]
+    fn cpp_block_braces_are_not_initializers() {
+        let src = concat!(
+            "struct P { int x; };\n",
+            "enum E { A };\n",
+            "int main() {\n",
+            "    int a[] = {1, 2};\n",
+            "    if (a[0]) { printf(\"x\"); } else { printf(\"y\"); }\n",
+            "    return 0;\n",
+            "}\n",
+        );
+        let p = prep_cpp(src);
+        assert!(p.parse.contains("int a[] = {1, 2}"), "{}", p.parse);
+        assert!(p.parse.contains("if (a[0]) {"), "{}", p.parse);
+        assert!(p.parse.contains("struct P { int x; }"), "{}", p.parse);
+        assert!(p.parse.contains("enum E { A }"), "{}", p.parse);
+        parse_cpp_ok(src);
+    }
+
+    /// `std::size_t` и потоки — типы без C-аналога.
+    #[test]
+    fn cpp_std_scalar_and_stream_types() {
+        let p = prep_cpp(
+            "int main() { std::size_t n = 0; std::istream& in = std::cin; printf(\"%zu\", n); }",
+        );
+        assert!(!p.parse.contains("std::size_t"), "{}", p.parse);
+        assert!(!p.parse.contains("std::istream"), "{}", p.parse);
+        assert!(!p.parse.contains("std::cin"), "{}", p.parse);
+    }
+
+    /// `namespace a::b` и `inline namespace` — тоже обёртки.
+    #[test]
+    fn cpp_namespace_qualified_and_inline() {
+        let src = concat!(
+            "inline namespace lab {\n",
+            "int f() { return 1; }\n",
+            "}\n",
+            "namespace a::b {\n",
+            "int g() { return 2; }\n",
+            "}\n",
+            "int main() { printf(\"%d %d\", lab::f(), a::b::g()); return 0; }\n",
+        );
+        let p = prep_cpp(src);
+        assert!(!p.parse.contains("namespace"), "{}", p.parse);
+        assert!(!p.parse.contains("inline"), "{}", p.parse);
+        parse_cpp_ok(src);
+    }
+
+    /// `namespace X` и `{` на разных строках — обычное форматирование.
+    #[test]
+    fn cpp_namespace_brace_on_next_line() {
+        let src = concat!(
+            "namespace lab\n",
+            "{\n",
+            "int f() { return 1; }\n",
+            "}\n",
+            "int main() { printf(\"%d\", lab::f()); return 0; }\n",
+        );
+        let p = prep_cpp(src);
+        assert!(!p.parse.contains("namespace"), "{}", p.parse);
+        parse_cpp_ok(src);
+    }
+
+    /// `namespace X { ... };` — лишняя `;` после `}` тоже снимается.
+    #[test]
+    fn cpp_namespace_trailing_semicolon_is_stripped() {
+        let src = concat!(
+            "namespace lab {\n",
+            "int add(int a, int b) { int s = a + b; return s; }\n",
+            "};\n",
+            "int main() { printf(\"%d\", lab::add(1, 2)); return 0; }\n",
+        );
+        let p = prep_cpp(src);
+        assert!(!p.parse.contains("namespace"), "{}", p.parse);
+        parse_cpp_ok(src);
+    }
+
+    /// Вложенный namespace: маскируются оба заголовка и обе `}`.
+    #[test]
+    fn cpp_nested_namespaces_are_stripped() {
+        let src = concat!(
+            "namespace a {\n",
+            "namespace b {\n",
+            "int f() { return 1; }\n",
+            "}\n",
+            "}\n",
+            "int main() { printf(\"%d\", a::b::f()); return 0; }\n",
+        );
+        let p = prep_cpp(src);
+        assert!(!p.parse.contains("namespace"), "{}", p.parse);
+        parse_cpp_ok(src);
+    }
+
+    /// Строковые литералы неприкосновенны: внутри них нет ни using, ни std::.
+    #[test]
+    fn cpp_literals_are_untouched() {
+        let src = "int main() { printf(\"using namespace std; std::cout & int\"); }";
+        let p = prep_cpp(src);
+        assert!(
+            p.parse.contains("using namespace std; std::cout & int"),
+            "{}",
+            p.parse
+        );
+    }
+
+    /// `using` — обычное имя в C, если за ним не директива.
+    #[test]
+    fn cpp_using_as_identifier_is_kept() {
+        let p = prep_cpp("int main() { int using = 1; printf(\"%d\", using); }");
+        assert!(p.parse.contains("int using = 1"), "{}", p.parse);
+    }
+
+    /// `constexpr` и `return {};` — обычный C++ в лабораторных заготовках.
+    #[test]
+    fn cpp_constexpr_and_empty_return() {
+        let src = concat!(
+            "constexpr int N = 3;\n",
+            "int f(int x) {\n",
+            "    if (x > N) {\n",
+            "        return {};\n",
+            "    }\n",
+            "    return x;\n",
+            "}\n",
+            "int main() { printf(\"%d\", f(1)); return 0; }\n",
+        );
+        let p = prep_cpp(src);
+        assert!(p.parse.contains("const     int N = 3;"), "{}", p.parse);
+        assert!(p.parse.contains("return 0 ;"), "{}", p.parse);
+        parse_cpp_ok(src);
     }
 }

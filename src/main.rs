@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use gostpadi::error::ParseError;
+use gostpadi::frontend::{input_kind, InputKind};
 use gostpadi::pipeline::{self, Options};
 
 mod serve;
@@ -292,16 +293,13 @@ fn main() {
         process::exit(2);
     }
 
-    // читаем входы; расширение определяет тип (.c -> C, остальное .gvn)
-    let mut sources: Vec<(String, String, bool)> = Vec::with_capacity(inputs.len());
+    // читаем входы; расширение определяет тип (C/C++ -> разбор кода, остальное .gvn)
+    let mut sources: Vec<(String, String, InputKind)> = Vec::with_capacity(inputs.len());
     for inp in &inputs {
         match std::fs::read_to_string(inp) {
             Ok(text) => {
-                let is_c = Path::new(inp)
-                    .extension()
-                    .map(|e| e == "c")
-                    .unwrap_or(false);
-                sources.push((inp.clone(), text, is_c));
+                let kind = input_kind(inp);
+                sources.push((inp.clone(), text, kind));
             }
             Err(e) => {
                 eprintln!("не удалось открыть {inp}: {e}");

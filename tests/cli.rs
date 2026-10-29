@@ -330,6 +330,43 @@ fn all_functions_of_file_get_own_scheme() {
     assert!(d.join("o/two-add.svg").exists(), "helper — свой файл");
 }
 
+/// `.cpp` — код, а не текст схемы: using namespace std, std::, cin/cout,
+/// ссылки и string разбираются, а подписи остаются C++ (`int &a`, `cout`).
+#[test]
+fn cpp_input_is_parsed_as_code() {
+    let d = tmp("cpp");
+    let f = d.join("lab.cpp");
+    fs::write(
+        &f,
+        concat!(
+            "#include <iostream>\n",
+            "#include <string>\n",
+            "using namespace std;\n",
+            "void swap(int &a, int &b) { int t = a; a = b; b = t; }\n",
+            "int main() {\n",
+            "    int x, y;\n",
+            "    cin >> x >> y;\n",
+            "    swap(x, y);\n",
+            "    string name = \"lab\";\n",
+            "    std::cout << name << x << endl;\n",
+            "    return 0;\n",
+            "}\n",
+        ),
+    )
+    .unwrap();
+    let out = run(&[f.to_str().unwrap(), "-o", d.join("o/").to_str().unwrap()]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let main = fs::read_to_string(d.join("o/lab.svg")).unwrap();
+    assert!(main.contains("cin &gt;&gt; x &gt;&gt; y"), "{main}");
+    assert!(main.contains("cout &lt;&lt; name"), "{main}");
+    let swap = fs::read_to_string(d.join("o/lab-swap.svg")).unwrap();
+    assert!(swap.contains("swap(int &amp;a, int &amp;b)"), "{swap}");
+}
+
 /// Схема функции подписана её сигнатурой: коробка «предопределённый
 /// процесс» (прямоугольник с двойными вертикальными линиями) над
 /// «началом», стрелка из коробки в овал. main — программа, не функция:

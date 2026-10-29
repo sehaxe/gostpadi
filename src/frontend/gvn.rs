@@ -256,10 +256,42 @@ fn extract_switch_var(cond: &str) -> Option<String> {
     None
 }
 
-fn lang_words(labels: &str) -> (&'static str, &'static str, &'static str, &'static str) {
+pub(crate) fn lang_words(labels: &str) -> (&'static str, &'static str, &'static str, &'static str) {
     match labels {
         "ru" => ("начало", "конец", "да", "нет"),
         _ => ("Start", "End", "yes", "no"),
+    }
+}
+
+/// Перенос строк для IR, пришедшего не из `.gvn`-текста (C/C++-фронтенд).
+/// Раньше это делал gvn::parse; теперь общий шаг для всех фронтендов.
+pub(crate) fn wrap_nodes(nodes: &mut [Node], style: &Style) {
+    for n in nodes {
+        wrap_node(n, style);
+    }
+}
+
+fn wrap_node(n: &mut Node, style: &Style) {
+    let limit = match n.kind {
+        NodeKind::Decision => style.cond_chars,
+        _ => style.max_chars,
+    };
+    n.text = wrap(&n.text, limit);
+    for b in &mut n.branches {
+        wrap_stmts(&mut b.stmts, style);
+    }
+    if let Some(body) = &mut n.body {
+        wrap_stmts(body, style);
+    }
+}
+
+fn wrap_stmts(stmts: &mut [Stmt], style: &Style) {
+    for s in stmts {
+        match s {
+            Stmt::Tile { text, .. } | Stmt::Return(text) => *text = wrap(text, style.max_chars),
+            Stmt::Node(n) => wrap_node(n, style),
+            Stmt::Break | Stmt::Continue => {}
+        }
     }
 }
 

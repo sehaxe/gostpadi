@@ -5,7 +5,7 @@
 //!
 //! Маршруты:
 //!   GET  /health → ok
-//!   POST /render?lang=c|gvn&labels=ru|en&font=&lw=&no_split=1   body=код
+//!   POST /render?lang=c|cpp|gvn&labels=ru|en&font=&lw=&no_split=1   body=код
 //!   POST /lint?lang=…  — инварианты раскладки (аналог CLI --check)
 //!   POST /export?mode=1|2|3&lang=… — 1: SVG в мм, 2: draw.io на схему,
 //!                                  3: одна книга draw.io на всю пачку
@@ -14,6 +14,7 @@
 //! Пачечная семантика как у CLI: сбойный вход не роняет ответ —
 //! он попадает в «errors» (или «empty»), HTTP-статус остаётся 200.
 
+use gostpadi::frontend::InputKind;
 use gostpadi::pipeline::{self, Options};
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -171,11 +172,12 @@ fn opts_from(q: &BTreeMap<String, String>) -> Options {
 
 /// Вход для одного HTTP-обращения: имя схемы синтетическое, язык берём
 /// из ?lang — детерминизм вместо гадания по содержимому.
-fn as_input(lang: &str, text: &str) -> Result<(String, String, bool), String> {
+fn as_input(lang: &str, text: &str) -> Result<(String, String, InputKind), String> {
     match lang {
-        "c" => Ok(("код.c".to_string(), text.to_owned(), true)),
-        "gvn" => Ok(("схема.gvn".to_string(), text.to_owned(), false)),
-        other => Err(format!("lang={other}: только c и gvn")),
+        "c" => Ok(("код.c".to_string(), text.to_owned(), InputKind::C)),
+        "cpp" => Ok(("код.cpp".to_string(), text.to_owned(), InputKind::Cpp)),
+        "gvn" => Ok(("схема.gvn".to_string(), text.to_owned(), InputKind::Gvn)),
+        other => Err(format!("lang={other}: только c, cpp и gvn")),
     }
 }
 
@@ -368,6 +370,24 @@ mod tests {
         let (s, b) = post("/render?lang=gvn", "x = 1\noutput printf(1)\n");
         assert_eq!(s, 200);
         assert!(b.contains("<svg"));
+    }
+
+    /// `lang=cpp` — тот же код-фронтенд: using/std::/cin/cout не отказ.
+    #[test]
+    fn render_cpp_uses_code_frontend() {
+        let src = concat!(
+            "using namespace std;\n",
+            "int main() {\n",
+            "    int a;\n",
+            "    cin >> a;\n",
+            "    std::cout << a;\n",
+            "    return 0;\n",
+            "}\n",
+        );
+        let (s, b) = post("/render?lang=cpp", src);
+        assert_eq!(s, 200);
+        assert!(b.contains("<svg"), "{b}");
+        assert!(b.contains("cout &lt;&lt; a"), "{b}");
     }
 
     #[test]

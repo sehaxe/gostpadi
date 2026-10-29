@@ -1,7 +1,7 @@
 name: pages
-# Сайт отдаётся через Actions-артефакт: app.html минифицируется ТОЛЬКО
-# при публикации — исходник в репо остаётся читаемым (готово к правке),
-# а боту не нужен отдельный комплект небитого исходника.
+# Сайт отдаётся через Actions-артефакт: docs/app.html собирается из web/
+# при публикации (web/index.html + style.css + main.js), в репо остаётся
+# читаемым, а dist/app.html минифицируется только для выкладки.
 "on":
   push:
     branches: [main]
@@ -32,6 +32,9 @@ jobs:
         run: |
           cargo build --release --target wasm32-unknown-unknown
           cp target/wasm32-unknown-unknown/release/gostpadi.wasm docs/gostpadi.wasm
+      # docs/app.html — артефакт: собирается из исходников в web/
+      - name: Собрать app.html из web/
+        run: node web/build.mjs
       # dist = docs/ целиком; вместо app.html — минифицированная копия
       - name: Собрать dist
         run: |

@@ -835,7 +835,7 @@
     <div class="side-actions">
       <button id="clear" class="btn" style="width:100%" title="удалить файлы пачки и код">очистить всё</button>
     </div>
-    <input type="file" id="file" multiple accept=".c,.h,.txt" class="sr" aria-label="выбрать файлы">
+    <input type="file" id="file" multiple accept=".c,.h,.cpp,.cc,.cxx,.c++,.hpp,.hxx,.hh,.h++,.txt" class="sr" aria-label="выбрать файлы">
   </nav>
 
   <section id="edit" class="pane" aria-label="редактор">
@@ -1276,14 +1276,14 @@ function packInputs(items) {
   const parts = [new Uint8Array(new Uint32Array([items.length]).buffer)];
   for (const it of items) {
     const n = enc.encode(it.name), t = enc.encode(it.text);
-    // протокол движка: [длина имени][имя][байт «это C»][длина текста][текст].
-    // «это C» — по расширению: .c/.h рисует C-фронтенд, остальное (.gvn) —
-    // как есть. Байта не было: движок читал первый байт длины текста
-    // как признак C, съезжал на 4 байта и отвечал null — «движок не
-    // ответил» на любом коде.
-    const isC = /\.(c|h)$/i.test(it.name) ? 1 : 0;
+    // протокол движка: [длина имени][имя][вид входа][длина текста][текст].
+    // вид: 0 — .gvn (как есть), 1 — C (.c/.h), 2 — C++ (.cpp/.cc/.cxx/...).
+    // Байта не было: движок читал первый байт длины текста как вид входа,
+    // съезжал на 4 байта и отвечал null — «движок не ответил» на любом коде.
+    const kind = /\.(cpp|cc|cxx|c\+\+|hpp|hxx|hh|h\+\+)$/i.test(it.name) ? 2
+               : /\.(c|h)$/i.test(it.name) ? 1 : 0;
     parts.push(new Uint8Array(new Uint32Array([n.length]).buffer), n,
-               new Uint8Array([isC]),
+               new Uint8Array([kind]),
                new Uint8Array(new Uint32Array([t.length]).buffer), t);
   }
   // склейка: части идут подряд, без неё движок получает нули
@@ -2598,15 +2598,16 @@ function uniqName(base, taken) {
 }
 
 /* Проверка типа файла при импорте.
-   accept=".c,.h,.txt" фильрует только диалог выбора: перетаскивание,
-   «выбрать всё» и вставка мимо него проходят. Без проверки в пачку
-   попадал бинарник (png, pdf), f.text() давал мусор, движок на нём
-   падал — и красная ошибка висела поверх старой схемы. */
-const ALLOWED_EXT = /\.(c|h|txt)$/i;
+   accept=".c,.h,.cpp,.cc,.cxx,.c++,.hpp,.hxx,.hh,.h++,.txt" фильрует только
+   диалог выбора: перетаскивание, «выбрать всё» и вставка мимо него
+   проходят. Без проверки в пачку попадал бинарник (png, pdf), f.text()
+   давал мусор, движок на нём падал — и красная ошибка висела поверх
+   старой схемы. */
+const ALLOWED_EXT = /\.(c|h|cpp|cc|cxx|c\+\+|hpp|hxx|hh|h\+\+|txt)$/i;
 
 function rejectReason(name, text) {
   if (!ALLOWED_EXT.test(name)) {
-    return "не .c, .h или .txt";
+    return "не C/C++ или .txt";
   }
   // двоичный файл с правым расширением: f.text() отдаст мусор с NUL
   if (text.includes("\0")) return "похоже на бинарный файл";

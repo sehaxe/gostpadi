@@ -3,6 +3,8 @@
 //! {"ok":true,"sheets":[...]} либо {"ok":false,"error":{...}}.
 //! Память: буфер выдаёт Rust, освобождение — gostpadi_free.
 
+use crate::error::ParseErrorKind;
+use crate::frontend::{input_kind, InputKind};
 use crate::pipeline::{self, Options};
 
 /// Чтение u32 little-endian из буфера с проверкой границ.
@@ -20,8 +22,9 @@ fn rd_block<'a>(b: &'a [u8], off: &mut usize, len: usize) -> Option<&'a [u8]> {
 }
 
 /// Разбор пачки: u32 count, затем для каждого входа u32 name_len,
-/// имя, u8 is_c, u32 data_len, текст. None — битый пакет.
-fn unpack(b: &[u8]) -> Option<Vec<(String, String, bool)>> {
+/// имя, u8 kind, u32 data_len, текст. None — битый пакет.
+/// Байт kind: 0 — .gvn, 1 — код (C/C++ по расширению), 2 — C++.
+fn unpack(b: &[u8]) -> Option<Vec<(String, String, InputKind)>> {
     let mut off = 0usize;
     let count = rd_u32(b, &mut off)? as usize;
     if count > 4096 {
@@ -31,10 +34,18 @@ fn unpack(b: &[u8]) -> Option<Vec<(String, String, bool)>> {
     for _ in 0..count {
         let nl = rd_u32(b, &mut off)? as usize;
         let name = String::from_utf8(rd_block(b, &mut off, nl)?.to_vec()).ok()?;
-        let is_c = *rd_block(b, &mut off, 1)?.first()? != 0;
+        let flag = *rd_block(b, &mut off, 1)?.first()?;
+        let kind = match flag {
+            0 => InputKind::Gvn,
+            2 => InputKind::Cpp,
+            _ => match input_kind(&name) {
+                InputKind::Cpp => InputKind::Cpp,
+                _ => InputKind::C,
+            },
+        };
         let dl = rd_u32(b, &mut off)? as usize;
         let text = String::from_utf8(rd_block(b, &mut off, dl)?.to_vec()).ok()?;
-        out.push((name, text, is_c));
+        out.push((name, text, kind));
     }
     Some(out)
 }
@@ -214,9 +225,9 @@ fn render_batch_impl(
     // сбойные входы не останавливают остальные (порт CLI-пачки)
     let mut ok: Vec<pipeline::Scheme> = Vec::new();
     let mut errors: Vec<(String, crate::error::ParseError)> = Vec::new();
-    for (name, text, is_c) in &inputs {
+    for (name, text, kind) in &inputs {
         match pipeline::parse_batch(
-            std::slice::from_ref(&(name.clone(), text.clone(), *is_c)),
+            std::slice::from_ref(&(name.clone(), text.clone(), *kind)),
             &opts,
         ) {
             Ok(mut s) => ok.append(&mut s),
@@ -226,12 +237,12 @@ fn render_batch_impl(
     // вход без рисуемых операторов (пустой main, файл из одних
     // return/объявлений) — отказ фронтенда, а не ошибка разбора:
     // сайт показывает его в «empty» с человеческим текстом. Разделяем
-    // по подстроке: пустой вход -> empty, всё остальное -> errors.
+    // по виду ошибки: Empty -> empty, всё остальное -> errors.
     let rendered = pipeline::render_batch(ok, &st);
     let mut empty = Vec::new();
     let mut errs = Vec::new();
     for item in errors {
-        if item.1.msg.contains("нет рисуемых операторов") {
+        if item.1.kind == ParseErrorKind::Empty {
             empty.push(item);
         } else {
             errs.push(item);

@@ -1,0 +1,767 @@
+  :root {
+    color-scheme: dark;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    /* Одна шкала движения на всё приложение: 90 — отклик нажатия,
+       150 — появление, 240 — смена темы и крупные панели. */
+    --t-1: 90ms; --t-2: 150ms; --t-3: 240ms;
+    --e-out: cubic-bezier(.2, .8, .3, 1);
+    --e-in: cubic-bezier(.4, 0, .2, 1);
+    --r: 4px;
+    --sh-1: 0 1px 2px rgba(15, 0, 0, .10);
+    --sh-2: 0 8px 28px rgba(15, 0, 0, .18);
+  }
+  /* Дуэт база-облига: светлая «ман-страница» (крем + чернила) и
+     тёмная, инверсная. Стол схем — единственная инверсная зона:
+     на светлой это чернила (#201d1d), на тёмной почти чёрный (#0f0a0a). */
+  html[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #161313; --bg2: #201d1d; --panel: #1a1717; --panel2: #201d1d;
+    --line: rgba(253, 252, 252, .14); --line2: rgba(253, 252, 252, .3);
+    --ink: #fdfcfc; --muted: #9a9898; --faint: #6e6b6b;
+    --accent: #4da3ff; --accent-ink: #201d1d; --accent-dim: #2f83d1;
+    --accent-soft: rgba(77, 163, 255, .14);
+    --err: #ff6b60; --err-bg: rgba(255, 107, 96, .12); --err-line: rgba(255, 107, 96, .4);
+    --ok: #30d158;
+    --paper: #fbfbf9; --paper-line: rgba(15, 0, 0, .25);
+    --stage: #0b0707; --stage-line: rgba(253, 252, 252, .18);
+  }
+  html[data-theme="light"] {
+    color-scheme: light;
+    --bg: #fdfcfc; --bg2: #f8f7f7; --panel: #fdfcfc; --panel2: #f8f7f7;
+    --line: rgba(15, 0, 0, .12); --line2: rgba(15, 0, 0, .3);
+    --ink: #201d1d; --muted: #646262; --faint: #9a9898;
+    --accent: #007aff; --accent-ink: #fdfcfc; --accent-dim: #0056b3;
+    --accent-soft: rgba(0, 122, 255, .09);
+    --err: #d70015; --err-bg: rgba(215, 0, 21, .06); --err-line: rgba(215, 0, 21, .35);
+    --ok: #30d158;
+    --paper: #fbfbf9; --paper-line: rgba(15, 0, 0, .2);
+    --stage: #201d1d; --stage-line: rgba(253, 252, 252, .25);
+  }
+  @media (prefers-color-scheme: light) {
+    html[data-theme="auto"] {
+      color-scheme: light;
+      --bg: #fdfcfc; --bg2: #f8f7f7; --panel: #fdfcfc; --panel2: #f8f7f7;
+      --line: rgba(15, 0, 0, .12); --line2: rgba(15, 0, 0, .3);
+      --ink: #201d1d; --muted: #646262; --faint: #9a9898;
+      --accent: #007aff; --accent-ink: #fdfcfc; --accent-dim: #0056b3;
+      --accent-soft: rgba(0, 122, 255, .09);
+      --err: #d70015; --err-bg: rgba(215, 0, 21, .06); --err-line: rgba(215, 0, 21, .35);
+      --ok: #30d158;
+      --paper: #fbfbf9; --paper-line: rgba(15, 0, 0, .2);
+      --stage: #201d1d; --stage-line: rgba(253, 252, 252, .25);
+    }
+  }
+  @media (prefers-color-scheme: dark) {
+    html[data-theme="auto"] {
+      color-scheme: dark;
+      --bg: #161313; --bg2: #201d1d; --panel: #1a1717; --panel2: #201d1d;
+      --line: rgba(253, 252, 252, .14); --line2: rgba(253, 252, 252, .3);
+      --ink: #fdfcfc; --muted: #9a9898; --faint: #6e6b6b;
+      --accent: #4da3ff; --accent-ink: #201d1d; --accent-dim: #2f83d1;
+      --accent-soft: rgba(77, 163, 255, .14);
+      --err: #ff6b60; --err-bg: rgba(255, 107, 96, .12); --err-line: rgba(255, 107, 96, .4);
+      --ok: #30d158;
+      --paper: #fbfbf9; --paper-line: rgba(15, 0, 0, .25);
+      --stage: #0b0707; --stage-line: rgba(253, 252, 252, .18);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 var(--mono);
+    touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+    overflow: hidden;
+  }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  a { color: var(--accent); }
+  /* Кольцо фокуса и цвет выделения — общие для всех элементов,
+     чтобы не зависели от того, кто их нарисовал. */
+  :where(a, button, input, textarea, select, [tabindex]):focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
+  ::selection { background: var(--accent-soft); color: var(--ink); }
+  * { scrollbar-width: thin; scrollbar-color: var(--line2) transparent; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: var(--line2); border-radius: 99px;
+    border: 3px solid transparent; background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: var(--muted); background-clip: content-box; }
+  #zoomval, #lbval, .menu .opt output { font-variant-numeric: tabular-nums; }
+
+  /* ---------- каркас ---------- */
+  header.top {
+    display: flex; align-items: center; gap: 14px;
+    height: 46px; padding: 0 16px;
+    background: var(--bg2); border-bottom: 1px solid var(--line);
+  }
+  /* вместо надписи — знак: терминатор, стрелка, ромб */
+  .brand { display: flex; color: var(--accent); }
+  .brand svg { width: 22px; height: 22px; display: block; }
+  .brand:hover { color: var(--ink); }
+  .top-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  .top-actions a { color: var(--muted); text-decoration: none; font-size: 13px; }
+  .top-actions a:hover { color: var(--ink); }
+
+  main.studio {
+    display: grid; height: calc(100% - 46px);
+    grid-template-columns: 220px minmax(320px, 460px) 1fr;
+    gap: 10px; padding: 10px;
+  }
+  .pane {
+    background: var(--panel); border: 1px solid var(--line);
+    display: flex; flex-direction: column;
+    min-height: 0; min-width: 0; overflow: hidden;
+  }
+  .pane-title {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 12px; border-bottom: 1px solid var(--line);
+    font-size: 12.5px; font-weight: 500;
+    color: var(--muted);
+    flex: none; min-height: 38px;
+  }
+  .pane-title .spacer { flex: 1; }
+  #editmode, #schemestat { text-transform: none; letter-spacing: 0; font-weight: 400; }
+
+  /* ---------- файлы ---------- */
+  #filelist { list-style: none; margin: 0; padding: 6px; overflow-y: auto; flex: 1; }
+  #filelist li { display: flex; align-items: center; border-radius: 4px; margin-bottom: 2px; }
+  #filelist li:hover { background: var(--panel2); }
+  #filelist li.sel { background: var(--accent-soft); }
+  #filelist li.sel .fname { color: var(--accent); }
+  .fname {
+    flex: 1; min-width: 0; border: 0; background: transparent; text-align: left;
+    padding: 7px 4px 7px 8px; border-radius: 4px 0 0 4px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-family: var(--mono); font-size: 13px;
+  }
+  .fbadge { width: 7px; height: 7px; border-radius: 50%; background: var(--err); flex: none; }
+  .fdel {
+    border: 0; background: transparent; color: var(--faint); flex: none;
+    width: 22px; height: 26px; border-radius: 4px; font-size: 14px; line-height: 1;
+  }
+  .fdel:hover { color: var(--err); background: var(--err-bg); }
+  .side-actions { padding: 8px; border-top: 1px solid var(--line); flex: none; }
+  .side-hint { padding: 2px 12px 10px; color: var(--faint); font-size: 12px; flex: none; }
+
+  /* ---------- редактор ---------- */
+  #errbox { flex: none; display: none; }
+  #errbox.show { display: block; }
+  .errcard {
+    margin: 10px 10px 0; padding: 9px 12px; border-radius: 4px;
+    background: var(--err-bg); border: 1px solid var(--err-line);
+    color: var(--err); font-size: 13px;
+  }
+  .errcard b { display: block; margin-bottom: 4px; }
+  .errcard pre {
+    margin: 4px 0 0; cursor: pointer; font: 12px/1.5 var(--mono);
+    overflow-x: auto; color: var(--ink); background: var(--panel);
+    border-radius: 4px; padding: 6px 8px;
+  }
+  .errcard pre .bad { background: var(--err-bg); }
+  .errline { font-weight: 600; margin-bottom: 2px; }
+  .errhint { color: var(--muted); font-size: 12px; margin-bottom: 4px; line-height: 1.45; }
+  #code {
+    flex: 1; width: 100%; resize: none; border: 0; outline: none;
+    background: transparent; color: var(--ink);
+    font: 13px/1.5 var(--mono);
+    padding: 12px 14px; white-space: pre; overflow-wrap: normal;
+  }
+  .editor-actions {
+    flex: none; display: flex; gap: 8px; align-items: center;
+    padding: 0 12px 12px;
+  }
+  .hint { color: var(--faint); font-size: 12px; margin-left: auto; }
+  kbd {
+    font: 11px var(--mono); color: var(--muted);
+    border: 1px solid var(--line2);
+    border-radius: 4px; padding: 1px 5px; background: transparent;
+  }
+
+  /* ---------- кнопки ---------- */
+  .btn {
+    border: 1px solid var(--line2); background: var(--panel2); color: var(--ink);
+    border-radius: 4px; padding: 6px 12px; font-size: 13px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    transition: background-color var(--t-2) var(--e-out), border-color var(--t-2) var(--e-out),
+      color var(--t-2) var(--e-out), opacity var(--t-2) var(--e-out), transform var(--t-1) var(--e-out);
+  }
+  .btn:hover { border-color: var(--muted); }
+  .btn:active:not(:disabled) { transform: translateY(1px) scale(.99); }
+  .link {
+    border: 0; background: none; color: var(--accent); padding: 2px 0;
+    font: inherit; font-size: 12.5px; text-decoration: underline;
+    text-underline-offset: 3px; cursor: pointer;
+  }
+  .link:hover { color: var(--ink); }
+  .btn.primary { background: var(--ink); border-color: var(--ink); color: var(--bg); font-weight: 500; }
+  .btn.primary:hover { background: var(--panel2); color: var(--ink); }
+  .btn:disabled { opacity: .45; cursor: default; }
+  .btn.icon { padding: 6px 9px; }
+  /* иконки: один штрих на весь интерфейс, цвет наследуется от текста */
+  .ico {
+    width: 16px; height: 16px; flex: none; display: block;
+    fill: none; stroke: currentColor; stroke-width: 1.6;
+    stroke-linecap: round; stroke-linejoin: round;
+  }
+  .dx-card .ic .ico { width: 18px; height: 18px; }
+  .g-zoom .ico { width: 10px; height: 10px; }
+  .dx-x, .dx-help { display: inline-flex; align-items: center; justify-content: center; }
+  .tools {
+    display: flex; gap: 4px; align-items: center;
+  }
+  .tools .btn { padding: 4px 8px; font-size: 12px; border-radius: 4px; }
+
+  /* ---------- схема ---------- */
+  #viewbar { flex-wrap: wrap; row-gap: 6px; }
+  #tabs { display: flex; gap: 3px; }
+  #tabs button {
+    border: 0; background: transparent; color: var(--muted);
+    border-radius: 0; border-bottom: 2px solid transparent;
+    padding: 3px 9px; font-size: 12px;
+  }
+  #tabs button[aria-current="true"] {
+    color: var(--ink); border-bottom-color: var(--faint);
+  }
+  #zoomval { min-width: 42px; text-align: center; font-size: 12px; color: var(--muted); }
+  #viewport {
+    flex: 1; min-height: 0; overflow: hidden; position: relative;
+    background: var(--stage);
+    cursor: grab;
+  }
+  #viewport.panning { cursor: grabbing; }
+  #stage { position: absolute; transform-origin: 0 0; }
+  #stage .sheet {
+    position: absolute; background: var(--paper);
+    border: 1px solid var(--paper-line); border-radius: 3px;
+    overflow: hidden;
+  }
+  #stage .sheet svg { display: block; }
+  #stage .sheet .thumb {
+    width: 100%; height: 100%; border: 0; padding: 0;
+    background: none; cursor: zoom-in;
+  }
+
+  /* Коллаж: все листы сразу, чтобы было видно, сколько их и какой
+     где. Один клик — режим просмотра этого листа. */
+  /* Коллаж-лента: листы в ряд, лента тянется колесом и пальцем,
+     крайние по глубине бледнее — как стопка бумаги на столе, а не
+     галерея одинаковых картинок. Полупрозрачный лист виден вместе
+     с фоном приложения: видно, что это снимок схемы, а не страница. */
+  #stage.collage {
+    position: absolute; inset: 0; transform: none !important;
+    overflow-x: auto; overflow-y: hidden;
+    padding: 16px 16px 10px;
+    display: flex; flex-wrap: nowrap; align-items: center; gap: 16px;
+    scroll-snap-type: x proximity;
+  }
+  #stage.collage .tile {
+    flex: 0 0 auto; display: flex; flex-direction: column; gap: 6px;
+    background: none; border: 0; padding: 0; cursor: zoom-in;
+    scroll-snap-align: center;
+    /* параллакс: чем дальше плитка от центра ленты, тем бледнее */
+    opacity: var(--depth, 1);
+    transition: opacity .18s ease;
+  }
+  #stage.collage .tile .sheet {
+    position: relative;
+    background: color-mix(in srgb, var(--paper) 82%, transparent);
+    box-shadow: 0 1px 2px rgba(15, 0, 0, .10), 0 8px 24px rgba(15, 0, 0, .16);
+    transition: transform .16s ease, box-shadow .16s ease;
+  }
+  /* один лист — не стопка: показываем его как бумагу, без дымки */
+  #stage.collage .tile:only-child .sheet { background: var(--paper); }
+  #stage.collage .tile .cap {
+    font-size: 12px; color: var(--muted); text-align: center;
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  #stage.collage .tile:hover,
+  #stage.collage .tile:focus-visible { opacity: 1; }
+  #stage.collage .tile:hover .sheet,
+  #stage.collage .tile:focus-visible .sheet {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px rgba(15, 0, 0, .22);
+  }
+  #stage.collage .tile:active .sheet { transform: translateY(0); }
+  #stage.collage .tile:hover .cap,
+  #stage.collage .tile:focus-visible .cap { color: var(--ink); }
+  /* новая схема приезжает мягко; класс ставит drawCollage на один кадр */
+  #stage.collage.fresh .tile .sheet { animation: schemein .16s ease-out; }
+  @keyframes schemein {
+    from { opacity: 0; transform: scale(.985) translateY(4px); }
+    to { opacity: 1; transform: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    #stage.collage .tile,
+    #stage.collage .tile .sheet { transition: none; }
+    #stage.collage .tile:hover .sheet,
+    #stage.collage .tile:focus-visible .sheet { transform: none; box-shadow: none; }
+    #stage.collage.fresh .tile .sheet { animation: none; }
+  }
+
+  /* Точки и стрелки — только когда лист больше одного. */
+  #pager {
+    position: absolute; left: 0; right: 0; bottom: 8px;
+    display: none; align-items: center; justify-content: center; gap: 14px;
+    pointer-events: none; z-index: 5;
+  }
+  #pager.show { display: flex; }
+  #pager button {
+    pointer-events: auto; width: 34px; height: 34px; border-radius: 4px;
+    border: 1px solid var(--stage-line); background: rgba(15, 0, 0, .72);
+    color: #fdfcfc; font-size: 18px; line-height: 1; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #pager button:disabled { opacity: .28; cursor: default; }
+  #pager button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* точки лежат поверх листа, а лист белый: без тёмной подложки они
+     на нём не видны (полупрозрачный белый по белому) */
+  #dots {
+    display: flex; gap: 7px; pointer-events: auto;
+    background: rgba(15, 0, 0, .82); border: 1px solid var(--stage-line);
+    border-radius: 4px; padding: 7px 11px;
+  }
+  #dots i {
+    width: 8px; height: 8px; border-radius: 50%; cursor: pointer;
+    background: rgba(253, 252, 252, .45); border: 0; padding: 0; display: block;
+  }
+  #dots i:hover { background: rgba(253, 252, 252, .75); }
+  #dots i[aria-current="true"] { background: var(--accent); width: 18px; border-radius: 2px; }
+  #dots i:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #placeholder[hidden] { display: none; }
+  #placeholder {
+    position: absolute; inset: 0; display: flex; align-items: center;
+    justify-content: center; text-align: center;
+    color: rgba(253, 252, 252, .55);
+    padding: 20px; pointer-events: none;
+  }
+  /* ---------- полный просмотр схемы ---------- */
+  #zoomcard{position:absolute;right:10px;bottom:10px;z-index:4;
+    background:rgba(15,0,0,.82);border-color:var(--stage-line);color:#fdfcfc}
+  #zoomcard:hover{background:rgba(15,0,0,.95)}
+  /* position:fixed ломается внутри трансформированного предка, поэтому
+     лайтбокс живёт прямо в body и перекрывает страницу слоем */
+  #lightbox{position:fixed;inset:0;z-index:60;display:flex;flex-direction:column;
+    background:var(--bg);animation:lb-in .14s ease-out}
+  #lightbox[hidden]{display:none}
+  @keyframes lb-in{from{opacity:.3}}
+  .lbbar{flex:none;display:flex;align-items:center;gap:.6rem;padding:.6rem .9rem;
+    border-bottom:1px solid var(--line);background:var(--bg)}
+  .lbtitle{font-size:14px;color:var(--muted);max-width:40vw;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  #lbval{min-width:42px;text-align:center;font-size:12px;color:var(--muted)}
+  #lbview{flex:1;min-height:0;position:relative;overflow:hidden;cursor:grab;touch-action:none;
+    background:var(--stage)}
+  #lbstage{position:absolute;transform-origin:0 0;transition:transform .16s ease}
+  /* во время жеста (палец, колесо) переход гасим — иначе плывёт */
+  #lbstage.lb-live{transition:none}
+  #lbpager{flex:none;display:flex;align-items:center;justify-content:center;gap:1rem;
+    padding:.7rem 0 1.1rem}
+  #lbpager[hidden]{display:none}
+  #lbthumbs{display:flex;gap:6px;align-items:center;background:rgba(15,0,0,.82);border:1px solid var(--stage-line);
+    border-radius:4px;padding:7px 11px;max-width:min(62vw,560px);overflow-x:auto;scrollbar-width:none}
+  #lbthumbs::-webkit-scrollbar{display:none}
+  .lbthumb{height:46px;flex:none;background:var(--paper);border:1px solid var(--paper-line);
+    border-radius:3px;overflow:hidden;cursor:pointer;opacity:.72}
+  .lbthumb svg{width:100%;height:100%;display:block}
+  .lbthumb:hover{opacity:1}
+  .lbthumb[aria-current="true"]{outline:2px solid var(--accent);outline-offset:1px;opacity:1}
+  #lbpager button{display:inline-flex;align-items:center;justify-content:center;
+    width:34px;height:34px;border-radius:4px;
+    border:1px solid var(--stage-line);background:rgba(15,0,0,.72);color:#fdfcfc;
+    font-size:18px;line-height:1;cursor:pointer}
+  #lbpager button:disabled{opacity:.28;cursor:default}
+  #lbpager button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  @media (max-width:640px){.lbtitle{max-width:22vw}}
+  #statusline {
+    flex: none; padding: 7px 12px; border-top: 1px solid var(--line);
+    font-size: 12.5px; color: var(--muted); min-height: 32px;
+    display: flex; align-items: center; gap: 8px;
+    white-space: nowrap;
+  }
+  #statusline.err { color: var(--err); }
+  #statusline #msg {
+    flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  }
+  #statusline .hints {
+    margin-left: auto; flex: none; display: flex; gap: 10px; align-items: center;
+    color: var(--faint); font-size: 11.5px;
+  }
+  .hintbtn {
+    border: 0; background: none; color: inherit; padding: 2px 0;
+    font: inherit; cursor: pointer; display: inline-flex; gap: 3px; align-items: center;
+    white-space: nowrap;
+  }
+  .hintbtn:hover { color: var(--ink); }
+  .hintbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+  @media (max-width: 1080px) { #statusline .hints { display: none; } }
+
+  /* пустой экран: знак, одна строка, пример */
+  .ph { display: grid; gap: 6px; justify-items: center; max-width: 360px; }
+  .ph-mark { width: 44px; height: 44px; color: rgba(253, 252, 252, .22); margin-bottom: 6px; }
+  .ph-title { margin: 0; font-size: 15px; color: rgba(253, 252, 252, .82); }
+  .ph-sub { margin: 0 0 10px; font-size: 12.5px; color: rgba(253, 252, 252, .45); }
+  .ph button { pointer-events: auto; }
+  /* на тёмной сцене .btn наследует тёмные токены — CTA должен быть светлым */
+  .ph .btn, .ph .btn.primary {
+    background: #fdfcfc; color: #1a0e0e; border-color: #fdfcfc; font-weight: 500;
+  }
+  .ph .btn:hover, .ph .btn.primary:hover { background: #fff; border-color: #fff; color: #1a0e0e; }
+
+  /* палитра команд ctrl+k */
+  #palette { position: fixed; inset: 0; z-index: 70; background: rgba(15,0,0,.5); padding-top: 14vh; }
+  #palette[hidden] { display: none; }
+  .pbox { width: min(440px, 86vw); margin: 0 auto; background: var(--panel);
+    border: 1px solid var(--line2); border-radius: 4px; overflow: hidden; }
+  #pinput { width: 100%; border: 0; border-bottom: 1px solid var(--line); background: transparent;
+    color: var(--ink); padding: 10px 12px; font: 14px var(--mono); outline: none; }
+  #plist { list-style: none; margin: 0; padding: 4px 0; max-height: 300px; overflow: auto; }
+  #plist li { padding: 8px 12px; color: var(--ink); cursor: pointer; }
+  #plist li small { color: var(--muted); margin-left: 10px; }
+  #plist li.sel { background: var(--accent-soft); color: var(--accent); }
+  .spinner {
+    width: 13px; height: 13px; flex: none; border-radius: 50%;
+    border: 2px solid var(--line2); border-top-color: var(--accent);
+    animation: spin .7s linear infinite; display: inline-block;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  /* скачивание: одна панель, три формата, один крупный «Скачать» */
+  .dx-btn { font-weight: 600; }
+  .dx-ov { position: fixed; inset: 0; z-index: 80; background: rgba(15,0,0,.5);
+    display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .dx-ov[hidden] { display: none; }
+  .dx-pan { width: min(560px, 100%); max-height: calc(100vh - 40px); overflow: auto;
+    background: var(--panel); border: 1px solid var(--line2); border-radius: 6px; padding: 18px 20px 16px;
+    animation: dxpop .18s ease-out; }
+  @keyframes dxpop { from { opacity: 0; transform: translateY(6px) scale(.99); } to { opacity: 1; transform: none; } }
+  .dx-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .dx-head h2 { font-size: 16px; margin: 0; font-weight: 700; }
+  .dx-x { margin-left: auto; width: 30px; height: 30px; border: 1px solid transparent;
+    background: transparent; color: var(--muted); border-radius: 4px; cursor: pointer; font-size: 16px; }
+  .dx-x:hover { border-color: var(--line2); color: var(--ink); }
+  .dx-lead { margin: 0 0 12px; font-size: 12px; color: var(--muted); line-height: 1.45; }
+  .dx-lead b { color: var(--ink); }
+  .dx-help { flex: none; width: 22px; height: 22px; padding: 0; border-radius: 50%;
+    border: 1px solid var(--line2); background: transparent; color: var(--muted);
+    font-size: 11px; line-height: 1; }
+  .dx-help:hover { color: var(--ink); border-color: var(--ink); }
+  .dx-help-p { margin: -6px 0 12px; font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+  .dx-help-p[hidden] { display: none; }
+  .dx-scope { display: inline-flex; border: 1px solid var(--line2); border-radius: 4px; overflow: hidden; margin-bottom: 12px; }
+  .dx-scope[hidden] { display: none; }
+  .dx-scope button { border: 0; background: transparent; color: var(--muted); font: 500 12px var(--mono);
+    padding: 7px 14px; cursor: pointer; }
+  .dx-scope button + button { border-left: 1px solid var(--line2); }
+  .dx-scope button.on { background: var(--ink); color: var(--bg); }
+  .dx-fmt { display: grid; gap: 8px; }
+  .dx-card { display: grid; grid-template-columns: 44px 1fr; grid-template-rows: auto auto; column-gap: 12px;
+    align-items: center; border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px; cursor: pointer;
+    transition: border-color .14s ease, background-color .14s ease; }
+  .dx-card:hover { border-color: var(--line2); }
+  .dx-card input { position: absolute; opacity: 0; pointer-events: none; }
+  .dx-card .ic { grid-row: 1/3; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center;
+    border: 1px solid var(--line2); border-radius: 4px; font: 700 10px var(--mono); }
+  .dx-card b { font-size: 13px; }
+  .dx-card i { font-style: normal; font-size: 11px; color: var(--muted); line-height: 1.4; }
+  .dx-card.on { border-color: var(--ink); }
+  .dx-card.on .ic { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+  .dx-foot { display: flex; align-items: center; gap: 12px; margin-top: 16px; padding-top: 14px;
+    border-top: 1px solid var(--line); }
+  .dx-foot .sum { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+  .dx-foot .btn { margin-left: auto; }
+  .dx-foot .btn + .btn { margin-left: 0; }
+  .dx-foot button[hidden] { display: none !important; }
+  .dx-msg { min-height: 16px; font-size: 11.5px; color: var(--accent); margin-top: 8px; }
+  .dx-msg.err { color: var(--err); }
+  .dx-done[hidden] { display: none; }
+  .dx-done { animation: dxfade .28s ease both; }
+  @keyframes dxfade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  .done-anim { display: flex; justify-content: center; margin: 4px 0 10px; }
+  .tick { width: 52px; height: 52px; overflow: visible; }
+  .tick circle { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-dasharray: 145; stroke-dashoffset: 145;
+    animation: dxcircle .5s ease-out forwards; }
+  .tick path { fill: none; stroke: var(--accent); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round;
+    stroke-dasharray: 30; stroke-dashoffset: 30; animation: dxcheck .32s .42s ease-out forwards; }
+  @keyframes dxcircle { to { stroke-dashoffset: 0; } }
+  @keyframes dxcheck { to { stroke-dashoffset: 0; } }
+  .done-h { margin: 0 0 4px; text-align: center; font-size: 15px; font-weight: 700; }
+  .done-sub { margin: 0 0 14px; text-align: center; font-size: 12px; color: var(--muted); }
+  .done-steps { list-style: none; counter-reset: ds; margin: 0 0 12px; padding: 0; display: grid; gap: 8px; }
+  .done-steps li { counter-increment: ds; display: grid; grid-template-columns: 22px 1fr; gap: 10px;
+    align-items: start; font-size: 12px; line-height: 1.5; color: var(--ink); opacity: 0;
+    animation: dxfade .3s ease forwards; }
+  .done-steps li:nth-child(1) { animation-delay: .45s; }
+  .done-steps li:nth-child(2) { animation-delay: .58s; }
+  .done-steps li:nth-child(3) { animation-delay: .71s; }
+  .done-steps li:before { content: counter(ds); width: 22px; height: 22px; border: 1px solid var(--line2);
+    border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10.5px; color: var(--muted); }
+  .done-steps b { color: var(--ink); }
+  .done-hint { margin: 0; font-size: 11.5px; color: var(--faint); line-height: 1.5; }
+  .done-hint kbd { font: 10.5px var(--mono); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
+  @media (max-width: 760px) {
+    .dx-ov { padding: 10px; }
+    .dx-pan { padding: 14px; max-height: calc(100vh - 20px); }
+    .dx-foot { flex-wrap: wrap; }
+    .dx-foot .btn { width: 100%; margin-left: 0; }
+    /* палец, а не курсор: любой кликабельный элемент — не меньше 40px */
+    button { min-height: 40px; }
+    #tabs button { padding: 6px 10px; }
+    #pager button, #lbpager button { width: 40px; height: 40px; }
+    .dx-x { width: 40px; height: 40px; }
+    #plist li { min-height: 40px; display: flex; align-items: center; }
+    /* тулбар схемы — одна строка: «Скачать» не растягиваем в полосу */
+    #viewbar > .tools:last-child { flex: 0 0 auto; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .dx-pan, .dx-done, .done-steps li { animation: none; opacity: 1; }
+    .tick circle, .tick path { animation: none; stroke-dashoffset: 0; }
+    .btn, .dx-card { transition: none; }
+    .btn:active:not(:disabled) { transform: none; }
+  }
+
+  /* ---------- гайд «Как это работает» ---------- */
+  .guide-pan { width: min(640px, 100%); }
+  .guide-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  .guide-step {
+    display: grid; grid-template-columns: 200px 1fr; gap: 14px;
+    align-items: center; padding: 10px 12px;
+    border: 1px solid var(--line); border-radius: 5px;
+  }
+  .guide-step p { margin: 0; font-size: 13.5px; line-height: 1.45; }
+  .guide-step b { color: var(--accent); font-weight: 600; }
+  .guide-art {
+    height: 78px; border: 1px solid var(--line); border-radius: 4px;
+    background: var(--bg2); overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .guide-foot {
+    display: flex; justify-content: flex-end; margin-top: 14px;
+    padding-top: 12px; border-top: 1px solid var(--line);
+  }
+  .g-row { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 0 8px; }
+  .g-code { display: grid; gap: 4px; width: 62px; }
+  .g-code i { height: 4px; border-radius: 1px; background: var(--muted); opacity: .5; }
+  .g-code i:nth-child(1) { width: 85%; }
+  .g-code i:nth-child(2) { width: 60%; }
+  .g-code i:nth-child(3) { width: 75%; }
+  .g-code i:nth-child(4) { width: 45%; }
+  .g-arrow { color: var(--faint); font-size: 15px; flex: none; }
+  .g-flow { position: relative; width: 82px; height: 62px; }
+  .g-term { position: absolute; left: 28px; top: 2px; width: 26px; height: 10px; border: 1px solid var(--ink); border-radius: 5px; }
+  .g-dia { position: absolute; left: 31px; top: 25px; width: 20px; height: 20px; border: 1px solid var(--ink); transform: rotate(45deg); }
+  .g-flow:before { content: ""; position: absolute; left: 41px; top: 13px; width: 1px; height: 11px; background: var(--ink); }
+  .g-flow:after { content: ""; position: absolute; left: 41px; top: 45px; width: 1px; height: 10px; background: var(--ink); }
+  .g-page {
+    position: relative; width: 42px; height: 56px; flex: none;
+    background: var(--paper); border: 1px solid var(--paper-line); border-radius: 2px;
+  }
+  .g-page:before {
+    content: ""; position: absolute; left: 7px; right: 7px; top: 9px; height: 1px;
+    background: var(--paper-line);
+    box-shadow: 0 5px 0 var(--paper-line), 0 10px 0 var(--paper-line);
+  }
+  .g-page b {
+    position: absolute; right: -7px; top: -7px; width: 17px; height: 17px; border-radius: 50%;
+    background: var(--accent); color: var(--accent-ink); font-size: 9px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .g-tile { opacity: .72; }
+  .g-light {
+    width: 104px; height: 64px; border: 1px solid var(--line2); border-radius: 3px;
+    background: var(--stage); display: flex; align-items: center; justify-content: center;
+    position: relative;
+  }
+  .g-light .g-page { width: 54px; height: 38px; }
+  .g-light .g-page:before { top: 7px; box-shadow: 0 4px 0 var(--paper-line); }
+  .g-zoom {
+    position: absolute; right: 3px; bottom: 3px; width: 18px; height: 18px; border-radius: 50%;
+    background: var(--accent); color: var(--accent-ink); font-size: 11px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .g-dl { display: grid; gap: 7px; justify-items: center; }
+  .g-btn { background: var(--ink); color: var(--bg); border-radius: 3px; padding: 4px 14px; font-size: 10.5px; font-weight: 600; }
+  .g-fmts { display: flex; gap: 4px; }
+  .g-fmts span { border: 1px solid var(--line2); border-radius: 3px; padding: 3px 5px; font-size: 8.5px; color: var(--muted); }
+  @media (max-width: 760px) {
+    .guide-pan { width: 100%; }
+    .guide-step { grid-template-columns: 1fr; gap: 8px; padding: 9px 10px; }
+    .guide-art { height: 64px; }
+    .guide-step p { font-size: 13px; }
+    .guide-foot .btn { width: 100%; }
+    .g-page { width: 34px; height: 46px; }
+    .g-page:before { box-shadow: 0 4px 0 var(--paper-line), 0 8px 0 var(--paper-line); }
+    .g-light { width: 96px; height: 56px; }
+  }
+  @media print {
+    #guide, #help { display: none !important; }
+  }
+  .batchnote { color: var(--faint); font-size: 12px; }
+
+  /* ---------- панели: десктоп — показ по флагам, мобильный — активный таб ---------- */
+  .viewchips { display: flex; gap: 4px; }
+  .viewchips button {
+    border: 0; background: transparent; color: var(--muted);
+    border-radius: 0; border-bottom: 2px solid transparent;
+    padding: 3px 10px; font-size: 12px;
+  }
+  .viewchips button[aria-pressed="true"] {
+    color: var(--ink); border-bottom-color: var(--faint);
+  }
+  .menu-wrap { position: relative; }
+  .menu {
+    position: absolute; top: calc(100% + 6px); right: 0; z-index: 40;
+    background: var(--panel); border: 1px solid var(--line2); border-radius: 4px;
+    padding: 4px; min-width: 170px;
+    animation: popin var(--t-2) var(--e-out) both;
+    transform-origin: top right;
+  }
+  .menu[hidden] { display: none; }
+  @keyframes popin {
+    from { opacity: 0; transform: translateY(-4px) scale(.98); }
+    to { opacity: 1; transform: none; }
+  }
+  .menu button {
+    display: block; width: 100%; text-align: left; border: 0; background: transparent;
+    color: var(--ink); border-radius: 4px; padding: 8px 10px; font-size: 13px;
+  }
+  .menu button:hover { background: var(--accent-soft); color: var(--accent); }
+  .menu .opt {
+    display: grid; gap: 5px; padding: 8px 10px; font-size: 12.5px; color: var(--ink);
+  }
+  .menu .opt > span { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); }
+  .menu .opt output { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .menu .opt input[type="range"] { width: 100%; accent-color: var(--accent); }
+  .menu .opt.check { grid-template-columns: 16px 1fr; align-items: center; gap: 8px; }
+  .menu .sep { height: 1px; background: var(--line); margin: 4px 6px; }
+  .menu .link { padding: 8px 10px; text-align: left; text-decoration: none; border-radius: 4px; }
+  .menu .link:hover { background: var(--accent-soft); color: var(--accent); }
+  /* настройки живут внизу панели: меню раскрывается вверх, иначе
+     его срезает overflow панели */
+  #settings-menu {
+    width: 236px; top: auto; bottom: calc(100% + 6px);
+    left: 0; right: auto; transform-origin: bottom left;
+  }
+
+  @media (min-width: 1081px) {
+    body[data-files="off"] #side { display: none; }
+    body[data-editor="off"] #edit { display: none; }
+    body[data-files="off"] main.studio { grid-template-columns: minmax(320px, 460px) 1fr; }
+    body[data-editor="off"] main.studio { grid-template-columns: 220px 1fr; }
+    body[data-files="off"][data-editor="off"] main.studio { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 1080px) {
+    main.studio { grid-template-columns: 1fr; padding: 0; gap: 0; height: calc(100% - 46px - 52px); }
+    .pane { border: 0; border-radius: 0; }
+    body:not([data-mtab="side"]) #side { display: none; }
+    body:not([data-mtab="edit"]) #edit { display: none; }
+    body:not([data-mtab="view"]) #view { display: none; }
+    #side { border-right: 0; }
+    #tabbar {
+      display: flex; height: 52px; background: var(--bg2);
+      border-top: 1px solid var(--line);
+    }
+    #tabbar button {
+      flex: 1; border: 0; background: transparent; color: var(--muted);
+      font-size: 13px; display: flex; flex-direction: column; gap: 2px;
+      align-items: center; justify-content: center;
+    }
+    #tabbar button[aria-current="true"] {
+      color: var(--accent); background: var(--accent-soft); font-weight: 600;
+      box-shadow: inset 0 2px 0 var(--accent);
+    }
+    .hint { display: none; }
+    .viewchips { display: none; }
+  }
+  @media (min-width: 1081px) {
+    .m-only { display: none !important; }
+  }
+
+  /* ---------- оверлеи ---------- */
+  #dragover {
+    position: fixed; inset: 0; z-index: 50; background: rgba(5, 8, 7, .8);
+    display: flex; align-items: center; justify-content: center;
+  }
+  #dragover[hidden] { display: none; }
+  #dragover > div {
+    border: 2px dashed var(--accent); border-radius: 4px; padding: 36px 52px;
+    color: var(--ink); background: var(--panel); font-size: 16px;
+  }
+  .skip { position: fixed; top: -48px; left: 12px; z-index: 60; background: var(--ink);
+          color: var(--bg); padding: 7px 14px; border-radius: 4px; font-size: 14px;
+          text-decoration: none; }
+  .skip:focus-visible { top: 8px; }
+  .toast {
+    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+    background: var(--panel); border: 1px solid var(--line2); border-radius: 4px;
+    padding: 9px 14px; display: flex; gap: 10px;
+    align-items: center; z-index: 55;
+  }
+  .toast[hidden] { display: none; }
+  .toast:not([hidden]) { animation: toastin var(--t-3) var(--e-out); }
+  @keyframes toastin {
+    from { opacity: 0; transform: translate(-50%, 8px); }
+    to { opacity: 1; transform: translate(-50%, 0); }
+  }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  input[type="checkbox"], input[type="range"] { accent-color: var(--accent); }
+
+  /* ---------- мелочи, которые видно каждый день ---------- */
+
+  /* Подсказка вместо нативного title: 350 мс и тот же шрифт, что везде. */
+  #tip {
+    position: fixed; z-index: 90; pointer-events: none;
+    max-width: 280px; padding: 5px 8px; border-radius: var(--r);
+    /* как меню, а не как инверсия: на тёмном интерфейсе белая плашка бьёт по глазам */
+    background: var(--panel2); color: var(--ink); border: 1px solid var(--line2);
+    font: 12px/1.35 var(--mono);
+    opacity: 0; transform: translateY(2px);
+    transition: opacity var(--t-1) var(--e-out), transform var(--t-1) var(--e-out);
+  }
+  #tip.on { opacity: 1; transform: none; }
+
+  /* Полоса загрузки появляется, только если движок реально молчит:
+     быстрый старт не мигает. */
+  #loadbar {
+    position: fixed; top: 0; left: 0; right: 0; height: 2px; z-index: 100;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent) no-repeat;
+    background-size: 40% 100%;
+    opacity: 0; pointer-events: none;
+    transition: opacity var(--t-3) var(--e-out);
+  }
+  #loadbar.on { opacity: 1; animation: loadslide 1.1s var(--e-in) infinite; }
+  #loadbar.done { opacity: 0; animation: none; }
+  @keyframes loadslide {
+    from { background-position: -40% 0; }
+    to { background-position: 140% 0; }
+  }
+
+  /* Строка состояния: смена текста заметна, но не дёргает вёрстку. */
+  #msg.flash { animation: msgflash var(--t-2) var(--e-out); }
+  @keyframes msgflash { from { opacity: .35; } to { opacity: 1; } }
+
+  #filelist:empty::after {
+    content: "пока пусто — добавь .c файл";
+    display: block; padding: 12px; color: var(--faint); font-size: 12px;
+  }
+
+  /* Тема меняется через переменные, поэтому цвет ведём переходом
+     только на время переключения. */
+  html.theming, html.theming body, html.theming header.top,
+  html.theming .pane, html.theming .pane-title, html.theming .btn,
+  html.theming .menu, html.theming #viewport, html.theming .dx-pan,
+  html.theming .toast, html.theming #stage .sheet, html.theming #tabbar {
+    transition: background-color var(--t-3) var(--e-out),
+      color var(--t-3) var(--e-out), border-color var(--t-3) var(--e-out) !important;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .menu, .toast, #msg.flash, #loadbar { animation: none; }
+    #tip { transition: none; }
+    html.theming, html.theming body, html.theming header.top, html.theming .pane,
+    html.theming .pane-title, html.theming .btn, html.theming .menu,
+    html.theming #viewport, html.theming .dx-pan, html.theming .toast,
+    html.theming #stage .sheet, html.theming #tabbar { transition: none !important; }
+  }

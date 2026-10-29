@@ -2847,3 +2847,44 @@ fn continue_returns_to_head_break_goes_down() {
     assert!(crossings_ok(&l.shapes, &l.edges).is_ok());
     assert!(dangling_ok(&l).is_ok());
 }
+
+/// Пустой хвост каскада else-if: рельса справа не должна идти по кромке
+/// плитки, которую вложенный switch вынес правее оси ромба. Длинная
+/// подпись кейса расширяет колонку, и фиксированный отступ от ромба
+/// (dw/2 + 2g) совпадал с её правой гранью.
+#[test]
+fn cascade_empty_tail_rail_clears_nested_switch() {
+    let long = "b".repeat(60);
+    let mut sw = node(NodeKind::Decision, "switch (k)");
+    sw.switch_var = Some("k".into());
+    sw.branches = vec![
+        br("1", vec![s("a")], false),
+        br("2", vec![s(&long)], false),
+        br("3", vec![s("a")], false),
+        br("4", vec![s(&long)], false),
+    ];
+    let mut inner = node(NodeKind::Decision, "if (y)");
+    inner.branches = vec![br("да", vec![s("b")], false), br("нет", vec![], false)];
+    let mut outer = node(NodeKind::Decision, "if (x)");
+    outer.branches = vec![
+        br("да", vec![Stmt::Node(Box::new(sw))], false),
+        br("нет", vec![Stmt::Node(Box::new(inner))], false),
+    ];
+    let nodes = vec![
+        node(NodeKind::Term, "начало"),
+        outer,
+        node(NodeKind::Act, &long),
+        node(NodeKind::Term, "конец"),
+    ];
+    let l = lay(&nodes);
+    assert!(
+        edge_on_border_ok(&l).is_ok(),
+        "рельса пустого хвоста на кромке: {:?}",
+        edge_on_border_ok(&l)
+    );
+    assert!(
+        crossings_ok(&l.shapes, &l.edges).is_ok(),
+        "рельса протыкает плитку: {:?}",
+        crossings_ok(&l.shapes, &l.edges)
+    );
+}

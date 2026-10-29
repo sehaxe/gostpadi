@@ -2,6 +2,7 @@
 //! (split + uniform sizes). Запуск:
 //! cargo test --quiet dbg_pages -- --ignored --nocapture
 
+use crate::frontend::{input_kind, InputKind};
 use crate::layout::{layout, normalize, split_scheme, uniform_sizes};
 use crate::pipeline::{parse_batch, Options, Scheme};
 use crate::style::Style;
@@ -16,13 +17,13 @@ fn opts() -> Options {
 }
 
 fn parse(paths: &[&str]) -> Vec<Scheme> {
-    let inputs: Vec<(String, String, bool)> = paths
+    let inputs: Vec<(String, String, InputKind)> = paths
         .iter()
         .map(|p| {
             (
                 p.to_string(),
                 std::fs::read_to_string(p).unwrap(),
-                p.ends_with(".c"),
+                input_kind(p),
             )
         })
         .collect();
